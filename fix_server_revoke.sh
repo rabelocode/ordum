@@ -1,0 +1,2 @@
+sed -i '/app.get("\/api\/admin\/consultants"/i \
+  app.post("/api/admin/tenants/revoke-demo", requireAdmin, async (req, res) => {\n    try {\n      const { tenantId } = req.body;\n      // Update tenant status to suspended\n      await getSupabaseAdmin().from("tenants").update({ status: "suspended" }).eq("id", tenantId);\n      res.json({ success: true });\n    } catch (e: any) {\n      console.error(e);\n      res.status(500).json({ error: e.message });\n    }\n  });\n' server.ts

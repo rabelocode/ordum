@@ -1,0 +1,1 @@
+sed -i 's/Functions: {/Functions: {\n      get_integrity_form: {\n        Args: { p_channel_slug: string }\n        Returns: any[]\n      }\n      submit_integrity_report: {\n        Args: { p_channel_slug: string, p_category_slug: string, p_description: string, p_occurred_at: string | null }\n        Returns: any\n      }/' src/types/supabase.ts

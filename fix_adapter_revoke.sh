@@ -1,0 +1,1 @@
+sed -i 's/async revokeDemoAccess(tenantId: string): Promise<Tenant> {/async revokeDemoAccess(tenantId: string): Promise<Tenant> {\n    await this.fetchWithAuth("\/api\/admin\/tenants\/revoke-demo", { method: "POST", body: JSON.stringify({ tenantId }) });\n    const tenant = await this.getCompany(tenantId);\n    return tenant!;\n  }\n  \/\//' src/core/tenant/TenantAdminAdapter.ts

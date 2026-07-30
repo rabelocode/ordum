@@ -1,0 +1,1 @@
+sed -i 's/        <\/div>      )}      <div className="bg-white rounded-2xl border border\[#DDD8CF\]\/60 shadow-sm overflow-hidden">/        <div className="bg-white rounded-2xl border border\[#DDD8CF\]\/60 shadow-sm overflow-hidden">/' src/pages/admin/CompaniesPage.tsx

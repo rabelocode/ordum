@@ -1,0 +1,3 @@
+sed -i 's/const contracts = \[/const [contracts, setContracts] = useState<any[]>([]);\n  useEffect(() => {\n    const fetchContracts = async () => {\n      const { data: { session } } = await supabase.auth.getSession();\n      if (!session) return;\n      const res = await fetch("\/api\/admin\/contracts", {\n        headers: { Authorization: `Bearer ${session.access_token}` }\n      });\n      if (res.ok) setContracts(await res.json());\n    };\n    fetchContracts();\n  }, []);\n\n  \/*/' src/pages/admin/ContractsPage.tsx
+sed -i 's/R\$ 2.800\/mês" }\n  \];/  \]; *\//' src/pages/admin/ContractsPage.tsx
+sed -i '1i import { useEffect, useState } from "react";\nimport { supabase } from "../../lib/supabase";' src/pages/admin/ContractsPage.tsx

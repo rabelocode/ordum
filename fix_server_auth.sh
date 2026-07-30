@@ -1,0 +1,1 @@
+sed -i 's/const { data: { user }, error } = await getSupabaseAdmin().auth.getUser(token);/let user, error;\n    try {\n      const authRes = await getSupabaseAdmin().auth.getUser(token);\n      user = authRes.data.user;\n      error = authRes.error;\n    } catch (e: any) {\n      return res.status(500).json({ error: "Configuration error on server" });\n    }/' server.ts
