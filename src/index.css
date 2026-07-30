@@ -1,0 +1,68 @@
+@import "tailwindcss";
+
+@layer base {
+  :root {
+    /* Paleta Institucional Ordum */
+    --carbon-main: #202322;
+    --carbon-deep: #151817;
+    --graphite: #353938;
+    --copper-main: #B66E45;
+    --copper-light: #D2926D;
+    --ivory-main: #F3EEE4;
+    --ivory-light: #FAF8F3;
+    --white: #FFFFFF;
+    --text-muted: #626866;
+    --border-light: #DDD8CF;
+    
+    --success: #1F8A63;
+    --warning: #C98224;
+    --danger: #C84E4E;
+
+    /* Cores Módulos */
+    --integrity-main: #3457D5;
+    --integrity-dark: #263F9F;
+    --integrity-light: #E9EDFF;
+
+    --people-main: #16897A;
+    --people-dark: #10685D;
+    --people-light: #E4F5F1;
+
+    --talent-main: #D98C32;
+    --talent-dark: #AC6C24;
+    --talent-light: #FFF1DD;
+
+    /* Fontes */
+    --font-heading: 'Manrope', 'Plus Jakarta Sans', sans-serif;
+    --font-sans: 'Inter', 'Plus Jakarta Sans', sans-serif;
+  }
+
+  body {
+    font-family: var(--font-sans);
+    color: var(--carbon-main);
+    background-color: var(--ivory-light);
+  }
+
+  h1, h2, h3, h4, h5, h6 {
+    font-family: var(--font-heading);
+  }
+}
+
+/* Custom scrollbars */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #DDD8CF;
+  border-radius: 9999px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #B66E45;
+}
+
