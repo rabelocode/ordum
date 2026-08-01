@@ -41,3 +41,6 @@ Permissões `*.read` não tornam gerente ou vendedor global. A API sempre combin
 ## Papéis de tenant
 
 Papéis como `tenant_admin`, `employee`, `manager`, `hr`, `recruiter`, `compliance`, `committee`, `legal` e `executive` pertencem a um tenant específico. Eles são resolvidos por `memberships`, `roles`, `membership_roles`, `permissions` e `role_permissions`, sem cruzamento com `platform_roles`.
+# Matriz administrativa
+
+`/#/admin/acessos` oferece simulação somente leitura da decisão de acesso e mostra a origem do allow/deny. A simulação preserva a separação entre papel, vínculo, equipe, escopo e permissão; `relationship_type` nunca concede acesso.

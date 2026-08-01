@@ -49,3 +49,7 @@ A boundary financeira principal é o Express já implantado na Vercel. Não exis
 5. Trial e pagamento têm fluxos distintos.
 6. Produção Asaas permanece bloqueada em código até homologação e autorização explícita.
 7. O cron diário retoma a fila e reconcilia assinaturas/cobranças paginadas; divergências críticas não alteram acesso automaticamente.
+
+## Control plane administrativo
+
+O admin ganhou uma boundary server-only para métricas, onboarding, Customer Success, suporte, privacidade, metas, operações e entitlements. As tabelas correspondentes não têm grant de browser; o Express intersecta filtros com equipe, owner e tenants permitidos antes de consultar RPCs. Detalhes em `ORDUM_09_ADMIN_CONTROL_PLANE.md`.

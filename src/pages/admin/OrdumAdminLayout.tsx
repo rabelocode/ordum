@@ -1,14 +1,17 @@
 import React, { useState, useEffect } from "react";
 import { 
   Building, LayoutDashboard, Settings, LogOut, Users, FileText, Menu, X, 
-  Search, Activity, ShieldCheck, Box, Server, GitMerge, AlertOctagon, WalletCards, Layers3
+  Search, Activity, ShieldCheck, Box, Server, GitMerge, AlertOctagon, WalletCards, Layers3,
+  ClipboardList, HeartHandshake, Headphones, Scale, Target, Waypoints, KeyRound
 } from "lucide-react";
 import { PlatformAuthProvider, usePlatform } from "../../core/auth/PlatformAuthProvider";
 import { useAuth } from "../../core/auth/AuthProvider";
 
 function AdminLayoutInner({ children, currentPath }: { children: React.ReactNode, currentPath: string }) {
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
-  const { user, signOut, isLoading: isAuthLoading } = useAuth();
+  const [globalSearch, setGlobalSearch] = useState('');
+  const [searchResults, setSearchResults] = useState<any[]>([]);
+  const { user, session, signOut, isLoading: isAuthLoading } = useAuth();
   const { 
     isPlatformLoading, 
     isPlatformMember, 
@@ -28,11 +31,23 @@ function AdminLayoutInner({ children, currentPath }: { children: React.ReactNode
 
   useEffect(() => {
     const handleEscape = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') setIsMobileMenuOpen(false);
+      if (e.key === 'Escape') { setIsMobileMenuOpen(false); setSearchResults([]); }
+      if (e.key === '/' && !(e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement)) {
+        e.preventDefault(); document.querySelector<HTMLInputElement>('[aria-label="Busca global"]')?.focus();
+      }
     };
     window.addEventListener('keydown', handleEscape);
     return () => window.removeEventListener('keydown', handleEscape);
   }, []);
+
+  useEffect(() => {
+    if (globalSearch.trim().length < 2 || !session) { setSearchResults([]); return; }
+    const timeout = window.setTimeout(async () => {
+      const response = await fetch(`/api/admin/control-plane/search?q=${encodeURIComponent(globalSearch.trim())}`, { headers: { Authorization: `Bearer ${session.access_token}` } });
+      if (response.ok) setSearchResults((await response.json()).items || []);
+    }, 250);
+    return () => window.clearTimeout(timeout);
+  }, [globalSearch, session]);
 
   const handleLogout = async () => {
     await signOut();
@@ -157,11 +172,18 @@ function AdminLayoutInner({ children, currentPath }: { children: React.ReactNode
     { id: "contratos", icon: <FileText className="w-5 h-5" />, label: "Contratos", path: "#/admin/contratos", section: "COMERCIAL", show: platformCan('platform.commercial.read') },
     { id: "planos", icon: <Layers3 className="w-5 h-5" />, label: "Planos e preços", path: "#/admin/planos", section: "FINANCEIRO", show: platformCan('platform.billing.read') },
     { id: "financeiro", icon: <WalletCards className="w-5 h-5" />, label: "Cobranças", path: "#/admin/financeiro", section: "FINANCEIRO", show: platformCan('platform.billing.read') },
+    { id: "onboarding", icon: <ClipboardList className="w-5 h-5" />, label: "Onboarding", path: "#/admin/onboarding", section: "CLIENTES", show: platformCan('platform.onboarding.read') },
+    { id: "customer_success", icon: <HeartHandshake className="w-5 h-5" />, label: "Customer Success", path: "#/admin/customer-success", section: "CLIENTES", show: platformCan('platform.success.read') },
+    { id: "suporte", icon: <Headphones className="w-5 h-5" />, label: "Suporte interno", path: "#/admin/suporte", section: "CLIENTES", show: platformCan('platform.support.read') },
     { id: "equipes", icon: <Users className="w-5 h-5" />, label: "Equipes", path: "#/admin/equipes", section: "EQUIPES", show: platformCan('platform.teams.read') || memberTeams.length > 0 },
     { id: "desempenho", icon: <Activity className="w-5 h-5" />, label: "Meu Desempenho", path: "#/admin/desempenho", section: "EQUIPES", show: platformCan('platform.performance.own.read') || platformRole?.key === 'sales' },
+    { id: "metas", icon: <Target className="w-5 h-5" />, label: "Metas e comissões", path: "#/admin/metas", section: "EQUIPES", show: platformCan('platform.targets.read') },
+    { id: "acessos", icon: <KeyRound className="w-5 h-5" />, label: "Matriz de acessos", path: "#/admin/acessos", section: "EQUIPES", show: platformCan('platform.access.simulate') },
     { id: "solucoes", icon: <Box className="w-5 h-5" />, label: "Soluções", path: "#/admin/solucoes", section: "PLATAFORMA", show: platformCan('platform.solutions.read') },
     { id: "equipe_ordum", icon: <Users className="w-5 h-5" />, label: "Equipe Ordum", path: "#/admin/consultores", section: "OPERAÇÃO", show: platformCan('platform.staff.read') || platformRole?.key === 'admin' },
     { id: "auditoria", icon: <FileText className="w-5 h-5" />, label: "Auditoria", path: "#/admin/auditoria", section: "OPERAÇÃO", show: platformCan('platform.audit.read') || platformCan('platform.audit.team.read') },
+    { id: "operacoes", icon: <Waypoints className="w-5 h-5" />, label: "Operações", path: "#/admin/operacoes", section: "OPERAÇÃO", show: platformCan('platform.operations.read') },
+    { id: "privacidade", icon: <Scale className="w-5 h-5" />, label: "Privacidade", path: "#/admin/privacidade", section: "OPERAÇÃO", show: platformCan('platform.privacy.read') },
     { id: "sistema", icon: <Server className="w-5 h-5" />, label: "Saúde do Sistema", path: "#/admin/sistema", section: "SISTEMA", show: platformCan('platform.system.read') },
     { id: "deployments", icon: <GitMerge className="w-5 h-5" />, label: "Deployments", path: "#/admin/deployments", section: "SISTEMA", show: platformCan('platform.deploy.read') },
     { id: "configuracoes", icon: <Settings className="w-5 h-5" />, label: "Configurações", path: "#/admin/configuracoes", section: "SISTEMA", show: platformCan('platform.settings.read') },
@@ -262,6 +284,20 @@ function AdminLayoutInner({ children, currentPath }: { children: React.ReactNode
           >
             <Menu className="w-6 h-6" />
           </button>
+          <div className="relative max-w-xl flex-1">
+            <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[#777D7A]" />
+            <input
+              value={globalSearch}
+              onChange={(event) => setGlobalSearch(event.target.value)}
+              aria-label="Busca global"
+              placeholder="Buscar cliente…  (atalho /)"
+              className="w-full rounded-xl border border-[#DDD8CF] bg-[#F6F5F2] py-2 pl-9 pr-3 text-sm outline-none focus:border-[#B66E45]"
+            />
+            {searchResults.length > 0 && <div className="absolute left-0 right-0 top-11 z-40 overflow-hidden rounded-xl border border-[#DDD8CF] bg-white shadow-xl">
+              {searchResults.map((item) => <a key={`${item.type}-${item.id}`} href={item.href} onClick={() => { setGlobalSearch(''); setSearchResults([]); }} className="block border-b border-[#EEEAE3] px-4 py-3 last:border-0 hover:bg-[#F6F5F2]"><div className="text-sm font-bold text-[#202322]">{item.title}</div><div className="text-xs text-[#626866]">{item.subtitle || item.type}</div></a>)}
+            </div>}
+          </div>
+          <div className="hidden text-xs text-[#777D7A] lg:block">{currentPath.replace('#/admin', 'Admin / ').replaceAll('/', ' / ')}</div>
         </header>
 
         <div className="flex-1 overflow-y-auto overflow-x-hidden p-4 md:p-8">

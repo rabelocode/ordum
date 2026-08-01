@@ -11,6 +11,7 @@ export function CompanyDetailPage({ tenantId }: { tenantId: string }) {
   const [activeTab, setActiveTab] = useState("visoogeral");
   const [isSaving, setIsSaving] = useState(false);
   const [solutionKeys, setSolutionKeys] = useState<string[]>([]);
+  const [entitlements, setEntitlements] = useState<any>(null);
   const [isAssignModalOpen, setIsAssignModalOpen] = useState(false);
 
   async function loadTenant() {
@@ -25,6 +26,8 @@ export function CompanyDetailPage({ tenantId }: { tenantId: string }) {
         if (data.tenant_solutions) {
           setSolutionKeys(data.tenant_solutions.map((s: any) => s.solutions?.key).filter(Boolean));
         }
+        const entitlementResponse = await fetch(`/api/admin/control-plane/tenants/${tenantId}/entitlements`, { headers: { 'Authorization': `Bearer ${session.access_token}` } });
+        if (entitlementResponse.ok) setEntitlements(await entitlementResponse.json());
       }
     } catch (e) {
       console.error(e);
@@ -105,7 +108,7 @@ export function CompanyDetailPage({ tenantId }: { tenantId: string }) {
         </div>
         
         <div className="flex border-b border-[#DDD8CF]/40 overflow-x-auto">
-          {["Visão Geral", "Soluções", "Responsáveis", "Domínios", "Unidades", "Usuários", "Financeiro", "Auditoria"].map(tab => {
+          {["Visão Geral", "Entitlements", "Soluções", "Responsáveis", "Domínios", "Unidades", "Usuários", "Financeiro", "Auditoria"].map(tab => {
             const tabId = tab.toLowerCase().replace(/[^a-z]/g, '');
             return (
               <button
@@ -129,6 +132,8 @@ export function CompanyDetailPage({ tenantId }: { tenantId: string }) {
                   <div className="text-sm text-gray-500">Status</div>
                   <div className="font-bold text-gray-900 capitalize">{tenant.status}</div>
                 </div>
+                <div className="p-4 bg-gray-50 rounded-xl border border-[#DDD8CF]/40"><div className="text-sm text-gray-500">Lifecycle</div><div className="font-bold text-gray-900 capitalize">{tenant.lifecycle_status?.replaceAll('_',' ') || 'não definido'}</div></div>
+                <div className="p-4 bg-gray-50 rounded-xl border border-[#DDD8CF]/40"><div className="text-sm text-gray-500">Risco</div><div className="font-bold text-gray-900 capitalize">{tenant.risk_level || 'não avaliado'}</div></div>
                 <div className="p-4 bg-gray-50 rounded-xl border border-[#DDD8CF]/40">
                   <div className="text-sm text-gray-500">Criado em</div>
                   <div className="font-bold text-gray-900">{new Date(tenant.created_at).toLocaleDateString()}</div>
@@ -136,6 +141,8 @@ export function CompanyDetailPage({ tenantId }: { tenantId: string }) {
               </div>
             </div>
           )}
+
+          {activeTab === 'entitlements' && <div className="space-y-4"><div><h2 className="text-lg font-bold">Entitlement efetivo</h2><p className="mt-1 text-sm text-gray-500">Resultado calculado no servidor a partir de contrato, versão do plano, assinatura, ativações e overrides temporários. RBAC é validado separadamente.</p></div>{!entitlements ? <div className="rounded-xl border border-dashed p-8 text-center text-sm text-gray-500">Nenhum entitlement calculável para este cliente.</div> : <><div className="grid gap-3 md:grid-cols-3"><div className="rounded-xl bg-gray-50 p-4"><div className="text-xs text-gray-500">Tenant</div><strong>{entitlements.tenant_status || '—'}</strong></div><div className="rounded-xl bg-gray-50 p-4"><div className="text-xs text-gray-500">Contrato</div><strong>{entitlements.contract?.status || 'sem contrato'}</strong></div><div className="rounded-xl bg-gray-50 p-4"><div className="text-xs text-gray-500">Assinatura</div><strong>{entitlements.subscription?.status || 'sem assinatura'}</strong></div></div><div className="space-y-2">{entitlements.solutions?.length ? entitlements.solutions.map((item:any)=><div key={item.id} className="flex flex-col gap-2 rounded-xl border p-4 md:flex-row md:items-center md:justify-between"><div><strong>{item.name}</strong><div className="text-xs text-gray-500">{item.decision_reason}</div></div><span className={`rounded-full px-3 py-1 text-xs font-bold ${item.enabled?'bg-emerald-100 text-emerald-800':'bg-gray-100 text-gray-600'}`}>{item.enabled?'Habilitado':'Bloqueado'}</span></div>) : <div className="rounded-xl border border-dashed p-8 text-center text-sm text-gray-500">Nenhuma solução contratada ou ativada.</div>}</div></>}</div>}
 
           {activeTab === 'solues' && (
             <div className="space-y-6 max-w-2xl">

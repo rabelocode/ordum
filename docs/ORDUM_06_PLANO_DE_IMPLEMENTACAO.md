@@ -33,3 +33,6 @@ A integração permanece `BILLING_ENABLED=false`. Sem `ASAAS_API_KEY`, `ASAAS_WE
 O alerta de listagem ampla do bucket público foi removido. Os avisos restantes dos advisors são registrados no relatório final: as RPCs públicas de denúncia/candidatura e os helpers de autorização são `SECURITY DEFINER` intencionais, com `search_path` fixo, `PUBLIC` revogado e grants mínimos. A proteção contra senhas vazadas depende de habilitação no painel do Supabase.
 
 Após a décima migration, o advisor de segurança registra 20 itens informativos de tabelas server-only sem policy, 20 alertas conhecidos das RPCs privilegiadas intencionais e um alerta de configuração do Auth. O advisor de performance permanece com 176 recomendações sobre o esquema legado; não foram criados índices indiscriminadamente porque 75 índices já aparecem como não utilizados.
+# Incremento 09
+
+Concluída a fundação transacional e as telas de consulta do control plane. Permanecem como próximos incrementos os formulários completos, o drill-down filtrado por todos os indicadores e a homologação Asaas Sandbox.

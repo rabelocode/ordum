@@ -52,3 +52,6 @@ IDs externos do Asaas têm constraints únicas. `external_reference` usa UUID in
 - `billing_reconciliation_reviewer_index`
 - `transactional_plan_versioning`
 - `harden_public_storage_listing`
+# Extensão do control plane
+
+A migration `20260801215437_admin_control_plane_foundation.sql` adiciona identidade/scoring de leads, versões/itens de proposta, transições, onboarding, Customer Success, suporte interno, solicitações LGPD, metas/comissões, overrides de entitlement, views salvas, eventos operacionais e dunning. Os objetos são server-only e não substituem as tabelas comerciais ou financeiras existentes.

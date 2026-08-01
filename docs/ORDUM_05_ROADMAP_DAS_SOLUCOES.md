@@ -31,3 +31,6 @@
 - produção Asaas somente após aceite formal.
 
 Split, subcontas BaaS, armazenamento de cartão e comissão automática estão explicitamente fora desta fase.
+# Atualização do admin
+
+A fundação transversal do control plane (onboarding, CS, suporte interno, LGPD operacional, metas, operações e entitlement explicável) está implementada. Os módulos finais Pessoas, Integridade e Talentos permanecem fora deste ciclo.

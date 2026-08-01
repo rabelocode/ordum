@@ -26,6 +26,8 @@ const PlansPage = lazy(() => import("./pages/admin/PlansPage").then(m => ({ defa
 const BillingPage = lazy(() => import("./pages/admin/BillingPage").then(m => ({ default: m.BillingPage })));
 const DemosPage = lazy(() => import("./pages/admin/DemosPage").then(m => ({ default: m.DemosPage })));
 const ProposalsPage = lazy(() => import("./pages/admin/ProposalsPage").then(m => ({ default: m.ProposalsPage })));
+const ControlPlaneModulePage = lazy(() => import("./pages/admin/ControlPlaneModulePage").then(m => ({ default: m.ControlPlaneModulePage })));
+const AccessControlPage = lazy(() => import("./pages/admin/AccessControlPage").then(m => ({ default: m.AccessControlPage })));
 
 const SuspenseFallback = () => (
   <div className="min-h-screen flex items-center justify-center bg-[#F6F5F2]">
@@ -149,6 +151,20 @@ export default function App() {
         adminContent = <BillingPage />;
       } else if (route === "/admin/demos") {
         adminContent = <DemosPage />;
+      } else if (route === "/admin/onboarding") {
+        adminContent = <ControlPlaneModulePage module="onboarding" />;
+      } else if (route === "/admin/customer-success") {
+        adminContent = <ControlPlaneModulePage module="success" />;
+      } else if (route === "/admin/suporte") {
+        adminContent = <ControlPlaneModulePage module="support" />;
+      } else if (route === "/admin/privacidade") {
+        adminContent = <ControlPlaneModulePage module="privacy" />;
+      } else if (route === "/admin/metas") {
+        adminContent = <ControlPlaneModulePage module="targets" />;
+      } else if (route === "/admin/operacoes") {
+        adminContent = <ControlPlaneModulePage module="operations" />;
+      } else if (route === "/admin/acessos") {
+        adminContent = <AccessControlPage />;
       } else if (
         route === "/admin/desempenho" ||
         route === "/admin/solucoes" ||

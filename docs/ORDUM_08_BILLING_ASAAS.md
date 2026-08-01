@@ -76,3 +76,7 @@ Assinaturas: `SUBSCRIPTION_CREATED`, `SUBSCRIPTION_UPDATED`, `SUBSCRIPTION_INACT
 - Reembolso/chargeback exige consulta direta da cobrança antes da transição irreversível; reembolso parcial não suspende automaticamente.
 - A homologação ponta a ponta continua bloqueada apenas pelos segredos Sandbox ausentes.
 - Produção não foi chamada nem cobrada nesta entrega.
+
+## Control plane financeiro
+
+A central de comando passou a calcular MRR/ARR e recebidos/pendentes/vencidos no banco, sem expor payload ou segredo. Foram adicionadas tabelas server-only para políticas/eventos de dunning e comissões, mas nenhuma comunicação externa, split ou pagamento automático foi simulado. A homologação Sandbox continua pendente das variáveis já listadas.

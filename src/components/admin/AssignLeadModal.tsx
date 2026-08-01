@@ -13,7 +13,8 @@ export function AssignLeadModal({ isOpen, onClose, onSuccess, leadId, currentAss
   
   const [formData, setFormData] = useState({
     team_id: currentAssignment?.team_id || "",
-    owner_platform_member_id: currentAssignment?.owner_platform_member_id || ""
+    owner_platform_member_id: currentAssignment?.owner_platform_member_id || "",
+    reason: ""
   });
 
   useEffect(() => {
@@ -70,7 +71,7 @@ export function AssignLeadModal({ isOpen, onClose, onSuccess, leadId, currentAss
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm">
       <div className="bg-white rounded-2xl shadow-xl w-full max-w-lg overflow-hidden flex flex-col">
         <div className="flex items-center justify-between p-6 border-b border-[#DDD8CF]/40">
-          <h2 className="text-xl font-bold text-[#202322]">Atribuir Lead</h2>
+          <h2 className="text-xl font-bold text-[#202322]">{isClient ? 'Transferir cliente' : 'Atribuir lead'}</h2>
           <button onClick={onClose} className="text-gray-400 hover:text-gray-900 transition-colors">
             <X className="w-5 h-5" />
           </button>
@@ -97,6 +98,10 @@ export function AssignLeadModal({ isOpen, onClose, onSuccess, leadId, currentAss
                   <option key={t.id} value={t.id}>{t.name}</option>
                 ))}
               </select>
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-[#202322] mb-1">Motivo</label>
+              <textarea required maxLength={500} value={formData.reason} onChange={e => setFormData({...formData, reason: e.target.value})} placeholder="Explique a atribuição ou transferência" className="min-h-20 w-full rounded-xl border border-[#DDD8CF] px-4 py-2 focus:border-[#B66E45] focus:outline-none" />
             </div>
             
             <div>
@@ -129,7 +134,7 @@ export function AssignLeadModal({ isOpen, onClose, onSuccess, leadId, currentAss
           <button 
             type="submit"
             form="assign-lead-form"
-            disabled={isSubmitting || !formData.team_id}
+            disabled={isSubmitting || !formData.team_id || !formData.reason.trim()}
             className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-white bg-[#121413] rounded-xl hover:bg-[#202322] disabled:opacity-50"
           >
             {isSubmitting && <Loader2 className="w-4 h-4 animate-spin" />}
