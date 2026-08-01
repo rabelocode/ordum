@@ -96,7 +96,7 @@ export function Footer({ onNavigateLogin, onOpenDemo }: FooterProps) {
           </div>
           <div className="bg-[#B66E45]/10 border border-[#B66E45]/20 text-[#D2926D] px-3 py-1.5 rounded-lg font-medium text-[10px] uppercase tracking-wider flex items-center gap-2">
             <Lock className="w-3 h-3" />
-            Demonstração • Dados Ilustrativos e Persistência Local
+            Demonstração • Dados ilustrativos
           </div>
         </div>
       </div>
