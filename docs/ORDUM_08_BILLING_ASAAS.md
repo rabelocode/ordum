@@ -47,18 +47,19 @@ Reembolso parcial não suspende automaticamente. Eventos desconhecidos são pers
 3. Gerar um token aleatório forte, diferente da API Key, para autenticar o webhook.
 4. Na Vercel, abrir **Project → Settings → Environment Variables** e cadastrar `ASAAS_API_KEY` e `ASAAS_WEBHOOK_TOKEN` somente no ambiente de homologação/produção usado pelo deploy. Não enviar pelo chat.
 5. No mesmo painel, cadastrar `APP_URL`, `ASAAS_WEBHOOK_URL`, `ASAAS_ENV=sandbox`, `ASAAS_BASE_URL=https://api-sandbox.asaas.com/v3`, `ASAAS_USER_AGENT=Ordum` e um `CRON_SECRET` forte.
-6. Manter `BILLING_ENABLED=false`, redeployar e conferir `/#/admin/financeiro`.
-7. No painel Asaas, criar webhook para `https://SEU_DOMINIO/api/webhooks/asaas`, usar o token do passo 3 e selecionar somente os eventos documentados abaixo.
-8. Alterar `BILLING_ENABLED=true` apenas no ambiente Sandbox e redeployar.
-9. No admin Ordum, criar plano, contrato com CPF/CNPJ de teste e aprovar.
-10. Usar **Iniciar Sandbox** para criar cliente e assinatura.
-11. Simular pagamento e confirmar o recebimento de `PAYMENT_CONFIRMED`/`PAYMENT_RECEIVED`.
-12. Reenviar o mesmo evento pelo Asaas e confirmar que aparece como duplicado sem estender o período novamente.
-13. Validar renovação, atraso, carência, suspensão, pagamento atrasado, reativação, cancelamento, reembolso e chargeback.
-14. Conferir a fila de webhooks, auditoria e a execução de conciliação.
-15. Somente após aceite formal, criar conta e chave de produção separadas.
-16. Cadastrar segredos de produção separados na Vercel; nunca reutilizar chave Sandbox.
-17. A liberação de `ASAAS_ENV=production` exige mudança de código e autorização explícita. Não basta trocar uma variável.
+6. Em **Project → Settings → Deployment Protection**, manter público o domínio de produção usado pelo webhook. A autenticação das rotas é feita pela aplicação e pelo `asaas-access-token`; proteção Vercel pode continuar nos previews.
+7. Manter `BILLING_ENABLED=false`, redeployar e conferir `/#/admin/financeiro`.
+8. No painel Asaas, criar webhook para `https://SEU_DOMINIO/api/webhooks/asaas`, usar o token do passo 3 e selecionar somente os eventos documentados abaixo.
+9. Alterar `BILLING_ENABLED=true` apenas no ambiente Sandbox e redeployar.
+10. No admin Ordum, criar plano, proposta, aprová-la, gerar e aprovar o contrato com CPF/CNPJ de teste.
+11. Usar **Iniciar Sandbox** para criar cliente e assinatura.
+12. Simular pagamento e confirmar o recebimento de `PAYMENT_CONFIRMED`/`PAYMENT_RECEIVED`.
+13. Reenviar o mesmo evento pelo Asaas e confirmar que aparece como duplicado sem estender o período novamente.
+14. Validar renovação, atraso, carência, suspensão, pagamento atrasado, reativação, cancelamento, reembolso e chargeback.
+15. Conferir a fila de webhooks, auditoria e a execução de conciliação.
+16. Somente após aceite formal, criar conta e chave de produção separadas.
+17. Cadastrar segredos de produção separados na Vercel; nunca reutilizar chave Sandbox.
+18. A liberação de `ASAAS_ENV=production` exige mudança de código e autorização explícita. Não basta trocar uma variável.
 
 ## Eventos configurados
 
