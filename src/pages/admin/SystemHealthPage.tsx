@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useAuth } from '../../core/auth/AuthProvider';
-import { Server, Activity, Database, ShieldCheck, Clock } from 'lucide-react';
+import { Server, Database, ShieldCheck, WalletCards } from 'lucide-react';
 
 export function SystemHealthPage() {
   const { session } = useAuth();
@@ -120,6 +120,14 @@ export function SystemHealthPage() {
                 <span className="font-medium text-gray-900">Emitindo normalmente</span>
               </div>
             </div>
+          </div>
+
+          <div className="bg-white p-6 rounded-2xl border border-[#DDD8CF]/40 shadow-sm">
+            <div className="flex items-center gap-4 mb-4">
+              <div className="w-12 h-12 bg-amber-50 text-[#B66E45] rounded-xl flex items-center justify-center"><WalletCards className="w-6 h-6" /></div>
+              <div><h3 className="font-bold text-[#202322]">Asaas</h3><div className={`text-sm font-medium ${health.billing?.enabled ? 'text-green-600' : 'text-amber-700'}`}>{health.billing?.enabled ? 'Sandbox habilitado' : 'Desabilitado com segurança'}</div></div>
+            </div>
+            <div className="text-sm text-gray-500 space-y-2 mt-4 pt-4 border-t border-gray-100"><div className="flex justify-between"><span>Ambiente:</span><span className="font-medium text-gray-900">{health.billing?.environment || 'sandbox'}</span></div><div className="flex justify-between"><span>Segredos:</span><span className="font-medium text-gray-900">{health.billing?.configured ? 'Configurados' : 'Pendentes'}</span></div></div>
           </div>
         </div>
       )}

@@ -22,6 +22,10 @@ const PlaceholderAdminPage = lazy(() => import("./pages/admin/PlaceholderAdminPa
 const LeadsPage = lazy(() => import("./pages/admin/LeadsPage").then(m => ({ default: m.LeadsPage })));
 const AuditPage = lazy(() => import("./pages/admin/AuditPage").then(m => ({ default: m.AuditPage })));
 const SystemHealthPage = lazy(() => import("./pages/admin/SystemHealthPage").then(m => ({ default: m.SystemHealthPage })));
+const PlansPage = lazy(() => import("./pages/admin/PlansPage").then(m => ({ default: m.PlansPage })));
+const BillingPage = lazy(() => import("./pages/admin/BillingPage").then(m => ({ default: m.BillingPage })));
+const DemosPage = lazy(() => import("./pages/admin/DemosPage").then(m => ({ default: m.DemosPage })));
+const ProposalsPage = lazy(() => import("./pages/admin/ProposalsPage").then(m => ({ default: m.ProposalsPage })));
 
 const SuspenseFallback = () => (
   <div className="min-h-screen flex items-center justify-center bg-[#F6F5F2]">
@@ -137,9 +141,15 @@ export default function App() {
         adminContent = <SystemHealthPage />;
       } else if (route === "/admin/contratos") {
         adminContent = <ContractsPage />;
+      } else if (route === "/admin/propostas") {
+        adminContent = <ProposalsPage />;
+      } else if (route === "/admin/planos") {
+        adminContent = <PlansPage />;
+      } else if (route === "/admin/financeiro") {
+        adminContent = <BillingPage />;
+      } else if (route === "/admin/demos") {
+        adminContent = <DemosPage />;
       } else if (
-        
-        route === "/admin/demos" ||
         route === "/admin/desempenho" ||
         route === "/admin/solucoes" ||
         

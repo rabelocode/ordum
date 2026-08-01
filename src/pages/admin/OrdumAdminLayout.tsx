@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from "react";
 import { 
   Building, LayoutDashboard, Settings, LogOut, Users, FileText, Menu, X, 
-  Search, Activity, ShieldCheck, Box, Server, GitMerge, AlertOctagon
+  Search, Activity, ShieldCheck, Box, Server, GitMerge, AlertOctagon, WalletCards, Layers3
 } from "lucide-react";
 import { PlatformAuthProvider, usePlatform } from "../../core/auth/PlatformAuthProvider";
 import { useAuth } from "../../core/auth/AuthProvider";
@@ -153,6 +153,10 @@ function AdminLayoutInner({ children, currentPath }: { children: React.ReactNode
     { id: "leads", icon: <Search className="w-5 h-5" />, label: "Leads", path: "#/admin/leads", section: "COMERCIAL", show: platformCan('platform.leads.read') || platformRole?.key === 'sales' },
     { id: "demos", icon: <Activity className="w-5 h-5" />, label: "Demonstrações", path: "#/admin/demos", section: "COMERCIAL", show: platformCan('platform.demos.manage') || platformRole?.key === 'sales' },
     { id: "clientes", icon: <Building className="w-5 h-5" />, label: "Clientes", path: "#/admin/empresas", section: "COMERCIAL", show: platformCan('platform.clients.read') || platformRole?.key === 'sales' },
+    { id: "propostas", icon: <FileText className="w-5 h-5" />, label: "Propostas", path: "#/admin/propostas", section: "COMERCIAL", show: platformCan('platform.commercial.read') },
+    { id: "contratos", icon: <FileText className="w-5 h-5" />, label: "Contratos", path: "#/admin/contratos", section: "COMERCIAL", show: platformCan('platform.commercial.read') },
+    { id: "planos", icon: <Layers3 className="w-5 h-5" />, label: "Planos e preços", path: "#/admin/planos", section: "FINANCEIRO", show: platformCan('platform.billing.read') },
+    { id: "financeiro", icon: <WalletCards className="w-5 h-5" />, label: "Cobranças", path: "#/admin/financeiro", section: "FINANCEIRO", show: platformCan('platform.billing.read') },
     { id: "equipes", icon: <Users className="w-5 h-5" />, label: "Equipes", path: "#/admin/equipes", section: "EQUIPES", show: platformCan('platform.teams.read') || memberTeams.length > 0 },
     { id: "desempenho", icon: <Activity className="w-5 h-5" />, label: "Meu Desempenho", path: "#/admin/desempenho", section: "EQUIPES", show: platformCan('platform.performance.own.read') || platformRole?.key === 'sales' },
     { id: "solucoes", icon: <Box className="w-5 h-5" />, label: "Soluções", path: "#/admin/solucoes", section: "PLATAFORMA", show: platformCan('platform.solutions.read') },
