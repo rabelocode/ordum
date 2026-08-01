@@ -1,7 +1,6 @@
 // server.ts
 import express from "express";
 import path from "path";
-import { createServer as createViteServer } from "vite";
 
 // src/server/adminLeadsRouter.ts
 import { Router } from "express";
@@ -1112,6 +1111,7 @@ async function createApp() {
     }
   });
   if (process.env.NODE_ENV !== "production") {
+    const { createServer: createViteServer } = await import("vite");
     const vite = await createViteServer({
       server: { middlewareMode: true },
       appType: "spa"

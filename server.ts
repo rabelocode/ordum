@@ -1,6 +1,5 @@
 import express from 'express';
 import path from 'path';
-import { createServer as createViteServer } from 'vite';
 import { createAdminLeadsRouter } from './src/server/adminLeadsRouter';
 import { createAdminClientsRouter } from './src/server/adminClientsRouter';
 import { createAdminOtherRouter } from './src/server/adminOtherRouter';
@@ -511,6 +510,7 @@ export async function createApp() {
   
   // Vite middleware for development
   if (process.env.NODE_ENV !== "production") {
+    const { createServer: createViteServer } = await import('vite');
     const vite = await createViteServer({
       server: { middlewareMode: true },
       appType: "spa",
