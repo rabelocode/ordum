@@ -1,31 +1,33 @@
-# Plano de Implementação
+# ORDUM 06 — Estado da implementação
 
-O projeto segue a seguinte sequência de fases:
+## Concluído nesta entrega
 
-1. **Fase 1: Conclusão e Simplificação da HOME (ATUAL)**
-   - Redução da densidade textual.
-   - Refinamento da copy (Clareza > Efeitos).
-   - Definição precisa das três soluções de modo conciso.
-   - Preservação de navegação por âncoras e estética premium.
+- auditoria do repositório, build, Auth, API, deploy e banco real;
+- inicialização do diretório Supabase e seis migrations aplicadas/versionadas;
+- modelo comercial, planos e billing com RLS/grants restritos;
+- contrato `BillingProvider` e adapter Asaas Sandbox;
+- webhook autenticado, persistido e idempotente;
+- normalização de pagamentos, atraso, carência, revisão e reativação;
+- provisionamento transacional depois de pagamento confirmado;
+- conciliação diária autenticada por Vercel Cron;
+- telas administrativas de demos, contratos, planos e financeiro;
+- correções de escopo global/equipe e bloqueio de autoelevação;
+- remoção de rota temporária que expunha e-mails;
+- testes de autorização, configuração e máquina de estados;
+- documentação sincronizada.
 
-2. **Fase 2: Fundação Global Local (ATUAL)**
-   - Refatoração dos fluxos de login para destino baseado em papéis.
-   - Estruturação dos types e adapters do controle de acesso.
-   - Implementação do Registry e Entitlements em memória.
-   - Isolamento das áreas da aplicação para barrar acessos indevidos por perfil.
+## Condicionado à configuração externa
 
-3. **Fase 3: Banco e Autenticação (FUTURO)**
-   - Substituição do Local Storage por Banco de Dados real.
-   - Implementação de JWT / Autenticação segura.
+A integração permanece `BILLING_ENABLED=false`. Sem `ASAAS_API_KEY`, `ASAAS_WEBHOOK_TOKEN` e `CRON_SECRET` na Vercel, nenhuma chamada ou cobrança é feita. Isso é um bloqueio seguro de homologação, não um fallback local.
 
-4. **Fase 4: Ordum Pessoas (FUTURO)**
-   - Interfaces e fluxos completos.
+## Validações executadas
 
-5. **Fase 5: Ordum Integridade (FUTURO)**
-   - Interfaces e fluxos completos.
+- `npm run lint`;
+- `npm test`;
+- `npm run build`;
+- consultas reais ao Supabase;
+- RLS/grants e assinatura das RPCs;
+- advisors de segurança e performance antes/depois;
+- smoke tests do deploy após push.
 
-6. **Fase 6: Ordum Talentos (FUTURO)**
-   - Interfaces e fluxos completos.
-
-7. **Fase 7: Futuras Soluções**
-   - Lançamento dos namespaces reservados (Processos, Documentos, etc).
+Os avisos legados dos advisors são registrados no relatório final; não foram removidos em massa porque incluem RPCs públicas intencionais de denúncia/candidatura e políticas dos produtos, cujo redesenho exige testes próprios.

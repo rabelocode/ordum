@@ -1,44 +1,49 @@
-# Arquitetura Global
+# ORDUM 02 — Arquitetura global
 
-O ecossistema Ordum é estruturado em módulos independentes que interagem por meio de contratos rigorosos.
+## Estado vigente
 
-## Fronteiras
-- **`site`**: Tudo o que é público e institucional (HOME, lead capture).
-- **`core`**: Núcleo compartilhado contendo controle de acesso, auth, definição de tenants, auditoria.
-- **`solutions/integridade`**: Domínio isolado da solução Integridade.
-- **`solutions/pessoas`**: Domínio isolado da solução Pessoas.
-- **`solutions/talentos`**: Domínio isolado da solução Talentos.
-- **`ordum-admin`**: Área interna da Ordum para gerir as contas clientes.
+A Ordum é uma aplicação React/Vite publicada pela Vercel. A navegação é baseada em hash, incluindo `/#/login`, `/#/workspace` e `/#/admin`. O Supabase de produção (`plnciaxcujnvaermxmby`) é a fonte de verdade para Auth, PostgreSQL, RLS e os domínios dos tenants.
 
-## Contratos Principais
-A base é fundamentada nos seguintes adapters, serviços e repositórios (atualmente simulados em memória/local):
-- `AuthAdapter`: Gerencia login/logout.
-- `TenantResolver`: Resolve qual tenant está sendo acessado.
-- `TenantRepository` / `OrganizationRepository`: Gestão de dados da empresa, unidades, setores.
-- `MembershipRepository`: Conecta o `User` ao `Tenant`.
-- `AccessControlService`: Define se o usuário possui acesso (`can(context, permission, resource)`).
-- `EntitlementsProvider`: Retorna as soluções habilitadas para um tenant (`hasSolution(tenantId, solutionId)`).
-- `LandingResolver`: Define a rota pós-login com base na autorização (`resolve(context)`).
-- `FileService`, `NotificationService`, `AuditService`: Serviços utilitários.
-- `LeadService`: Repositório de captação de leads.
-- `SolutionRegistry`: Catálogo extensível das soluções disponíveis na plataforma.
+Não há banco local operacional nem mocks usados como fonte de verdade. `localStorage` guarda apenas a preferência do tenant ativo; usuários, vínculos, permissões, leads, clientes, contratos e cobrança são lidos do banco.
 
-## Fluxo Comercial e Ativação
-1. **Visitante** solicita demo (gera um `Lead`).
-2. Análise comercial pela equipe Ordum.
-3. Aprovação explícita (ação de um `ORDUM_SUPER_ADMIN` ou `ORDUM_SALES`).
-4. Criação da Empresa (Tenant) com suas Soluções Contratadas (Entitlements) ativadas.
-5. Convite do Administrador (Owner).
-6. Configuração Organizacional (cargos, setores).
-7. Convite e atribuição de Usuários e Permissões.
+## Boundaries
 
-*Um lead nunca deve criar ou acessar um tenant automaticamente.*
+```text
+Browser React/Vite
+  ├─ Supabase Auth + dados do workspace protegidos por RLS
+  └─ /api/admin/* com Bearer JWT
+         └─ Express serverless na Vercel
+              ├─ valida sessão no Supabase Auth
+              ├─ calcula papel + permissões + equipes + recurso
+              └─ usa SUPABASE_SECRET_KEY somente no servidor
 
-### Backend de Administração (Server-side Boundary)
-Para operações privilegiadas (ex: `provision_tenant`, `releaseDemoAccess`, consulta global de `tenants`) que não podem ou não devem ser executadas pelo client devido a restrições de RLS e segurança global, a Ordum implementa uma boundary server-side via `server.ts` (Express + Vite Middleware).
+Asaas Sandbox
+  ├─ API v3 chamada somente pelo BillingProvider server-side
+  └─ POST /api/webhooks/asaas
+         └─ token próprio → persistência → processamento idempotente
+```
 
-O backend:
-1. Valida a sessão JWT com Supabase.
-2. Identifica o usuário e verifica se é um Administrador da Plataforma (atualmente via variável `ADMIN_EMAILS` como debito arquitetural pendente de uma tabela de roles globais).
-3. Utiliza a `SUPABASE_SECRET_KEY` de forma isolada do frontend para efetuar operações administrativas no Supabase via *privileged client*.
-4. O fluxo comercial para aprovação de leads transforma leads em tenants, inserindo em `tenants`, `tenant_solutions`, disparando convite de auth via Supabase Admin API e gerando o `membership`.
+A boundary financeira principal é o Express já implantado na Vercel. Não existe uma segunda implementação concorrente em Edge Functions.
+
+## Segurança
+
+- O frontend aceita apenas publishable key.
+- O backend falha se não houver `SUPABASE_SECRET_KEY` ou `SUPABASE_SERVICE_ROLE_KEY`; chave pública não é fallback administrativo.
+- A rota temporária que listava slugs e e-mails foi removida.
+- Tabelas financeiras têm RLS habilitado, nenhum grant para `anon`/`authenticated` e grants explícitos apenas para `service_role`.
+- Dados brutos de webhook e dados fiscais não são devolvidos ao browser.
+- O papel interno da plataforma é separado dos papéis de cada tenant.
+- Guards React são UX; a decisão autoritativa ocorre na API e no banco.
+
+## Deploy
+
+`main` no GitHub alimenta o projeto Vercel. `npm run build` gera o frontend em `dist/` e o handler serverless em `api/index.mjs`. `vercel.json` mantém o rewrite de `/api/*`, fallback SPA e um cron diário de conciliação às 06:17 UTC.
+
+## Decisões
+
+1. PostgreSQL/Supabase é a fonte de verdade.
+2. Valores monetários são inteiros em centavos e moeda BRL.
+3. A Ordum controla o estado de acesso; o provedor informa fatos financeiros.
+4. Criar assinatura nunca ativa tenant.
+5. Trial e pagamento têm fluxos distintos.
+6. Produção Asaas permanece bloqueada em código até homologação e autorização explícita.
