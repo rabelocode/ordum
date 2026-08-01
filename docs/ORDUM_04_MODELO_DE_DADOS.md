@@ -51,3 +51,4 @@ IDs externos do Asaas têm constraints únicas. `external_reference` usa UUID in
 - `close_admin_billing_gaps`
 - `billing_reconciliation_reviewer_index`
 - `transactional_plan_versioning`
+- `harden_public_storage_listing`

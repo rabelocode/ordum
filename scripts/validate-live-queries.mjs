@@ -3,8 +3,10 @@ import { createClient } from '@supabase/supabase-js';
 
 const url = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL;
 const key = process.env.SUPABASE_SECRET_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY;
-if (!url || !key) throw new Error('Credenciais server-side ausentes para smoke read-only.');
+const publicKey = process.env.VITE_SUPABASE_PUBLISHABLE_KEY || process.env.SUPABASE_PUBLISHABLE_KEY;
+if (!url || !key || !publicKey) throw new Error('Credenciais do Supabase ausentes para smoke read-only.');
 const db = createClient(url, key, { auth: { persistSession: false, autoRefreshToken: false } });
+const publicDb = createClient(url, publicKey, { auth: { persistSession: false, autoRefreshToken: false } });
 
 const checks = [
   ['leads', db.from('marketing_leads').select('*, platform_lead_assignments(*, platform_teams(name,allow_self_claim), platform_members(user_id, platform_roles(key, name))), commercial_activities(id,activity_type,subject,status,scheduled_at,result,next_action,next_action_at,created_at), commercial_demos(id,status,starts_at,expires_at,result,next_action,next_action_at)', { count: 'exact' }).limit(1)],
@@ -26,3 +28,8 @@ if (tenant.data) {
   if (detail.error) throw new Error(`client-detail: ${detail.error.message}`);
   process.stdout.write('client-detail: ok\n');
 }
+
+const publicListing = await publicDb.storage.from('ordum-public').list('', { limit: 1 });
+if (publicListing.error) throw new Error(`public-storage-listing: ${publicListing.error.message}`);
+if ((publicListing.data || []).length > 0) throw new Error('public-storage-listing: browser role can enumerate objects');
+process.stdout.write('public-storage-listing: blocked\n');

@@ -35,6 +35,8 @@ Permissões `*.read` não tornam gerente ou vendedor global. A API sempre combin
 - `tenant_admin` não dá acesso a `/#/admin`;
 - campos editáveis de equipe são allowlisted no backend;
 - ações críticas registram ator, correlação, IP/user-agent quando disponíveis, antes/depois sanitizado e resultado.
+- RPCs `SECURITY DEFINER` têm `search_path` explícito e `EXECUTE` revogado de `PUBLIC`; helpers de RLS são concedidos somente a `authenticated`, enquanto seis RPCs de formulário público são concedidas explicitamente a `anon`/`authenticated` por necessidade funcional;
+- o bucket `ordum-public` continua servindo URLs públicas, mas os papéis de browser não podem listar todos os objetos via Storage API.
 
 ## Papéis de tenant
 

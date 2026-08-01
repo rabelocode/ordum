@@ -26,6 +26,42 @@ begin
   end if;
 
   if exists (
+    select 1 from pg_policies
+    where schemaname = 'storage'
+      and tablename = 'objects'
+      and policyname = 'storage_public_read'
+  ) then
+    raise exception 'Public storage objects can still be listed by browser roles';
+  end if;
+
+  if exists (
+    select 1
+    from pg_proc p
+    join pg_namespace n on n.oid = p.pronamespace
+    where n.nspname = 'public'
+      and p.prosecdef
+      and not exists (
+        select 1 from unnest(coalesce(p.proconfig, '{}'::text[])) setting
+        where setting like 'search_path=%'
+      )
+  ) then
+    raise exception 'A public SECURITY DEFINER function lacks an explicit approved search_path';
+  end if;
+
+  if exists (
+    select 1
+    from pg_proc p
+    join pg_namespace n on n.oid = p.pronamespace
+    cross join lateral aclexplode(coalesce(p.proacl, acldefault('f', p.proowner))) acl
+    where n.nspname = 'public'
+      and p.prosecdef
+      and acl.grantee = 0
+      and acl.privilege_type = 'EXECUTE'
+  ) then
+    raise exception 'PUBLIC can execute a SECURITY DEFINER function';
+  end if;
+
+  if exists (
     select 1 from public.platform_role_permissions rp
     join public.platform_roles role on role.id = rp.role_id
     join public.platform_permissions permission on permission.id = rp.permission_id

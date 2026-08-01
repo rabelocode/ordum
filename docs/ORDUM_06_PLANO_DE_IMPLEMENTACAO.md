@@ -3,7 +3,7 @@
 ## Concluído nesta entrega
 
 - auditoria do repositório, build, Auth, API, deploy e banco real;
-- inicialização do diretório Supabase e nove migrations aplicadas/versionadas;
+- inicialização do diretório Supabase e dez migrations aplicadas/versionadas;
 - modelo comercial, planos e billing com RLS/grants restritos;
 - contrato `BillingProvider` e adapter Asaas Sandbox;
 - webhook autenticado, limitado, persistido, idempotente e processado de forma assíncrona após resposta rápida;
@@ -30,4 +30,6 @@ A integração permanece `BILLING_ENABLED=false`. Sem `ASAAS_API_KEY`, `ASAAS_WE
 - advisors de segurança e performance antes/depois;
 - smoke tests do deploy após push.
 
-Os avisos legados dos advisors são registrados no relatório final; não foram removidos em massa porque incluem RPCs públicas intencionais de denúncia/candidatura e políticas dos produtos, cujo redesenho exige testes próprios.
+O alerta de listagem ampla do bucket público foi removido. Os avisos restantes dos advisors são registrados no relatório final: as RPCs públicas de denúncia/candidatura e os helpers de autorização são `SECURITY DEFINER` intencionais, com `search_path` fixo, `PUBLIC` revogado e grants mínimos. A proteção contra senhas vazadas depende de habilitação no painel do Supabase.
+
+Após a décima migration, o advisor de segurança registra 20 itens informativos de tabelas server-only sem policy, 20 alertas conhecidos das RPCs privilegiadas intencionais e um alerta de configuração do Auth. O advisor de performance permanece com 176 recomendações sobre o esquema legado; não foram criados índices indiscriminadamente porque 75 índices já aparecem como não utilizados.
