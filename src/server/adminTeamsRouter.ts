@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import { auditContext } from './operational';
 
 export function createAdminTeamsRouter(getSupabaseAdmin: any, requirePlatformAuth: any) {
   const router = Router();
@@ -40,7 +41,7 @@ export function createAdminTeamsRouter(getSupabaseAdmin: any, requirePlatformAut
           name, slug, team_type, channel, description, 
           member_lead_visibility, member_client_visibility, allow_self_claim,
           status: 'active',
-          created_by: platformContext.platformMember.id
+          created_by: req.user.id
         })
         .select()
         .single();
@@ -53,7 +54,8 @@ export function createAdminTeamsRouter(getSupabaseAdmin: any, requirePlatformAut
         action: 'team.created',
         entity_type: 'platform_teams',
         entity_id: data.id,
-        severity: 'info'
+        severity: 'info',
+        ...auditContext(req, { result: 'success', after: { name: data.name, team_type: data.team_type, channel: data.channel } })
       });
       
       res.json(data);
@@ -98,7 +100,17 @@ export function createAdminTeamsRouter(getSupabaseAdmin: any, requirePlatformAut
         ? ['description', 'member_lead_visibility', 'member_client_visibility', 'allow_self_claim']
         : ['name', 'description', 'team_type', 'channel', 'status', 'member_lead_visibility', 'member_client_visibility', 'allow_self_claim', 'settings'];
       const updates = Object.fromEntries(Object.entries(req.body).filter(([key]) => allowedFields.includes(key)));
+      if (updates.settings && typeof updates.settings === 'object') {
+        for (const key of ['proposal_approval_limit_cents', 'contract_approval_limit_cents']) {
+          const value = (updates.settings as any)[key];
+          if (value !== undefined && value !== null && (!Number.isInteger(value) || value < 0)) {
+            return res.status(400).json({ error: `${key} deve ser um inteiro não negativo em centavos.` });
+          }
+        }
+      }
       if (Object.keys(updates).length === 0) return res.status(400).json({ error: 'No valid fields to update' });
+
+      const before = await getSupabaseAdmin().from('platform_teams').select('*').eq('id', teamId).single();
       
       const { data, error } = await getSupabaseAdmin()
         .from('platform_teams')
@@ -116,7 +128,8 @@ export function createAdminTeamsRouter(getSupabaseAdmin: any, requirePlatformAut
         entity_type: 'platform_teams',
         entity_id: data.id,
         severity: 'info',
-        team_id: teamId
+        team_id: teamId,
+        ...auditContext(req, { result: 'success', before: before.data, after: data })
       });
       
       res.json(data);

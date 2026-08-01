@@ -369,6 +369,59 @@ export type Database = {
         }
         Relationships: []
       }
+      billing_reconciliation_items: {
+        Row: {
+          created_at: string
+          id: string
+          kind: string
+          local_resource_id: string | null
+          provider_resource_id: string | null
+          reconciliation_run_id: string
+          resource_type: string
+          reviewed_at: string | null
+          reviewed_by_user_id: string | null
+          safe_summary: Json
+          severity: string
+          status: string
+        }
+        Insert: {
+          created_at?: string
+          id?: string
+          kind: string
+          local_resource_id?: string | null
+          provider_resource_id?: string | null
+          reconciliation_run_id: string
+          resource_type: string
+          reviewed_at?: string | null
+          reviewed_by_user_id?: string | null
+          safe_summary?: Json
+          severity: string
+          status?: string
+        }
+        Update: {
+          created_at?: string
+          id?: string
+          kind?: string
+          local_resource_id?: string | null
+          provider_resource_id?: string | null
+          reconciliation_run_id?: string
+          resource_type?: string
+          reviewed_at?: string | null
+          reviewed_by_user_id?: string | null
+          safe_summary?: Json
+          severity?: string
+          status?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "billing_reconciliation_items_reconciliation_run_id_fkey"
+            columns: ["reconciliation_run_id"]
+            isOneToOne: false
+            referencedRelation: "billing_reconciliation_runs"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       billing_reconciliation_runs: {
         Row: {
           checked_count: number
@@ -571,6 +624,8 @@ export type Database = {
           event_type: string
           id: string
           last_error: string | null
+          locked_at: string | null
+          next_attempt_at: string
           occurred_at: string | null
           payload: Json
           processed_at: string | null
@@ -585,6 +640,8 @@ export type Database = {
           event_type: string
           id?: string
           last_error?: string | null
+          locked_at?: string | null
+          next_attempt_at?: string
           occurred_at?: string | null
           payload: Json
           processed_at?: string | null
@@ -599,6 +656,8 @@ export type Database = {
           event_type?: string
           id?: string
           last_error?: string | null
+          locked_at?: string | null
+          next_attempt_at?: string
           occurred_at?: string | null
           payload?: Json
           processed_at?: string | null
@@ -606,6 +665,27 @@ export type Database = {
           provider_event_id?: string
           received_at?: string
           status?: string
+        }
+        Relationships: []
+      }
+      billing_webhook_rate_limits: {
+        Row: {
+          expires_at: string
+          key_hash: string
+          request_count: number
+          window_started_at: string
+        }
+        Insert: {
+          expires_at: string
+          key_hash: string
+          request_count?: number
+          window_started_at: string
+        }
+        Update: {
+          expires_at?: string
+          key_hash?: string
+          request_count?: number
+          window_started_at?: string
         }
         Relationships: []
       }
@@ -619,7 +699,10 @@ export type Database = {
           id: string
           lead_id: string | null
           metadata: Json
+          next_action: string | null
+          next_action_at: string | null
           owner_platform_member_id: string | null
+          result: string | null
           scheduled_at: string | null
           status: string
           subject: string
@@ -636,7 +719,10 @@ export type Database = {
           id?: string
           lead_id?: string | null
           metadata?: Json
+          next_action?: string | null
+          next_action_at?: string | null
           owner_platform_member_id?: string | null
+          result?: string | null
           scheduled_at?: string | null
           status?: string
           subject: string
@@ -653,7 +739,10 @@ export type Database = {
           id?: string
           lead_id?: string | null
           metadata?: Json
+          next_action?: string | null
+          next_action_at?: string | null
           owner_platform_member_id?: string | null
+          result?: string | null
           scheduled_at?: string | null
           status?: string
           subject?: string
@@ -893,8 +982,11 @@ export type Database = {
           expires_at: string | null
           id: string
           lead_id: string
+          next_action: string | null
+          next_action_at: string | null
           notes: string | null
           owner_platform_member_id: string | null
+          result: string | null
           starts_at: string | null
           status: string
           team_id: string | null
@@ -908,8 +1000,11 @@ export type Database = {
           expires_at?: string | null
           id?: string
           lead_id: string
+          next_action?: string | null
+          next_action_at?: string | null
           notes?: string | null
           owner_platform_member_id?: string | null
+          result?: string | null
           starts_at?: string | null
           status?: string
           team_id?: string | null
@@ -923,8 +1018,11 @@ export type Database = {
           expires_at?: string | null
           id?: string
           lead_id?: string
+          next_action?: string | null
+          next_action_at?: string | null
           notes?: string | null
           owner_platform_member_id?: string | null
+          result?: string | null
           starts_at?: string | null
           status?: string
           team_id?: string | null
@@ -1640,6 +1738,7 @@ export type Database = {
           message: string | null
           name: string
           phone: string | null
+          priority: string
           role_title: string | null
           source: string
           status: string
@@ -1657,6 +1756,7 @@ export type Database = {
           message?: string | null
           name: string
           phone?: string | null
+          priority?: string
           role_title?: string | null
           source?: string
           status?: string
@@ -1674,6 +1774,7 @@ export type Database = {
           message?: string | null
           name?: string
           phone?: string | null
+          priority?: string
           role_title?: string | null
           source?: string
           status?: string
@@ -3771,6 +3872,9 @@ export type Database = {
           created_by: string | null
           id: string
           name: string
+          onboarding_completed_at: string | null
+          onboarding_started_at: string | null
+          onboarding_status: string
           settings: Json
           slug: string
           status: string
@@ -3781,6 +3885,9 @@ export type Database = {
           created_by?: string | null
           id?: string
           name: string
+          onboarding_completed_at?: string | null
+          onboarding_started_at?: string | null
+          onboarding_status?: string
           settings?: Json
           slug: string
           status?: string
@@ -3791,6 +3898,9 @@ export type Database = {
           created_by?: string | null
           id?: string
           name?: string
+          onboarding_completed_at?: string | null
+          onboarding_started_at?: string | null
+          onboarding_status?: string
           settings?: Json
           slug?: string
           status?: string
@@ -3813,6 +3923,31 @@ export type Database = {
         }
         Returns: string
       }
+      admin_create_billing_plan_version: {
+        Args: {
+          p_actor_user_id: string
+          p_amount_cents: number
+          p_billing_type: string
+          p_code: string
+          p_cycle: string
+          p_description: string
+          p_grace_days: number
+          p_limits: Json
+          p_name: string
+          p_solution_ids: string[]
+          p_solution_limits: Json
+          p_trial_days: number
+        }
+        Returns: string
+      }
+      admin_replace_tenant_solutions: {
+        Args: { p_solution_keys: string[]; p_tenant_id: string }
+        Returns: undefined
+      }
+      admin_terminate_user_sessions: {
+        Args: { p_user_id: string }
+        Returns: number
+      }
       can_read_file: { Args: { p_file_id: string }; Returns: boolean }
       can_read_membership: {
         Args: { p_membership_id: string }
@@ -3822,6 +3957,39 @@ export type Database = {
       can_read_storage_path: {
         Args: { p_bucket: string; p_object_path: string }
         Returns: boolean
+      }
+      check_billing_webhook_rate_limit: {
+        Args: {
+          p_key_hash: string
+          p_limit?: number
+          p_window_seconds?: number
+        }
+        Returns: boolean
+      }
+      claim_billing_webhook_events: {
+        Args: { p_limit?: number }
+        Returns: {
+          attempts: number
+          correlation_id: string
+          event_type: string
+          id: string
+          last_error: string | null
+          locked_at: string | null
+          next_attempt_at: string
+          occurred_at: string | null
+          payload: Json
+          processed_at: string | null
+          provider: string
+          provider_event_id: string
+          received_at: string
+          status: string
+        }[]
+        SetofOptions: {
+          from: "*"
+          to: "billing_webhook_events"
+          isOneToOne: false
+          isSetofReturn: true
+        }
       }
       current_membership_id: { Args: { p_tenant_id: string }; Returns: string }
       get_integrity_form: {

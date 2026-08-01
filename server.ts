@@ -8,6 +8,8 @@ import { createBillingRouters } from './src/server/billing/router';
 import { createClient } from '@supabase/supabase-js';
 import dotenv from 'dotenv';
 import cors from 'cors';
+import { randomUUID } from 'node:crypto';
+import { canReadAssignedResource } from './src/server/authorization';
 
 dotenv.config({ path: ['.env.local', '.env'] });
 
@@ -17,6 +19,12 @@ export async function createApp() {
   app.disable('x-powered-by');
   app.use(express.json({ limit: '512kb' }));
   app.use(cors());
+  app.use((req, res, next) => {
+    const requestId = req.header('x-request-id') || randomUUID();
+    (req as any).requestId = requestId;
+    res.setHeader('x-request-id', requestId);
+    next();
+  });
 
   let _supabaseAdmin: any = null;
   const getSupabaseAdmin = () => {
@@ -319,34 +327,49 @@ export async function createApp() {
   app.get("/api/admin/stats", requirePlatformAuth, async (req, res) => {
     try {
       const { platformContext } = req as any;
-      
-      // Scoped counts
-      let clientsQuery = getSupabaseAdmin().from('platform_client_assignments').select('*', { count: 'exact', head: true });
-      let leadsQuery = getSupabaseAdmin().from('platform_lead_assignments').select('*, marketing_leads!inner(*)', { count: 'exact', head: true }).eq('marketing_leads.status', 'new');
-      let demosQuery = getSupabaseAdmin().from('commercial_demos').select('*', { count: 'exact', head: true }).in('status', ['requested', 'scheduled', 'approved', 'active']);
-      
-      if (platformContext.role?.key !== 'admin') {
-        const teamIds = platformContext.teams.map((t: any) => t.id);
-        if (teamIds.length === 0) {
-           return res.json({ clients: 0, leads: 0, demos: 0, teams: 0 });
-        }
-        clientsQuery = clientsQuery.in('team_id', teamIds);
-        leadsQuery = leadsQuery.in('team_id', teamIds);
-        demosQuery = demosQuery.in('team_id', teamIds);
-      }
-      
-      const [{ count: clientsCount }, { count: leadsCount }, { count: demosCount }, { count: teamsCount }] = await Promise.all([
-        clientsQuery,
-        leadsQuery,
-        demosQuery,
-        getSupabaseAdmin().from('platform_teams').select('*', { count: 'exact', head: true }).eq('status', 'active')
+      const db = getSupabaseAdmin();
+      const [leadAssignments, clientAssignments] = await Promise.all([
+        db.from('platform_lead_assignments').select('*'), db.from('platform_client_assignments').select('*').eq('assignment_type', 'commercial'),
       ]);
-
+      const scopedLeads = platformContext.role?.key === 'admin' ? leadAssignments.data || [] : (leadAssignments.data || []).filter((item: any) => canReadAssignedResource(platformContext, item, 'member_lead_visibility'));
+      const scopedClients = platformContext.role?.key === 'admin' ? clientAssignments.data || [] : (clientAssignments.data || []).filter((item: any) => canReadAssignedResource(platformContext, item, 'member_client_visibility'));
+      const leadIds = [...new Set(scopedLeads.map((item: any) => item.lead_id))];
+      const tenantIds = [...new Set(scopedClients.map((item: any) => item.tenant_id))];
+      let leadsQuery = db.from('marketing_leads').select('id,status');
+      let demosQuery = db.from('commercial_demos').select('id,status,lead_id');
+      let proposalsQuery = db.from('commercial_proposals').select('id,status,lead_id,amount_cents');
+      let contractsQuery = db.from('commercial_contracts').select('id,status,tenant_id,amount_cents,cycle,team_id,owner_platform_member_id');
+      let tenantsQuery = db.from('tenants').select('id,status,onboarding_status');
+      if (platformContext.role?.key !== 'admin') {
+        if (!leadIds.length && !tenantIds.length) return res.json({ clients: 0, leads: 0, demos: 0, teams: platformContext.teams.length, proposals: 0, contracts: 0, conversionRate: 0, onboarding: 0, subscriptions: {}, overdue: 0, mrrCents: 0, alerts: [], leadsByStatus: {}, recentActivity: [] });
+        if (leadIds.length) { leadsQuery = leadsQuery.in('id', leadIds); demosQuery = demosQuery.in('lead_id', leadIds); proposalsQuery = proposalsQuery.in('lead_id', leadIds); } else { leadsQuery = leadsQuery.eq('id', randomUUID()); demosQuery = demosQuery.eq('id', randomUUID()); proposalsQuery = proposalsQuery.eq('id', randomUUID()); }
+        if (tenantIds.length) tenantsQuery = tenantsQuery.in('id', tenantIds); else tenantsQuery = tenantsQuery.eq('id', randomUUID());
+      }
+      const [leads, demos, proposals, contractsResult, tenants, teams, subscriptions, overdue, recentActivity] = await Promise.all([
+        leadsQuery, demosQuery, proposalsQuery, contractsQuery, tenantsQuery,
+        db.from('platform_teams').select('*', { count: 'exact', head: true }).eq('status', 'active'),
+        db.from('billing_subscriptions').select('status,amount_cents,cycle,contract_id'),
+        db.from('billing_payments').select('id,contract_id,status').eq('status', 'overdue'),
+        db.from('commercial_activities').select('id,subject,activity_type,status,created_at,team_id,owner_platform_member_id').order('created_at', { ascending: false }).limit(10),
+      ]);
+      const contracts = platformContext.role?.key === 'admin' ? contractsResult.data || [] : (contractsResult.data || []).filter((item: any) => canReadAssignedResource(platformContext, item, 'member_client_visibility'));
+      const contractIds = new Set(contracts.map((item: any) => item.id));
+      const scopedSubscriptions = (subscriptions.data || []).filter((item: any) => platformContext.role?.key === 'admin' || contractIds.has(item.contract_id));
+      const scopedOverdue = (overdue.data || []).filter((item: any) => platformContext.role?.key === 'admin' || contractIds.has(item.contract_id));
+      const cycleDivisor: Record<string, number> = { weekly: 52 / 12, biweekly: 26 / 12, monthly: 1, quarterly: 1 / 3, semiannual: 1 / 6, yearly: 1 / 12 };
+      const activeSubscriptions = scopedSubscriptions.filter((item: any) => item.status === 'active');
+      const mrrCents = Math.round(activeSubscriptions.reduce((sum: number, item: any) => sum + Number(item.amount_cents || 0) * (cycleDivisor[item.cycle] || 0), 0));
+      const leadsByStatus = (leads.data || []).reduce((acc: any, item: any) => ({ ...acc, [item.status]: (acc[item.status] || 0) + 1 }), {});
+      const subscriptionStates = scopedSubscriptions.reduce((acc: any, item: any) => ({ ...acc, [item.status]: (acc[item.status] || 0) + 1 }), {});
+      const scopedRecent = platformContext.role?.key === 'admin' ? recentActivity.data || [] : (recentActivity.data || []).filter((item: any) => canReadAssignedResource(platformContext, item, 'member_lead_visibility'));
+      const alerts = [scopedOverdue.length ? { type: 'overdue', count: scopedOverdue.length, label: 'Pagamentos vencidos' } : null, subscriptionStates.past_due ? { type: 'subscription', count: subscriptionStates.past_due, label: 'Assinaturas em atraso' } : null].filter(Boolean);
       res.json({
-        clients: clientsCount || 0,
-        leads: leadsCount || 0,
-        demos: demosCount || 0,
-        teams: platformContext.role?.key === 'admin' ? (teamsCount || 0) : platformContext.teams.length
+        clients: tenants.data?.length || 0, leads: leads.data?.length || 0, demos: demos.data?.length || 0,
+        teams: platformContext.role?.key === 'admin' ? teams.count || 0 : platformContext.teams.length,
+        proposals: proposals.data?.length || 0, contracts: contracts.length,
+        conversionRate: leads.data?.length ? Math.round((contracts.length / leads.data.length) * 1000) / 10 : 0,
+        onboarding: (tenants.data || []).filter((item: any) => item.onboarding_status === 'in_progress').length,
+        subscriptions: subscriptionStates, overdue: scopedOverdue.length, mrrCents, alerts, leadsByStatus, recentActivity: scopedRecent,
       });
     } catch (e: any) {
       res.status(500).json({ error: e.message });

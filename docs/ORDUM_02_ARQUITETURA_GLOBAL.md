@@ -20,7 +20,8 @@ Browser React/Vite
 Asaas Sandbox
   ├─ API v3 chamada somente pelo BillingProvider server-side
   └─ POST /api/webhooks/asaas
-         └─ token próprio → persistência → processamento idempotente
+         └─ token próprio → rate limit → persistência → HTTP 200
+              └─ waitUntil → claim atômico → processamento idempotente
 ```
 
 A boundary financeira principal é o Express já implantado na Vercel. Não existe uma segunda implementação concorrente em Edge Functions.
@@ -47,3 +48,4 @@ A boundary financeira principal é o Express já implantado na Vercel. Não exis
 4. Criar assinatura nunca ativa tenant.
 5. Trial e pagamento têm fluxos distintos.
 6. Produção Asaas permanece bloqueada em código até homologação e autorização explícita.
+7. O cron diário retoma a fila e reconcilia assinaturas/cobranças paginadas; divergências críticas não alteram acesso automaticamente.

@@ -25,4 +25,7 @@ export interface BillingProvider {
   createSubscription(input: CreateBillingSubscriptionInput): Promise<Record<string, unknown>>;
   getPayment(id: string): Promise<Record<string, unknown>>;
   getSubscription(id: string): Promise<Record<string, unknown>>;
+  cancelSubscription(id: string): Promise<Record<string, unknown>>;
+  listSubscriptions(offset?: number, limit?: number): Promise<Record<string, unknown>>;
+  listPayments(filters?: { subscriptionId?: string; dateCreatedFrom?: string; offset?: number; limit?: number }): Promise<Record<string, unknown>>;
 }

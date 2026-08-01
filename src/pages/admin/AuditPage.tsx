@@ -1,22 +1,24 @@
 import React, { useState, useEffect } from 'react';
 import { useAuth } from '../../core/auth/AuthProvider';
-import { Search, FileText } from 'lucide-react';
+import { Search } from 'lucide-react';
 
 export function AuditPage() {
   const { session } = useAuth();
   const [logs, setLogs] = useState<any[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [page, setPage] = useState(1); const [totalPages,setTotalPages]=useState(1); const [action,setAction]=useState(''); const [severity,setSeverity]=useState('');
 
   useEffect(() => {
     async function loadAudit() {
       if (!session) return;
       try {
-        const response = await fetch('/api/admin/audit', {
+        const params=new URLSearchParams({page:String(page),pageSize:'25'});if(action)params.set('action',action);if(severity)params.set('severity',severity);
+        const response = await fetch(`/api/admin/audit?${params}`, {
           headers: { 'Authorization': `Bearer ${session.access_token}` }
         });
         if (response.ok) {
           const data = await response.json();
-          setLogs(data);
+          setLogs(data.items); setTotalPages(Math.max(1,data.pagination.totalPages));
         }
       } catch (e) {
         console.error("Error loading audit:", e);
@@ -25,7 +27,7 @@ export function AuditPage() {
       }
     }
     loadAudit();
-  }, [session]);
+  }, [session,page,action,severity]);
 
   const severityColor = (sev: string) => {
     switch (sev) {
@@ -45,6 +47,8 @@ export function AuditPage() {
         </div>
       </div>
 
+      <div className="mb-4 grid sm:grid-cols-2 gap-3 bg-white border rounded-2xl p-4"><label className="relative"><Search className="absolute left-3 top-3 w-4 h-4 text-gray-400"/><input aria-label="Filtrar ação" value={action} onChange={event=>{setPage(1);setAction(event.target.value)}} placeholder="Filtrar por ação" className="w-full border rounded-xl pl-9 pr-3 py-2.5 text-sm"/></label><select aria-label="Filtrar severidade" value={severity} onChange={event=>{setPage(1);setSeverity(event.target.value)}} className="border rounded-xl px-3 text-sm"><option value="">Todas as severidades</option><option value="info">info</option><option value="warning">warning</option><option value="error">error</option></select></div>
+
       <div className="bg-white border border-[#DDD8CF]/40 rounded-2xl shadow-sm overflow-hidden">
         {isLoading ? (
           <div className="p-8 text-center text-gray-500">Carregando logs de auditoria...</div>
@@ -60,6 +64,7 @@ export function AuditPage() {
                   <th className="p-4">Usuário (Ator)</th>
                   <th className="p-4">Entidade</th>
                   <th className="p-4">Severidade</th>
+                  <th className="p-4">Correlação</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-[#DDD8CF]/40">
@@ -84,6 +89,7 @@ export function AuditPage() {
                         {log.severity || 'info'}
                       </span>
                     </td>
+                    <td className="p-4"><button onClick={()=>window.alert(JSON.stringify({request_id:log.request_id,ip:log.ip_address,user_agent:log.user_agent,metadata:log.metadata},null,2))} className="font-mono text-xs text-[#B66E45]">{log.request_id?.slice(0,8)||'detalhes'}</button></td>
                   </tr>
                 ))}
               </tbody>
@@ -91,6 +97,7 @@ export function AuditPage() {
           </div>
         )}
       </div>
+      <div className="mt-4 flex justify-end gap-2"><button disabled={page<=1} onClick={()=>setPage(page-1)} className="border rounded-lg px-3 py-1 disabled:opacity-40">Anterior</button><span className="text-sm p-1">{page}/{totalPages}</span><button disabled={page>=totalPages} onClick={()=>setPage(page+1)} className="border rounded-lg px-3 py-1 disabled:opacity-40">Próxima</button></div>
     </div>
   );
 }

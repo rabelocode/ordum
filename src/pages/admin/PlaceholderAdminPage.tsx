@@ -1,57 +1,21 @@
-import React from 'react';
-import { Settings, Shield, Clock, HardDrive, BarChart3, Cloud, GitCommit } from 'lucide-react';
+import React, { useCallback, useEffect, useState } from 'react';
+import { BarChart3, GitCommit, HardDrive, Settings } from 'lucide-react';
+import { useAuth } from '../../core/auth/AuthProvider';
+import { usePlatform } from '../../core/auth/PlatformAuthProvider';
 
-export function PlaceholderAdminPage({ title }: { title: string }) {
-  const path = title.replace('/admin/', '');
-  
-  const getPageDetails = () => {
-    switch (path) {
-      case 'leads': return { icon: <BarChart3 className="w-8 h-8 text-blue-500"/>, title: 'Gestão de Leads', desc: 'Acompanhe prospectos, funil de vendas e qualificação.' };
-      case 'demos': return { icon: <Cloud className="w-8 h-8 text-purple-500"/>, title: 'Demonstrações', desc: 'Agendamentos e instâncias de demonstração ativas.' };
-      case 'desempenho': return { icon: <BarChart3 className="w-8 h-8 text-green-500"/>, title: 'Meu Desempenho', desc: 'Métricas individuais, fechamentos e metas.' };
-      case 'solucoes': return { icon: <HardDrive className="w-8 h-8 text-orange-500"/>, title: 'Soluções', desc: 'Catálogo de módulos disponíveis na ORDUM.' };
-      case 'auditoria': return { icon: <Clock className="w-8 h-8 text-gray-500"/>, title: 'Auditoria Global', desc: 'Logs de ações administrativas e de segurança.' };
-      case 'sistema': return { icon: <Shield className="w-8 h-8 text-red-500"/>, title: 'Saúde do Sistema', desc: 'Monitoramento de recursos, APIs e banco de dados.' };
-      case 'deployments': return { icon: <GitCommit className="w-8 h-8 text-indigo-500"/>, title: 'Deployments', desc: 'Versões lançadas e histórico de atualizações.' };
-      case 'configuracoes': return { icon: <Settings className="w-8 h-8 text-slate-500"/>, title: 'Configurações', desc: 'Parametrização global da plataforma e integrações.' };
-      case 'engenharia': return { icon: <GitCommit className="w-8 h-8 text-emerald-500"/>, title: 'Engenharia', desc: 'Ferramentas de debug, acesso ao código e infraestrutura.' };
-      default: return { icon: <Settings className="w-8 h-8 text-gray-500"/>, title: path.toUpperCase(), desc: 'Módulo em desenvolvimento.' };
-    }
-  };
-
-  const info = getPageDetails();
-
-  return (
-    <div className="max-w-7xl mx-auto space-y-6">
-      <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
-        <div className="flex items-center gap-4">
-          <div className="p-3 bg-white rounded-xl border border-gray-200 shadow-sm">
-            {info.icon}
-          </div>
-          <div>
-            <h1 className="text-2xl font-bold text-[#202322]">{info.title}</h1>
-            <p className="text-[#626866] mt-1 text-sm">{info.desc}</p>
-          </div>
-        </div>
-      </div>
-      
-      <div className="bg-white rounded-2xl border border-[#DDD8CF]/60 shadow-sm p-16 flex flex-col items-center justify-center text-center">
-        
-        <div className="w-20 h-20 bg-gray-50 rounded-full flex items-center justify-center mb-6">
-          <Clock className="w-10 h-10 text-gray-300" />
-        </div>
-        <h2 className="text-xl font-bold text-gray-800 mb-2">
-          {path === 'engenharia' ? 'Integração de Repositório Não Configurada' : path === 'deployments' ? 'Integração de Deployment Não Configurada' : 'Em Construção'}
-        </h2>
-        <p className="text-gray-500 max-w-md">
-          {path === 'engenharia' 
-            ? 'A área de engenharia requer integração com o repositório Git para exibir branches, commits e documentação técnica.'
-            : path === 'deployments'
-            ? 'Não há integrações de CI/CD conectadas no momento para exibir histórico de deploys.'
-            : 'Este módulo está sendo arquitetado de acordo com os requisitos de negócio estabelecidos.'}
-        </p>
-
-      </div>
-    </div>
-  );
+const details:Record<string,{title:string;desc:string;endpoint:string;icon:any}>={
+  desempenho:{title:'Meu desempenho',desc:'Indicadores calculados somente com registros atribuídos a você.',endpoint:'/api/admin/performance/own',icon:BarChart3},
+  solucoes:{title:'Soluções',desc:'Catálogo real de módulos disponíveis na plataforma.',endpoint:'/api/admin/system/solutions',icon:HardDrive},
+  deployments:{title:'Deployment atual',desc:'Versão publicada pela integração Git e Vercel.',endpoint:'/api/admin/system/deploy',icon:GitCommit},
+  configuracoes:{title:'Configurações e integrações',desc:'Estado seguro da configuração operacional, sem exposição de segredos.',endpoint:'/api/admin/system/settings',icon:Settings},
+  engenharia:{title:'Engenharia',desc:'Identificação somente leitura do artefato e ambiente em execução.',endpoint:'/api/admin/system/deploy',icon:GitCommit},
+};
+const labels:Record<string,string>={assignedLeads:'Leads atribuídos',completedActivities:'Atividades concluídas',proposals:'Propostas',contracts:'Contratos',contractedRecurringCents:'Valor recorrente contratado',commitSha:'Commit',commitMessage:'Mensagem',branch:'Branch',url:'URL Vercel',region:'Região',environment:'Ambiente',publicSignup:'Cadastro público',authProvider:'Autenticação',billingProvider:'Provedor financeiro',billingEnvironment:'Ambiente financeiro',webhookConfigured:'Webhook configurado',cronConfigured:'Cron configurado'};
+export function PlaceholderAdminPage({title}:{title:string}){
+  const path=title.replace('/admin/','');const info=details[path]||details.configuracoes;const Icon=info.icon;const{session}=useAuth();const{platformRole}=usePlatform();const[data,setData]=useState<any>(null);const[loading,setLoading]=useState(true);const[error,setError]=useState<string|null>(null);const[success,setSuccess]=useState<string|null>(null);
+  const request=useCallback(async(endpoint:string,init?:RequestInit)=>{const response=await fetch(endpoint,{...init,headers:{'Content-Type':'application/json',Authorization:`Bearer ${session?.access_token}`,...init?.headers}});const body=await response.json().catch(()=>({}));if(!response.ok)throw new Error(body.error||'Falha na requisição.');return body;},[session]);
+  const load=useCallback(async()=>{if(!session)return;setLoading(true);try{setData(await request(info.endpoint));setError(null);}catch(e){setError(e instanceof Error?e.message:'Falha ao carregar.');}finally{setLoading(false);}},[info.endpoint,request,session]);useEffect(()=>{load();},[load]);
+  async function rename(item:any){const name=window.prompt('Nome da solução',item.name);if(!name||name===item.name)return;try{await request(`/api/admin/system/solutions/${item.id}`,{method:'PATCH',body:JSON.stringify({name})});setSuccess('Solução atualizada.');await load();}catch(e){setError(e instanceof Error?e.message:'Falha ao atualizar.');}}
+  const entries=data&&!Array.isArray(data)?Object.entries(data).filter(([key,value])=>key!=='billing'&&typeof value!=='object'):[];
+  return <div className="max-w-7xl mx-auto space-y-6"><div className="flex items-center gap-4"><div className="p-3 bg-white rounded-xl border"><Icon className="w-8 h-8 text-[#B66E45]"/></div><div><h1 className="text-2xl font-bold text-[#202322]">{info.title}</h1><p className="text-[#626866] mt-1 text-sm">{info.desc}</p></div></div>{error&&<div role="alert" className="rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-700">{error}</div>}{success&&<div role="status" className="rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-700">{success}</div>}{loading?<div className="bg-white rounded-2xl border p-10 text-center text-sm">Carregando...</div>:Array.isArray(data)?<div className="bg-white rounded-2xl border overflow-hidden">{!data.length?<div className="p-10 text-center text-sm text-gray-500">Nenhum registro disponível.</div>:<table className="w-full text-sm"><thead className="bg-[#F6F5F2] text-left"><tr><th className="p-4">Solução</th><th className="p-4">Chave estável</th><th className="p-4"></th></tr></thead><tbody>{data.map((item:any)=><tr key={item.id} className="border-t"><td className="p-4 font-semibold">{item.name}</td><td className="p-4 font-mono text-xs">{item.key}</td><td className="p-4 text-right">{platformRole?.key==='admin'&&<button onClick={()=>rename(item)} className="text-[#B66E45] font-semibold">Renomear</button>}</td></tr>)}</tbody></table>}</div>:<div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-4">{entries.map(([key,value])=><div key={key} className="bg-white rounded-2xl border p-5"><div className="text-xs uppercase font-bold text-gray-500">{labels[key]||key}</div><div className="mt-2 font-semibold break-all">{typeof value==='boolean'?(value?'Sim':'Não'):key==='contractedRecurringCents'?new Intl.NumberFormat('pt-BR',{style:'currency',currency:'BRL'}).format(Number(value)/100):String(value??'Não informado')}</div></div>)}{data?.billing&&<div className="bg-white rounded-2xl border p-5"><div className="text-xs uppercase font-bold text-gray-500">Asaas</div><div className="mt-2 font-semibold">{data.billing.enabled?'Sandbox habilitado':'Desabilitado com segurança'}</div><p className="text-xs text-gray-500 mt-1">Segredos: {data.billing.configured?'configurados':'pendentes'}</p></div>}</div>}</div>;
 }

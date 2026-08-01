@@ -27,12 +27,14 @@ Permissões `*.read` não tornam gerente ou vendedor global. A API sempre combin
 - gerente só adiciona/remove Sales em equipes que gerencia;
 - gerente não cria gerente nem altera papel global;
 - gerente não convida Sales para equipe externa ao seu escopo;
+- gerente só aprova proposta/contrato dentro da alçada monetária configurada; alçada ausente ou excedida exige admin;
 - vendedor não lê lead ou cliente de outra equipe;
+- somente admin provisiona, suspende cliente, altera entitlements contratados, cancela recorrência ou reprocessa webhook;
 - alteração da própria função global é bloqueada;
 - o último admin ativo não pode ser rebaixado ou suspenso;
 - `tenant_admin` não dá acesso a `/#/admin`;
 - campos editáveis de equipe são allowlisted no backend;
-- toda ação relevante registra auditoria sem segredos.
+- ações críticas registram ator, correlação, IP/user-agent quando disponíveis, antes/depois sanitizado e resultado.
 
 ## Papéis de tenant
 

@@ -9,6 +9,7 @@
 - telas reais de demos, contratos, planos/preços e financeiro;
 - fundação Asaas Sandbox, webhook, estados de acesso e conciliação;
 - provisionamento pós-pagamento e trials separados.
+- alçadas monetárias por equipe, paginação server-side, métricas reais de funil e fila assíncrona serverless com retomada;
 
 ## Homologação seguinte
 
@@ -21,12 +22,11 @@
 
 ## Evolução posterior
 
-- aprovação por alçada monetária configurável;
 - editor completo de propostas e aceite eletrônico;
 - checkout hospedado e portal financeiro do owner;
-- paginação cursor-based para grande volume;
-- métricas de funil e metas sem KPIs inventados;
-- fila assíncrona dedicada se o volume de webhook superar o processamento serverless;
+- paginação por cursor para volumes extremos (a paginação atual é por página/offset);
+- metas comerciais configuráveis (os KPIs atuais são calculados apenas com dados reais);
+- fila dedicada externa se o volume superar `waitUntil` + fila PostgreSQL;
 - segundo provedor por novo adapter do `BillingProvider`;
 - produção Asaas somente após aceite formal.
 

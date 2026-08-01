@@ -19,14 +19,68 @@ function canReadAssignedResource(context, assignment, visibilityField) {
   return team?.[visibilityField] === "team" || team?.[visibilityField] === "all";
 }
 
+// src/server/operational.ts
+import { randomUUID } from "node:crypto";
+import { isIP } from "node:net";
+function parsePagination(query, defaultSize = 25) {
+  const page = Math.max(1, Number.parseInt(String(query.page || "1"), 10) || 1);
+  const pageSize = Math.min(100, Math.max(1, Number.parseInt(String(query.pageSize || defaultSize), 10) || defaultSize));
+  return { page, pageSize, from: (page - 1) * pageSize, to: page * pageSize - 1 };
+}
+function pageResult(items, count, page, pageSize) {
+  const total = count || 0;
+  return { items, pagination: { page, pageSize, total, totalPages: Math.ceil(total / pageSize) } };
+}
+function withinManagerApprovalLimit(team, amountCents, kind) {
+  const key = kind === "proposal" ? "proposal_approval_limit_cents" : "contract_approval_limit_cents";
+  const value = team?.settings?.[key];
+  return Number.isInteger(value) && value >= 0 && amountCents <= value;
+}
+function safeIp(req) {
+  const forwarded = req.header("x-forwarded-for")?.split(",")[0]?.trim();
+  const candidate = (forwarded || req.socket.remoteAddress || "").replace(/^::ffff:/, "").slice(0, 64);
+  return isIP(candidate) ? candidate : null;
+}
+function auditContext(req, metadata = {}) {
+  const requestId = String(req.requestId || randomUUID());
+  return {
+    request_id: requestId,
+    ip_address: safeIp(req),
+    user_agent: req.header("user-agent")?.slice(0, 500) || null,
+    metadata
+  };
+}
+
 // src/server/adminLeadsRouter.ts
 function createAdminLeadsRouter(getSupabaseAdmin, requirePlatformAuth) {
   const router = Router();
   router.get("/", requirePlatformAuth, async (req, res) => {
     try {
       const { platformContext } = req;
-      let query = getSupabaseAdmin().from("marketing_leads").select("*, platform_lead_assignments(*, platform_teams(name), platform_members(user_id, platform_roles(key, name)))").order("created_at", { ascending: false });
-      const { data, error } = await query;
+      const { page, pageSize, from, to } = parsePagination(req.query);
+      const paginated = req.query.page !== void 0;
+      let visibleLeadIds = null;
+      if (platformContext.role?.key !== "admin") {
+        const visibleTeams = platformContext.teams.filter((team) => platformContext.managedTeams.some((managed) => managed.id === team.id) || ["team", "all"].includes(team.member_lead_visibility)).map((team) => team.id);
+        let assignmentQuery = getSupabaseAdmin().from("platform_lead_assignments").select("lead_id");
+        const clauses = [`owner_platform_member_id.eq.${platformContext.platformMember.id}`];
+        if (visibleTeams.length) clauses.push(`team_id.in.(${visibleTeams.join(",")})`);
+        assignmentQuery = assignmentQuery.or(clauses.join(","));
+        const assignmentResult = await assignmentQuery;
+        if (assignmentResult.error) throw assignmentResult.error;
+        visibleLeadIds = [...new Set((assignmentResult.data || []).map((item) => String(item.lead_id)))];
+        if (!visibleLeadIds.length) return res.json(paginated ? pageResult([], 0, page, pageSize) : []);
+      }
+      let query = getSupabaseAdmin().from("marketing_leads").select("*, platform_lead_assignments(*, platform_teams(name,allow_self_claim), platform_members(user_id, platform_roles(key, name))), commercial_activities(id,activity_type,subject,status,scheduled_at,result,next_action,next_action_at,created_at), commercial_demos(id,status,starts_at,expires_at,result,next_action,next_action_at)", { count: "exact" }).order("created_at", { ascending: false });
+      if (visibleLeadIds) query = query.in("id", visibleLeadIds);
+      if (typeof req.query.status === "string" && req.query.status) query = query.eq("status", req.query.status);
+      if (typeof req.query.priority === "string" && req.query.priority) query = query.eq("priority", req.query.priority);
+      if (typeof req.query.search === "string" && req.query.search.trim()) {
+        const term = req.query.search.trim().replace(/[%(),]/g, "").slice(0, 100);
+        query = query.or(`name.ilike.%${term}%,email.ilike.%${term}%,company.ilike.%${term}%`);
+      }
+      if (paginated) query = query.range(from, to);
+      const { data, error, count } = await query;
       if (error) throw error;
       const { data: usersData } = await getSupabaseAdmin().auth.admin.listUsers();
       let leads = data.map((l) => {
@@ -38,10 +92,7 @@ function createAdminLeadsRouter(getSupabaseAdmin, requirePlatformAuth) {
         }
         return { ...l, assignment, owner };
       });
-      if (platformContext.role?.key !== "admin") {
-        leads = leads.filter((lead) => canReadAssignedResource(platformContext, lead.assignment, "member_lead_visibility"));
-      }
-      res.json(leads);
+      res.json(paginated ? pageResult(leads, count, page, pageSize) : leads);
     } catch (e) {
       res.status(500).json({ error: e.message });
     }
@@ -54,6 +105,14 @@ function createAdminLeadsRouter(getSupabaseAdmin, requirePlatformAuth) {
       if (platformContext.role?.key !== "admin") {
         const isManager = platformContext.managedTeams.some((t) => t.id === team_id);
         if (!isManager) return res.status(403).json({ error: "Forbidden" });
+        const current = await getSupabaseAdmin().from("platform_lead_assignments").select("*").eq("lead_id", leadId).maybeSingle();
+        if (!current.data || !platformContext.managedTeams.some((team) => team.id === current.data.team_id)) {
+          return res.status(403).json({ error: "Lead fora do escopo gerenciado." });
+        }
+      }
+      if (owner_platform_member_id) {
+        const target = await getSupabaseAdmin().from("platform_team_members").select("platform_member_id").eq("team_id", team_id).eq("platform_member_id", owner_platform_member_id).eq("status", "active").maybeSingle();
+        if (!target.data) return res.status(400).json({ error: "O respons\xE1vel precisa ser membro ativo da equipe." });
       }
       const { data, error } = await getSupabaseAdmin().from("platform_lead_assignments").upsert({
         lead_id: leadId,
@@ -68,11 +127,40 @@ function createAdminLeadsRouter(getSupabaseAdmin, requirePlatformAuth) {
         entity_type: "platform_lead_assignments",
         entity_id: leadId,
         severity: "info",
-        team_id
+        team_id,
+        ...auditContext(req, { result: "success", after: { team_id, owner_platform_member_id: owner_platform_member_id || null } })
       });
       res.json(data);
     } catch (e) {
       res.status(500).json({ error: e.message });
+    }
+  });
+  router.patch("/:id", requirePlatformAuth, async (req, res) => {
+    try {
+      const db = getSupabaseAdmin();
+      const { data: lead, error: leadError } = await db.from("marketing_leads").select("*, platform_lead_assignments(*)").eq("id", req.params.id).single();
+      if (leadError || !lead) return res.status(404).json({ error: "Lead n\xE3o encontrado." });
+      const assignment = lead.platform_lead_assignments?.[0];
+      if (req.platformContext.role?.key !== "admin" && !canReadAssignedResource(req.platformContext, assignment, "member_lead_visibility")) {
+        return res.status(403).json({ error: "Lead fora do seu escopo." });
+      }
+      const allowed = ["status", "priority"];
+      const updates = Object.fromEntries(Object.entries(req.body).filter(([key]) => allowed.includes(key)));
+      if (!Object.keys(updates).length) return res.status(400).json({ error: "Nenhum campo permitido." });
+      const saved = await db.from("marketing_leads").update(updates).eq("id", lead.id).select().single();
+      if (saved.error) return res.status(400).json({ error: saved.error.message });
+      await db.from("platform_audit_logs").insert({
+        actor_user_id: req.user.id,
+        action: "lead.updated",
+        entity_type: "marketing_leads",
+        entity_id: lead.id,
+        team_id: assignment?.team_id || null,
+        severity: "info",
+        ...auditContext(req, { result: "success", before: { status: lead.status, priority: lead.priority }, after: updates })
+      });
+      return res.json(saved.data);
+    } catch (error) {
+      return res.status(500).json({ error: error.message });
     }
   });
   router.post("/:id/claim", requirePlatformAuth, async (req, res) => {
@@ -118,7 +206,26 @@ function createAdminClientsRouter(getSupabaseAdmin, requirePlatformAuth) {
   router.get("/", requirePlatformAuth, async (req, res) => {
     try {
       const { platformContext } = req;
-      const { data, error } = await getSupabaseAdmin().from("tenants").select("*, tenant_solutions(*), platform_client_assignments(*, platform_teams(name), platform_members(user_id, platform_roles(key, name))))").in("status", ["active", "suspended"]);
+      const { page, pageSize, from, to } = parsePagination(req.query);
+      const paginated = req.query.page !== void 0;
+      let visibleTenantIds = null;
+      if (platformContext.role?.key !== "admin") {
+        const visibleTeams = platformContext.teams.filter((team) => platformContext.managedTeams.some((managed) => managed.id === team.id) || ["team", "all"].includes(team.member_client_visibility)).map((team) => team.id);
+        let assignmentQuery = getSupabaseAdmin().from("platform_client_assignments").select("tenant_id");
+        const clauses = [`owner_platform_member_id.eq.${platformContext.platformMember.id}`];
+        if (visibleTeams.length) clauses.push(`team_id.in.(${visibleTeams.join(",")})`);
+        assignmentQuery = assignmentQuery.or(clauses.join(","));
+        const assignmentResult = await assignmentQuery;
+        if (assignmentResult.error) throw assignmentResult.error;
+        visibleTenantIds = [...new Set((assignmentResult.data || []).map((item) => String(item.tenant_id)))];
+        if (!visibleTenantIds.length) return res.json(paginated ? pageResult([], 0, page, pageSize) : []);
+      }
+      let query = getSupabaseAdmin().from("tenants").select("*, tenant_solutions(*), platform_client_assignments(*, platform_teams(name), platform_members(user_id, platform_roles(key, name))), tenant_billing_state(*), tenant_domains(*), memberships(id,status,user_id,employment_level), departments(id,name,active)", { count: "exact" }).in("status", ["active", "trial", "suspended"]).order("created_at", { ascending: false });
+      if (visibleTenantIds) query = query.in("id", visibleTenantIds);
+      if (typeof req.query.status === "string" && req.query.status) query = query.eq("status", req.query.status);
+      if (typeof req.query.search === "string" && req.query.search.trim()) query = query.ilike("name", `%${req.query.search.trim().slice(0, 100)}%`);
+      if (paginated) query = query.range(from, to);
+      const { data, error, count } = await query;
       if (error) throw error;
       const { data: usersData } = await getSupabaseAdmin().auth.admin.listUsers();
       let clients = data.map((c) => {
@@ -130,10 +237,7 @@ function createAdminClientsRouter(getSupabaseAdmin, requirePlatformAuth) {
         }
         return { ...c, assignment, owner };
       });
-      if (platformContext.role?.key !== "admin") {
-        clients = clients.filter((client) => canReadAssignedResource(platformContext, client.assignment, "member_client_visibility"));
-      }
-      res.json(clients);
+      res.json(paginated ? pageResult(clients, count, page, pageSize) : clients);
     } catch (e) {
       res.status(500).json({ error: e.message });
     }
@@ -142,7 +246,7 @@ function createAdminClientsRouter(getSupabaseAdmin, requirePlatformAuth) {
     try {
       const { platformContext } = req;
       const clientId = req.params.id;
-      const { data, error } = await getSupabaseAdmin().from("tenants").select("*, tenant_solutions(solution_id, status, solutions(key)), platform_client_assignments(*, platform_teams(name), platform_members(user_id, platform_roles(key, name))))").eq("id", clientId).single();
+      const { data, error } = await getSupabaseAdmin().from("tenants").select("*, tenant_solutions(solution_id, status, solutions(key,name)), platform_client_assignments(*, platform_teams(name), platform_members(user_id, platform_roles(key, name))), tenant_domains(*), departments(*), memberships(id,user_id,status,employment_level,joined_at), tenant_billing_state(*), commercial_contracts(*, billing_subscriptions(*), billing_payments(*))").eq("id", clientId).single();
       if (error) throw error;
       const { data: usersData } = await getSupabaseAdmin().auth.admin.listUsers();
       const assignment = data.platform_client_assignments?.[0];
@@ -154,7 +258,8 @@ function createAdminClientsRouter(getSupabaseAdmin, requirePlatformAuth) {
       if (platformContext.role?.key !== "admin") {
         if (!canReadAssignedResource(platformContext, assignment, "member_client_visibility")) return res.status(403).json({ error: "Forbidden" });
       }
-      res.json({ ...data, assignment, owner });
+      const { data: audit } = await getSupabaseAdmin().from("platform_audit_logs").select("id,action,severity,metadata,created_at,actor_user_id,request_id").eq("entity_id", clientId).order("created_at", { ascending: false }).limit(50);
+      res.json({ ...data, assignment, owner, audit: audit || [] });
     } catch (e) {
       res.status(500).json({ error: e.message });
     }
@@ -167,6 +272,14 @@ function createAdminClientsRouter(getSupabaseAdmin, requirePlatformAuth) {
       if (platformContext.role?.key !== "admin") {
         const isManager = platformContext.managedTeams.some((t) => t.id === team_id);
         if (!isManager) return res.status(403).json({ error: "Forbidden" });
+        const current = await getSupabaseAdmin().from("platform_client_assignments").select("*").eq("tenant_id", clientId).eq("assignment_type", "commercial").maybeSingle();
+        if (!current.data || !platformContext.managedTeams.some((team) => team.id === current.data.team_id)) {
+          return res.status(403).json({ error: "Cliente fora do escopo gerenciado." });
+        }
+      }
+      if (owner_platform_member_id) {
+        const target = await getSupabaseAdmin().from("platform_team_members").select("platform_member_id").eq("team_id", team_id).eq("platform_member_id", owner_platform_member_id).eq("status", "active").maybeSingle();
+        if (!target.data) return res.status(400).json({ error: "O respons\xE1vel precisa ser membro ativo da equipe." });
       }
       const { data, error } = await getSupabaseAdmin().from("platform_client_assignments").upsert({
         tenant_id: clientId,
@@ -183,7 +296,8 @@ function createAdminClientsRouter(getSupabaseAdmin, requirePlatformAuth) {
         entity_type: "platform_client_assignments",
         entity_id: clientId,
         severity: "info",
-        team_id
+        team_id,
+        ...auditContext(req, { result: "success", after: { team_id, owner_platform_member_id: owner_platform_member_id || null } })
       });
       res.json(data);
     } catch (e) {
@@ -195,29 +309,25 @@ function createAdminClientsRouter(getSupabaseAdmin, requirePlatformAuth) {
       const { platformContext } = req;
       const clientId = req.params.id;
       const { solutionKeys } = req.body;
-      if (!platformContext.permissions.includes("platform.solutions.manage")) {
+      if (platformContext.role?.key !== "admin" || !platformContext.permissions.includes("platform.solutions.manage")) {
         return res.status(403).json({ error: "Forbidden" });
       }
-      await getSupabaseAdmin().from("tenant_solutions").delete().eq("tenant_id", clientId);
-      if (solutionKeys && solutionKeys.length > 0) {
-        const { data: dbSolutions, error: sErr } = await getSupabaseAdmin().from("solutions").select("id, key").in("key", solutionKeys);
-        if (sErr) throw sErr;
-        if (dbSolutions && dbSolutions.length > 0) {
-          const solutionsToInsert = dbSolutions.map((s) => ({
-            tenant_id: clientId,
-            solution_id: s.id,
-            status: "active"
-          }));
-          await getSupabaseAdmin().from("tenant_solutions").insert(solutionsToInsert);
-        }
+      if (!Array.isArray(solutionKeys) || solutionKeys.some((key) => typeof key !== "string")) {
+        return res.status(400).json({ error: "solutionKeys deve ser uma lista de chaves." });
       }
+      const before = await getSupabaseAdmin().from("tenant_solutions").select("solutions(key)").eq("tenant_id", clientId);
+      const replaced = await getSupabaseAdmin().rpc("admin_replace_tenant_solutions", {
+        p_tenant_id: clientId,
+        p_solution_keys: [...new Set(solutionKeys)]
+      });
+      if (replaced.error) throw replaced.error;
       await getSupabaseAdmin().from("platform_audit_logs").insert({
         actor_user_id: req.user.id,
         action: "solution.updated",
         entity_type: "tenant_solutions",
         entity_id: clientId,
         severity: "info",
-        metadata: { solutions: solutionKeys }
+        ...auditContext(req, { result: "success", before: before.data, after: { solutions: solutionKeys } })
       });
       res.json({ success: true });
     } catch (e) {
@@ -555,23 +665,26 @@ function createAdminOtherRouter(getSupabaseAdmin, requirePlatformAuth) {
   router.get("/audit", requirePlatformAuth, async (req, res) => {
     try {
       const { platformContext } = req;
-      let query = getSupabaseAdmin().from("platform_audit_logs").select("*").order("created_at", { ascending: false }).limit(100);
+      const { page, pageSize, from, to } = parsePagination(req.query);
+      let query = getSupabaseAdmin().from("platform_audit_logs").select("*", { count: "exact" }).order("created_at", { ascending: false }).range(from, to);
+      if (typeof req.query.action === "string" && req.query.action) query = query.ilike("action", `%${req.query.action.replace(/[%(),]/g, "").slice(0, 100)}%`);
+      if (typeof req.query.severity === "string" && req.query.severity) query = query.eq("severity", req.query.severity);
       if (platformContext.role?.key !== "admin") {
         if (!platformContext.permissions.includes("platform.audit.team.read")) {
           return res.status(403).json({ error: "Forbidden" });
         }
         const teamIds = platformContext.managedTeams.map((t) => t.id);
-        if (teamIds.length === 0) return res.json([]);
+        if (teamIds.length === 0) return res.json(pageResult([], 0, page, pageSize));
         query = query.in("team_id", teamIds);
       }
-      const { data, error } = await query;
+      const { data, error, count } = await query;
       if (error) throw error;
       const { data: usersData } = await getSupabaseAdmin().auth.admin.listUsers();
       const result = data.map((log) => {
         const user = usersData?.users?.find((u) => u.id === log.actor_user_id);
         return { ...log, actor_email: user?.email || "Sistema" };
       });
-      res.json(result);
+      res.json(pageResult(result, count, page, pageSize));
     } catch (e) {
       res.status(500).json({ error: e.message });
     }
@@ -582,19 +695,81 @@ function createAdminOtherRouter(getSupabaseAdmin, requirePlatformAuth) {
       if (!platformContext.permissions.includes("platform.system.read") && platformContext.role?.key !== "admin") {
         return res.status(403).json({ error: "Forbidden" });
       }
-      const { data, error } = await getSupabaseAdmin().from("platform_roles").select("id").limit(1);
+      const dbStart = performance.now();
+      const { error } = await getSupabaseAdmin().from("platform_roles").select("id").limit(1);
+      const databaseLatencyMs = Math.round(performance.now() - dbStart);
+      const authStart = performance.now();
+      const authCheck = await getSupabaseAdmin().auth.admin.listUsers({ page: 1, perPage: 1 });
+      const authLatencyMs = Math.round(performance.now() - authStart);
+      const [lastWebhook, queue, lastReconciliation] = await Promise.all([
+        getSupabaseAdmin().from("billing_webhook_events").select("event_type,status,received_at").order("received_at", { ascending: false }).limit(1).maybeSingle(),
+        getSupabaseAdmin().from("billing_webhook_events").select("*", { count: "exact", head: true }).in("status", ["received", "processing", "failed"]),
+        getSupabaseAdmin().from("billing_reconciliation_runs").select("status,started_at,completed_at,error_count,summary").order("started_at", { ascending: false }).limit(1).maybeSingle()
+      ]);
       res.json({
-        status: "operational",
+        status: !error && !authCheck.error ? "operational" : "degraded",
         timestamp: (/* @__PURE__ */ new Date()).toISOString(),
         environment: process.env.NODE_ENV || "development",
-        database: error ? "error" : "connected",
-        auth: "connected",
+        database: { status: error ? "error" : "connected", latencyMs: databaseLatencyMs },
+        auth: { status: authCheck.error ? "error" : "connected", latencyMs: authLatencyMs },
         billing: publicBillingHealth(),
+        webhook: { last: lastWebhook.data || null, queued: queue.count || 0 },
+        reconciliation: lastReconciliation.data || null,
+        deploy: { commitSha: process.env.VERCEL_GIT_COMMIT_SHA || null, url: process.env.VERCEL_URL || null, region: process.env.VERCEL_REGION || null },
         uptime: process.uptime()
       });
     } catch (e) {
       res.status(500).json({ error: e.message });
     }
+  });
+  router.post("/staff/:id/terminate-sessions", requirePlatformAuth, async (req, res) => {
+    if (req.platformContext.role?.key !== "admin") return res.status(403).json({ error: "Somente admin pode encerrar sess\xF5es." });
+    const db = getSupabaseAdmin();
+    const target = await db.from("platform_members").select("id,user_id").eq("id", req.params.id).single();
+    if (target.error) return res.status(404).json({ error: "Membro n\xE3o encontrado." });
+    if (target.data.user_id === req.user.id) return res.status(403).json({ error: "Encerre sua pr\xF3pria sess\xE3o pelo logout." });
+    const result = await db.rpc("admin_terminate_user_sessions", { p_user_id: target.data.user_id });
+    if (result.error) return res.status(500).json({ error: result.error.message });
+    await db.from("platform_audit_logs").insert({ actor_user_id: req.user.id, action: "platform.member.sessions_terminated", entity_type: "platform_members", entity_id: target.data.id, severity: "warning", ...auditContext(req, { result: "success" }) });
+    return res.json({ success: true });
+  });
+  router.get("/system/solutions", requirePlatformAuth, async (req, res) => {
+    if (!req.platformContext.permissions.includes("platform.solutions.read") && req.platformContext.role?.key !== "admin") return res.status(403).json({ error: "Forbidden" });
+    const result = await getSupabaseAdmin().from("solutions").select("id,key,name,created_at").order("name");
+    if (result.error) return res.status(500).json({ error: result.error.message });
+    return res.json(result.data);
+  });
+  router.patch("/system/solutions/:id", requirePlatformAuth, async (req, res) => {
+    if (req.platformContext.role?.key !== "admin" || !req.platformContext.permissions.includes("platform.solutions.manage")) return res.status(403).json({ error: "Forbidden" });
+    const name = typeof req.body?.name === "string" ? req.body.name.trim().slice(0, 100) : "";
+    if (!name) return res.status(400).json({ error: "Nome \xE9 obrigat\xF3rio." });
+    const db = getSupabaseAdmin();
+    const before = await db.from("solutions").select("*").eq("id", req.params.id).single();
+    if (before.error) return res.status(404).json({ error: "Solu\xE7\xE3o n\xE3o encontrada." });
+    const saved = await db.from("solutions").update({ name }).eq("id", req.params.id).select().single();
+    if (saved.error) return res.status(400).json({ error: saved.error.message });
+    await db.from("platform_audit_logs").insert({ actor_user_id: req.user.id, action: "platform.solution.updated", entity_type: "solutions", entity_id: req.params.id, severity: "info", ...auditContext(req, { result: "success", before: { name: before.data.name }, after: { name } }) });
+    return res.json(saved.data);
+  });
+  router.get("/system/deploy", requirePlatformAuth, async (req, res) => {
+    if (!req.platformContext.permissions.includes("platform.deploy.read") && req.platformContext.role?.key !== "admin") return res.status(403).json({ error: "Forbidden" });
+    return res.json({ commitSha: process.env.VERCEL_GIT_COMMIT_SHA || null, commitMessage: process.env.VERCEL_GIT_COMMIT_MESSAGE || null, branch: process.env.VERCEL_GIT_COMMIT_REF || null, url: process.env.VERCEL_URL || null, region: process.env.VERCEL_REGION || null, environment: process.env.VERCEL_ENV || process.env.NODE_ENV || "development" });
+  });
+  router.get("/system/settings", requirePlatformAuth, async (req, res) => {
+    if (!req.platformContext.permissions.includes("platform.settings.read") && req.platformContext.role?.key !== "admin") return res.status(403).json({ error: "Forbidden" });
+    return res.json({ billing: publicBillingHealth(), publicSignup: false, authProvider: "supabase", billingProvider: "asaas", billingEnvironment: process.env.ASAAS_ENV || "sandbox", webhookConfigured: Boolean(process.env.ASAAS_WEBHOOK_TOKEN), cronConfigured: Boolean(process.env.CRON_SECRET) });
+  });
+  router.get("/performance/own", requirePlatformAuth, async (req, res) => {
+    const db = getSupabaseAdmin();
+    const memberId = req.platformContext.platformMember.id;
+    const [leads, activities, proposals, contracts] = await Promise.all([
+      db.from("platform_lead_assignments").select("*", { count: "exact", head: true }).eq("owner_platform_member_id", memberId),
+      db.from("commercial_activities").select("*", { count: "exact", head: true }).eq("owner_platform_member_id", memberId).eq("status", "completed"),
+      db.from("commercial_proposals").select("*", { count: "exact", head: true }).eq("owner_platform_member_id", memberId),
+      db.from("commercial_contracts").select("amount_cents,status").eq("owner_platform_member_id", memberId).in("status", ["active", "approved", "pending_payment"])
+    ]);
+    const revenueCents = (contracts.data || []).reduce((sum, contract) => sum + Number(contract.amount_cents || 0), 0);
+    return res.json({ assignedLeads: leads.count || 0, completedActivities: activities.count || 0, proposals: proposals.count || 0, contracts: contracts.data?.length || 0, contractedRecurringCents: revenueCents });
   });
   return router;
 }
@@ -637,7 +812,7 @@ function createAdminTeamsRouter(getSupabaseAdmin, requirePlatformAuth) {
         member_client_visibility,
         allow_self_claim,
         status: "active",
-        created_by: platformContext.platformMember.id
+        created_by: req.user.id
       }).select().single();
       if (error) throw error;
       await getSupabaseAdmin().from("platform_audit_logs").insert({
@@ -645,7 +820,8 @@ function createAdminTeamsRouter(getSupabaseAdmin, requirePlatformAuth) {
         action: "team.created",
         entity_type: "platform_teams",
         entity_id: data.id,
-        severity: "info"
+        severity: "info",
+        ...auditContext(req, { result: "success", after: { name: data.name, team_type: data.team_type, channel: data.channel } })
       });
       res.json(data);
     } catch (e) {
@@ -678,7 +854,16 @@ function createAdminTeamsRouter(getSupabaseAdmin, requirePlatformAuth) {
       }
       const allowedFields = isManager ? ["description", "member_lead_visibility", "member_client_visibility", "allow_self_claim"] : ["name", "description", "team_type", "channel", "status", "member_lead_visibility", "member_client_visibility", "allow_self_claim", "settings"];
       const updates = Object.fromEntries(Object.entries(req.body).filter(([key]) => allowedFields.includes(key)));
+      if (updates.settings && typeof updates.settings === "object") {
+        for (const key of ["proposal_approval_limit_cents", "contract_approval_limit_cents"]) {
+          const value = updates.settings[key];
+          if (value !== void 0 && value !== null && (!Number.isInteger(value) || value < 0)) {
+            return res.status(400).json({ error: `${key} deve ser um inteiro n\xE3o negativo em centavos.` });
+          }
+        }
+      }
       if (Object.keys(updates).length === 0) return res.status(400).json({ error: "No valid fields to update" });
+      const before = await getSupabaseAdmin().from("platform_teams").select("*").eq("id", teamId).single();
       const { data, error } = await getSupabaseAdmin().from("platform_teams").update(updates).eq("id", teamId).select().single();
       if (error) throw error;
       await getSupabaseAdmin().from("platform_audit_logs").insert({
@@ -687,7 +872,8 @@ function createAdminTeamsRouter(getSupabaseAdmin, requirePlatformAuth) {
         entity_type: "platform_teams",
         entity_id: data.id,
         severity: "info",
-        team_id: teamId
+        team_id: teamId,
+        ...auditContext(req, { result: "success", before: before.data, after: data })
       });
       res.json(data);
     } catch (e) {
@@ -807,8 +993,9 @@ function createAdminTeamsRouter(getSupabaseAdmin, requirePlatformAuth) {
 }
 
 // src/server/billing/router.ts
-import { timingSafeEqual } from "node:crypto";
+import { createHash, timingSafeEqual } from "node:crypto";
 import { Router as Router5 } from "express";
+import { waitUntil } from "@vercel/functions";
 
 // src/server/billing/asaas.ts
 var CYCLE_MAP = {
@@ -882,6 +1069,21 @@ var AsaasBillingProvider = class {
   getSubscription(id) {
     return this.request(`/subscriptions/${encodeURIComponent(id)}`);
   }
+  cancelSubscription(id) {
+    return this.request(`/subscriptions/${encodeURIComponent(id)}`, { method: "DELETE" });
+  }
+  listSubscriptions(offset = 0, limit = 100) {
+    return this.request(`/subscriptions?includeDeleted=true&limit=${Math.min(100, limit)}&offset=${Math.max(0, offset)}`);
+  }
+  listPayments(filters = {}) {
+    const params = new URLSearchParams({
+      limit: String(Math.min(100, filters.limit || 100)),
+      offset: String(Math.max(0, filters.offset || 0))
+    });
+    if (filters.subscriptionId) params.set("subscription", filters.subscriptionId);
+    if (filters.dateCreatedFrom) params.set("dateCreated[ge]", filters.dateCreatedFrom);
+    return this.request(`/payments?${params.toString()}`);
+  }
 };
 
 // src/server/billing/domain.ts
@@ -898,7 +1100,7 @@ var SUPPORTED_ASAAS_EVENTS = /* @__PURE__ */ new Set([
   "PAYMENT_PARTIALLY_REFUNDED",
   "PAYMENT_CHARGEBACK_REQUESTED",
   "PAYMENT_CHARGEBACK_DISPUTE",
-  "AWAITING_CHARGEBACK_REVERSAL",
+  "PAYMENT_AWAITING_CHARGEBACK_REVERSAL",
   "PAYMENT_DUNNING_RECEIVED",
   "PAYMENT_DUNNING_REQUESTED",
   "SUBSCRIPTION_CREATED",
@@ -919,7 +1121,7 @@ var PAYMENT_STATUS = {
   PAYMENT_PARTIALLY_REFUNDED: "partially_refunded",
   PAYMENT_CHARGEBACK_REQUESTED: "chargeback",
   PAYMENT_CHARGEBACK_DISPUTE: "chargeback",
-  AWAITING_CHARGEBACK_REVERSAL: "chargeback",
+  PAYMENT_AWAITING_CHARGEBACK_REVERSAL: "chargeback",
   PAYMENT_DUNNING_RECEIVED: "received",
   PAYMENT_DUNNING_REQUESTED: "overdue"
 };
@@ -1032,12 +1234,19 @@ async function resolveContract(db, payment, subscriptionId) {
   }
   return { contract: null, subscription: null };
 }
-async function processPaymentEvent(db, eventRow, payload) {
-  const payment = payload.payment;
+function needsProviderVerification(eventType) {
+  return ["PAYMENT_REFUNDED", "PAYMENT_CHARGEBACK_REQUESTED", "PAYMENT_CHARGEBACK_DISPUTE", "PAYMENT_AWAITING_CHARGEBACK_REVERSAL"].includes(eventType);
+}
+async function processPaymentEvent(db, eventRow, payload, provider) {
+  let payment = payload.payment;
   if (!payment?.id) return "ignored";
+  if (needsProviderVerification(payload.event)) {
+    if (!provider) throw new Error("Consulta ao provedor \xE9 obrigat\xF3ria para esta transi\xE7\xE3o.");
+    payment = await provider.getPayment(payment.id);
+  }
   const { contract, subscription } = await resolveContract(db, payment, payment.subscription);
   const providerStatus = payment.status ? String(payment.status) : void 0;
-  let normalizedStatus = normalizePaymentStatus(payload.event, providerStatus);
+  let normalizedStatus = needsProviderVerification(payload.event) ? normalizeProviderPaymentStatus(providerStatus) : normalizePaymentStatus(payload.event, providerStatus);
   const { data: existingPayment } = await db.from("billing_payments").select("*").eq("provider_payment_id", payment.id).maybeSingle();
   normalizedStatus = preserveSettledPaymentStatus(existingPayment?.status, normalizedStatus);
   const dueDate = slugDate(payment.dueDate);
@@ -1132,14 +1341,181 @@ async function processSubscriptionEvent(db, payload) {
   if (error) throw error;
   return "processed";
 }
-async function processStoredEvent(db, eventRow) {
+async function processStoredEvent(db, eventRow, provider) {
   const payload = eventRow.payload;
   if (!SUPPORTED_ASAAS_EVENTS.has(eventRow.event_type)) return "ignored";
-  if (eventRow.event_type.startsWith("PAYMENT_") || eventRow.event_type.startsWith("AWAITING_")) {
-    return processPaymentEvent(db, eventRow, payload);
+  if (eventRow.event_type.startsWith("PAYMENT_")) {
+    return processPaymentEvent(db, eventRow, payload, provider);
   }
   if (eventRow.event_type.startsWith("SUBSCRIPTION_")) return processSubscriptionEvent(db, payload);
   return "ignored";
+}
+async function processPendingWebhookEvents(db, provider, limit = 10) {
+  const claim = await db.rpc("claim_billing_webhook_events", { p_limit: limit });
+  if (claim.error) throw claim.error;
+  const results = [];
+  for (const eventRow of claim.data || []) {
+    try {
+      const status = await processStoredEvent(db, eventRow, provider);
+      await db.from("billing_webhook_events").update({
+        status,
+        processed_at: (/* @__PURE__ */ new Date()).toISOString(),
+        locked_at: null,
+        last_error: null
+      }).eq("id", eventRow.id);
+      results.push({ id: eventRow.id, status });
+    } catch (error) {
+      const delaySeconds = Math.min(3600, 2 ** Math.min(eventRow.attempts || 1, 10));
+      await db.from("billing_webhook_events").update({
+        status: "failed",
+        locked_at: null,
+        last_error: cleanError(error),
+        next_attempt_at: new Date(Date.now() + delaySeconds * 1e3).toISOString()
+      }).eq("id", eventRow.id);
+      results.push({ id: eventRow.id, status: "failed" });
+    }
+  }
+  return results;
+}
+function scheduleBackgroundWork(work) {
+  try {
+    waitUntil(work);
+  } catch {
+    void work;
+  }
+}
+async function scopedContractIds(db, context) {
+  if (context.role?.key === "admin") return null;
+  const result = await db.from("commercial_contracts").select("id,team_id,owner_platform_member_id");
+  if (result.error) throw result.error;
+  return (result.data || []).filter((contract) => canReadAssignedResource(context, contract, "member_client_visibility")).map((contract) => contract.id);
+}
+function eventForRemotePayment(payment) {
+  const status = String(payment?.status || "").toUpperCase();
+  if (status === "RECEIVED" || status === "RECEIVED_IN_CASH") return "PAYMENT_RECEIVED";
+  if (status === "CONFIRMED") return "PAYMENT_CONFIRMED";
+  if (status === "OVERDUE" || status === "DUNNING_REQUESTED") return "PAYMENT_OVERDUE";
+  if (status === "REFUNDED") return "PAYMENT_REFUNDED";
+  if (status === "PARTIALLY_REFUNDED") return "PAYMENT_PARTIALLY_REFUNDED";
+  if (status === "CHARGEBACK_REQUESTED") return "PAYMENT_CHARGEBACK_REQUESTED";
+  if (status === "CHARGEBACK_DISPUTE") return "PAYMENT_CHARGEBACK_DISPUTE";
+  if (status === "DELETED") return "PAYMENT_DELETED";
+  return "PAYMENT_UPDATED";
+}
+async function runBillingReconciliation(db, triggeredByUserId) {
+  const run = await db.from("billing_reconciliation_runs").insert({
+    provider: "asaas",
+    status: "running",
+    triggered_by_user_id: triggeredByUserId || null
+  }).select().single();
+  if (run.error) throw new Error("N\xE3o foi poss\xEDvel iniciar a concilia\xE7\xE3o.");
+  const runId = run.data.id;
+  try {
+    const config = getBillingConfig();
+    if (!config.enabled) {
+      const summary2 = { skipped: "billing_disabled", queueProcessed: 0 };
+      await db.from("billing_reconciliation_runs").update({ status: "completed", completed_at: (/* @__PURE__ */ new Date()).toISOString(), summary: summary2 }).eq("id", runId);
+      return { skipped: true, reason: "billing_disabled" };
+    }
+    const provider = new AsaasBillingProvider(config);
+    const queue = await processPendingWebhookEvents(db, provider, 50);
+    const localResult = await db.from("billing_subscriptions").select("*");
+    if (localResult.error) throw localResult.error;
+    const localSubscriptions = localResult.data || [];
+    let checked = 0;
+    let divergences = 0;
+    let corrected = 0;
+    let errors = 0;
+    let recoveredPayments = 0;
+    let critical = 0;
+    for (const subscription of localSubscriptions) {
+      try {
+        const remote = await provider.getSubscription(subscription.provider_subscription_id);
+        checked += 1;
+        if (remote.externalReference && String(remote.externalReference) !== String(subscription.external_reference)) {
+          divergences += 1;
+          critical += 1;
+          await db.from("billing_reconciliation_items").insert({ reconciliation_run_id: runId, resource_type: "subscription", provider_resource_id: subscription.provider_subscription_id, local_resource_id: subscription.id, severity: "critical", kind: "external_reference_mismatch", safe_summary: { local: subscription.external_reference, remote: remote.externalReference } });
+          continue;
+        }
+        if (remote.status && remote.status !== subscription.provider_status) {
+          divergences += 1;
+          corrected += 1;
+          const normalized = String(remote.status).toUpperCase() === "ACTIVE" ? "active" : String(remote.status).toUpperCase() === "INACTIVE" ? "inactive" : subscription.status;
+          await db.from("billing_subscriptions").update({ provider_status: remote.status, status: normalized, next_due_date: remote.nextDueDate || subscription.next_due_date }).eq("id", subscription.id);
+          await db.from("billing_reconciliation_items").insert({ reconciliation_run_id: runId, resource_type: "subscription", provider_resource_id: subscription.provider_subscription_id, local_resource_id: subscription.id, severity: "warning", status: "auto_corrected", kind: "provider_status_drift", safe_summary: { from: subscription.provider_status, to: remote.status } });
+        }
+        let offset = 0;
+        let hasMore = true;
+        while (hasMore) {
+          const page = await provider.listPayments({ subscriptionId: subscription.provider_subscription_id, offset, limit: 100 });
+          const payments = Array.isArray(page.data) ? page.data : [];
+          for (const payment of payments) {
+            checked += 1;
+            const eventType = eventForRemotePayment(payment);
+            const providerEventId = `reconcile:${payment.id}:${String(payment.status || "unknown")}`;
+            const inserted = await db.from("billing_webhook_events").insert({ provider: "asaas", provider_event_id: providerEventId, event_type: eventType, occurred_at: payment.dateCreated || null, payload: { id: providerEventId, event: eventType, dateCreated: (/* @__PURE__ */ new Date()).toISOString(), payment }, status: "processing", attempts: 1, locked_at: (/* @__PURE__ */ new Date()).toISOString() }).select().single();
+            if (inserted.error?.code === "23505") continue;
+            if (inserted.error) throw inserted.error;
+            const result = await processStoredEvent(db, inserted.data, provider);
+            await db.from("billing_webhook_events").update({ status: result, processed_at: (/* @__PURE__ */ new Date()).toISOString(), locked_at: null }).eq("id", inserted.data.id);
+            recoveredPayments += 1;
+            corrected += 1;
+            divergences += 1;
+            await db.from("billing_reconciliation_items").insert({ reconciliation_run_id: runId, resource_type: "payment", provider_resource_id: payment.id, local_resource_id: inserted.data.id, severity: "warning", status: "auto_corrected", kind: "missing_or_changed_payment", safe_summary: { provider_status: payment.status } });
+          }
+          hasMore = Boolean(page.hasMore);
+          offset += payments.length;
+          if (!payments.length) hasMore = false;
+        }
+      } catch (error) {
+        errors += 1;
+        await db.from("billing_reconciliation_items").insert({ reconciliation_run_id: runId, resource_type: "subscription", provider_resource_id: subscription.provider_subscription_id, local_resource_id: subscription.id, severity: "critical", kind: "provider_query_failed", safe_summary: { error: cleanError(error) } });
+      }
+    }
+    let remoteOffset = 0;
+    let remoteHasMore = true;
+    const localProviderIds = new Set(localSubscriptions.map((item) => item.provider_subscription_id));
+    while (remoteHasMore) {
+      const page = await provider.listSubscriptions(remoteOffset, 100);
+      const rows = Array.isArray(page.data) ? page.data : [];
+      for (const remote of rows) {
+        if (!localProviderIds.has(remote.id) && remote.externalReference) {
+          divergences += 1;
+          critical += 1;
+          await db.from("billing_reconciliation_items").insert({ reconciliation_run_id: runId, resource_type: "subscription", provider_resource_id: remote.id, severity: "critical", kind: "remote_subscription_missing_locally", safe_summary: { external_reference: remote.externalReference, provider_status: remote.status } });
+        }
+      }
+      remoteHasMore = Boolean(page.hasMore);
+      remoteOffset += rows.length;
+      if (!rows.length) remoteHasMore = false;
+    }
+    const now = (/* @__PURE__ */ new Date()).toISOString();
+    const today = now.slice(0, 10);
+    const expiredGrace = await db.from("tenant_billing_state").select("tenant_id,contract_id").eq("access_status", "grace").lt("grace_ends_at", now);
+    for (const state of expiredGrace.data || []) {
+      await db.from("tenant_billing_state").update({ access_status: "suspended", suspended_at: now, suspension_reason: "grace_expired" }).eq("tenant_id", state.tenant_id);
+      await db.from("tenants").update({ status: "suspended" }).eq("id", state.tenant_id);
+      await db.from("commercial_contracts").update({ status: "suspended" }).eq("id", state.contract_id);
+      corrected += 1;
+    }
+    const cancelledContracts = await db.from("commercial_contracts").select("id,tenant_id").eq("status", "cancelled").not("tenant_id", "is", null);
+    for (const contract of cancelledContracts.data || []) {
+      const state = await db.from("tenant_billing_state").select("paid_through,access_status").eq("tenant_id", contract.tenant_id).maybeSingle();
+      if (state.data?.paid_through && state.data.paid_through < today && state.data.access_status !== "cancelled") {
+        await db.from("tenant_billing_state").update({ access_status: "cancelled", suspended_at: now, suspension_reason: "cancelled_period_ended" }).eq("tenant_id", contract.tenant_id);
+        await db.from("tenants").update({ status: "suspended" }).eq("id", contract.tenant_id);
+        corrected += 1;
+      }
+    }
+    const status = errors || critical ? "completed_with_errors" : "completed";
+    const summary = { queueProcessed: queue.length, recoveredPayments, graceSuspensions: expiredGrace.data?.length || 0, criticalReview: critical };
+    await db.from("billing_reconciliation_runs").update({ status, completed_at: now, checked_count: checked, divergence_count: divergences, corrected_count: corrected, error_count: errors, summary }).eq("id", runId);
+    return { status, checked, divergences, corrected, errors, ...summary };
+  } catch (error) {
+    await db.from("billing_reconciliation_runs").update({ status: "failed", completed_at: (/* @__PURE__ */ new Date()).toISOString(), error_count: 1, summary: { error: cleanError(error) } }).eq("id", runId);
+    throw error;
+  }
 }
 function createBillingRouters(getSupabaseAdmin, requirePlatformAuth) {
   const publicRouter = Router5();
@@ -1157,6 +1533,14 @@ function createBillingRouters(getSupabaseAdmin, requirePlatformAuth) {
     if (!webhookTokenMatches(req.header("asaas-access-token"), config.webhookToken)) {
       return res.status(401).json({ error: "Webhook n\xE3o autorizado." });
     }
+    const rateKey = createHash("sha256").update(`${req.header("x-forwarded-for")?.split(",")[0]?.trim() || req.socket.remoteAddress || "unknown"}:asaas`).digest("hex");
+    const rate = await db.rpc("check_billing_webhook_rate_limit", {
+      p_key_hash: rateKey,
+      p_limit: 120,
+      p_window_seconds: 60
+    });
+    if (rate.error) return res.status(500).json({ error: "Falha ao validar limite do webhook." });
+    if (!rate.data) return res.status(429).json({ error: "Limite de webhook excedido." });
     const payload = req.body;
     if (!payload || typeof payload !== "object" || !payload.id || !payload.event) {
       return res.status(400).json({ error: "Evento inv\xE1lido." });
@@ -1173,47 +1557,75 @@ function createBillingRouters(getSupabaseAdmin, requirePlatformAuth) {
     if (insert.error?.code === "23505") {
       const existing = await db.from("billing_webhook_events").select("*").eq("provider", "asaas").eq("provider_event_id", String(payload.id)).single();
       if (existing.error) return res.status(500).json({ error: "Falha ao recuperar evento persistido." });
-      if (["processed", "ignored", "processing"].includes(existing.data.status)) {
+      if (["processed", "ignored", "processing", "received"].includes(existing.data.status)) {
         return res.status(200).json({ received: true, duplicate: true, status: existing.data.status });
       }
       eventRow = existing.data;
+      await db.from("billing_webhook_events").update({
+        status: "received",
+        next_attempt_at: (/* @__PURE__ */ new Date()).toISOString(),
+        locked_at: null
+      }).eq("id", eventRow.id);
     } else if (insert.error) {
       return res.status(500).json({ error: "Falha ao persistir evento." });
     }
-    try {
-      await db.from("billing_webhook_events").update({
-        status: "processing",
-        attempts: (eventRow.attempts || 0) + 1,
-        last_error: null
-      }).eq("id", eventRow.id);
-      const status = await processStoredEvent(db, { ...eventRow, payload, event_type: String(payload.event) });
-      await db.from("billing_webhook_events").update({
-        status,
-        processed_at: (/* @__PURE__ */ new Date()).toISOString(),
-        last_error: null
-      }).eq("id", eventRow.id);
-      return res.status(200).json({ received: true, status });
-    } catch (error) {
-      await db.from("billing_webhook_events").update({ status: "failed", last_error: cleanError(error) }).eq("id", eventRow.id);
-      return res.status(500).json({ error: "Evento persistido, mas o processamento falhou." });
-    }
+    const provider = new AsaasBillingProvider(config);
+    scheduleBackgroundWork(processPendingWebhookEvents(db, provider, 10));
+    return res.status(200).json({ received: true, status: "received", correlationId: eventRow.correlation_id });
   });
   adminRouter.get("/billing/overview", requirePlatformAuth, async (req, res) => {
     if (!hasPermission(req.platformContext, "platform.billing.read")) return res.status(403).json({ error: "Forbidden" });
     const db = getSupabaseAdmin();
+    const contractIds = await scopedContractIds(db, req.platformContext);
+    if (contractIds && !contractIds.length) return res.json({
+      configuration: publicBillingHealth(),
+      counts: { plans: 0, activeSubscriptions: 0, overduePayments: 0, failedWebhooks: 0 },
+      lastWebhook: null,
+      lastReconciliation: null
+    });
+    let subscriptionQuery = db.from("billing_subscriptions").select("*", { count: "exact", head: true }).eq("status", "active");
+    let overdueQuery = db.from("billing_payments").select("*", { count: "exact", head: true }).eq("status", "overdue");
+    if (contractIds) {
+      subscriptionQuery = subscriptionQuery.in("contract_id", contractIds);
+      overdueQuery = overdueQuery.in("contract_id", contractIds);
+    }
+    const isAdmin = req.platformContext.role?.key === "admin";
     const [plans, subscriptions, overdue, failures, lastWebhook, lastReconciliation] = await Promise.all([
       db.from("billing_plans").select("*", { count: "exact", head: true }).eq("active", true),
-      db.from("billing_subscriptions").select("*", { count: "exact", head: true }).eq("status", "active"),
-      db.from("billing_payments").select("*", { count: "exact", head: true }).eq("status", "overdue"),
-      db.from("billing_webhook_events").select("*", { count: "exact", head: true }).eq("status", "failed"),
-      db.from("billing_webhook_events").select("event_type,status,received_at").order("received_at", { ascending: false }).limit(1).maybeSingle(),
-      db.from("billing_reconciliation_runs").select("*").order("started_at", { ascending: false }).limit(1).maybeSingle()
+      subscriptionQuery,
+      overdueQuery,
+      isAdmin ? db.from("billing_webhook_events").select("*", { count: "exact", head: true }).eq("status", "failed") : Promise.resolve({ count: 0 }),
+      isAdmin ? db.from("billing_webhook_events").select("event_type,status,received_at").order("received_at", { ascending: false }).limit(1).maybeSingle() : Promise.resolve({ data: null }),
+      isAdmin ? db.from("billing_reconciliation_runs").select("*").order("started_at", { ascending: false }).limit(1).maybeSingle() : Promise.resolve({ data: null })
     ]);
     return res.json({
       configuration: publicBillingHealth(),
       counts: { plans: plans.count || 0, activeSubscriptions: subscriptions.count || 0, overduePayments: overdue.count || 0, failedWebhooks: failures.count || 0 },
       lastWebhook: lastWebhook.data || null,
       lastReconciliation: lastReconciliation.data || null
+    });
+  });
+  adminRouter.get("/billing/records", requirePlatformAuth, async (req, res) => {
+    if (!hasPermission(req.platformContext, "platform.billing.read")) return res.status(403).json({ error: "Forbidden" });
+    const db = getSupabaseAdmin();
+    const contractIds = await scopedContractIds(db, req.platformContext);
+    const { page, pageSize, from, to } = parsePagination(req.query);
+    if (contractIds && !contractIds.length) return res.json({ subscriptions: pageResult([], 0, page, pageSize), payments: pageResult([], 0, page, pageSize) });
+    let subscriptions = db.from("billing_subscriptions").select("*, billing_customers(name,email,tax_id_last4), commercial_contracts(contract_number,customer_name,team_id,owner_platform_member_id)", { count: "exact" }).order("created_at", { ascending: false }).range(from, to);
+    let payments = db.from("billing_payments").select("*, commercial_contracts(contract_number,customer_name,team_id,owner_platform_member_id)", { count: "exact" }).order("created_at", { ascending: false }).range(from, to);
+    if (contractIds) {
+      subscriptions = subscriptions.in("contract_id", contractIds);
+      payments = payments.in("contract_id", contractIds);
+    }
+    if (typeof req.query.status === "string" && req.query.status) {
+      subscriptions = subscriptions.eq("status", req.query.status);
+      payments = payments.eq("status", req.query.status);
+    }
+    const [subscriptionResult, paymentResult] = await Promise.all([subscriptions, payments]);
+    if (subscriptionResult.error || paymentResult.error) return res.status(500).json({ error: subscriptionResult.error?.message || paymentResult.error?.message });
+    return res.json({
+      subscriptions: pageResult(subscriptionResult.data || [], subscriptionResult.count, page, pageSize),
+      payments: pageResult(paymentResult.data || [], paymentResult.count, page, pageSize)
     });
   });
   adminRouter.get("/billing/plans", requirePlatformAuth, async (req, res) => {
@@ -1224,39 +1636,27 @@ function createBillingRouters(getSupabaseAdmin, requirePlatformAuth) {
   });
   adminRouter.post("/billing/plans", requirePlatformAuth, async (req, res) => {
     if (!hasPermission(req.platformContext, "platform.billing.manage")) return res.status(403).json({ error: "Forbidden" });
-    const { code, name, description, trial_days, grace_days, limits, amount_cents, cycle, billing_type, solution_ids } = req.body;
+    const { code, name, description, trial_days, grace_days, limits, amount_cents, cycle, billing_type, solution_ids, solution_limits } = req.body;
     if (!code || !name) return res.status(400).json({ error: "C\xF3digo e nome s\xE3o obrigat\xF3rios." });
     const db = getSupabaseAdmin();
-    const { data: latest } = await db.from("billing_plans").select("version").eq("code", code).order("version", { ascending: false }).limit(1).maybeSingle();
-    await db.from("billing_plans").update({ active: false, archived_at: (/* @__PURE__ */ new Date()).toISOString() }).eq("code", code).eq("active", true);
-    const { data, error } = await db.from("billing_plans").insert({
-      code,
-      version: (latest?.version || 0) + 1,
-      name,
-      description: description || null,
-      trial_days: Number(trial_days || 0),
-      grace_days: Number(grace_days ?? 5),
-      limits: limits || {},
-      created_by_user_id: req.user.id
-    }).select().single();
-    if (error) return res.status(400).json({ error: error.message });
-    if (amount_cents !== void 0) {
-      const { error: priceError } = await db.from("billing_plan_prices").insert({
-        plan_id: data.id,
-        amount_cents: Number(amount_cents),
-        cycle: cycle || "monthly",
-        billing_type: billing_type || "UNDEFINED"
-      });
-      if (priceError) return res.status(400).json({ error: priceError.message });
-    }
-    if (Array.isArray(solution_ids) && solution_ids.length) {
-      const { error: solutionError } = await db.from("billing_plan_solutions").insert(
-        solution_ids.map((solutionId) => ({ plan_id: data.id, solution_id: solutionId }))
-      );
-      if (solutionError) return res.status(400).json({ error: solutionError.message });
-    }
-    await db.from("platform_audit_logs").insert({ actor_user_id: req.user.id, action: "billing.plan.created", entity_type: "billing_plans", entity_id: data.id, severity: "info" });
-    return res.status(201).json(data);
+    const created = await db.rpc("admin_create_billing_plan_version", {
+      p_code: code,
+      p_name: name,
+      p_description: description || "",
+      p_trial_days: Number(trial_days || 0),
+      p_grace_days: Number(grace_days ?? 5),
+      p_limits: limits || {},
+      p_amount_cents: amount_cents === void 0 ? null : Number(amount_cents),
+      p_cycle: cycle || "monthly",
+      p_billing_type: billing_type || "UNDEFINED",
+      p_solution_ids: Array.isArray(solution_ids) ? solution_ids : [],
+      p_solution_limits: solution_limits || {},
+      p_actor_user_id: req.user.id
+    });
+    if (created.error) return res.status(400).json({ error: created.error.message });
+    const saved = await db.from("billing_plans").select("*,billing_plan_prices(*),billing_plan_solutions(*)").eq("id", created.data).single();
+    await db.from("platform_audit_logs").insert({ actor_user_id: req.user.id, action: "billing.plan.created", entity_type: "billing_plans", entity_id: created.data, severity: "info", ...auditContext(req, { result: "success", after: { code, version: saved.data?.version } }) });
+    return res.status(201).json(saved.data);
   });
   adminRouter.get("/commercial/catalog", requirePlatformAuth, async (req, res) => {
     if (!hasPermission(req.platformContext, "platform.commercial.read")) return res.status(403).json({ error: "Forbidden" });
@@ -1279,15 +1679,30 @@ function createBillingRouters(getSupabaseAdmin, requirePlatformAuth) {
     }
     const { data, error } = await query;
     if (error) return res.status(500).json({ error: error.message });
-    return res.json(data);
+    const scoped = req.platformContext.role.key === "admin" ? data : (data || []).filter((item) => canReadAssignedResource(req.platformContext, item, "member_lead_visibility"));
+    const { page, pageSize, from, to } = parsePagination(req.query);
+    return res.json(req.query.page !== void 0 ? pageResult(scoped.slice(from, to + 1), scoped.length, page, pageSize) : scoped);
+  });
+  adminRouter.patch("/commercial/demos/:id", requirePlatformAuth, async (req, res) => {
+    if (!hasPermission(req.platformContext, "platform.commercial.manage")) return res.status(403).json({ error: "Forbidden" });
+    const db = getSupabaseAdmin();
+    const existing = await db.from("commercial_demos").select("*").eq("id", req.params.id).single();
+    if (existing.error) return res.status(404).json({ error: "Demonstra\xE7\xE3o n\xE3o encontrada." });
+    if (!canReadAssignedResource(req.platformContext, existing.data, "member_lead_visibility")) return res.status(403).json({ error: "Demonstra\xE7\xE3o fora do seu escopo." });
+    const allowed = ["status", "starts_at", "expires_at", "notes", "result", "next_action", "next_action_at"];
+    const updates = Object.fromEntries(Object.entries(req.body).filter(([key]) => allowed.includes(key)));
+    const saved = await db.from("commercial_demos").update(updates).eq("id", existing.data.id).select().single();
+    if (saved.error) return res.status(400).json({ error: saved.error.message });
+    await db.from("platform_audit_logs").insert({ actor_user_id: req.user.id, action: "commercial.demo.updated", entity_type: "commercial_demos", entity_id: existing.data.id, team_id: existing.data.team_id, severity: "info", ...auditContext(req, { result: "success", before: existing.data, after: saved.data }) });
+    return res.json(saved.data);
   });
   adminRouter.post("/commercial/leads/:leadId/activities", requirePlatformAuth, async (req, res) => {
     if (!hasPermission(req.platformContext, "platform.commercial.manage")) return res.status(403).json({ error: "Forbidden" });
-    const { activity_type, subject, description, scheduled_at, status } = req.body;
+    const { activity_type, subject, description, scheduled_at, status, result, next_action, next_action_at } = req.body;
     if (!activity_type || !subject) return res.status(400).json({ error: "Tipo e assunto s\xE3o obrigat\xF3rios." });
     const db = getSupabaseAdmin();
     const { data: assignment } = await db.from("platform_lead_assignments").select("*").eq("lead_id", req.params.leadId).maybeSingle();
-    if (req.platformContext.role.key !== "admin" && (!assignment || !req.platformContext.teams.some((team) => team.id === assignment.team_id))) {
+    if (req.platformContext.role.key !== "admin" && !canReadAssignedResource(req.platformContext, assignment, "member_lead_visibility")) {
       return res.status(403).json({ error: "Lead fora do seu escopo." });
     }
     const { data, error } = await db.from("commercial_activities").insert({
@@ -1299,10 +1714,14 @@ function createBillingRouters(getSupabaseAdmin, requirePlatformAuth) {
       description: description || null,
       scheduled_at: scheduled_at || null,
       status: status || "planned",
+      result: result || null,
+      next_action: next_action || null,
+      next_action_at: next_action_at || null,
       completed_at: status === "completed" ? (/* @__PURE__ */ new Date()).toISOString() : null,
       created_by_user_id: req.user.id
     }).select().single();
     if (error) return res.status(400).json({ error: error.message });
+    await db.from("platform_audit_logs").insert({ actor_user_id: req.user.id, action: "commercial.activity.created", entity_type: "commercial_activities", entity_id: data.id, team_id: data.team_id, severity: "info", ...auditContext(req, { result: "success", after: { activity_type, subject, status: status || "planned" } }) });
     return res.status(201).json(data);
   });
   adminRouter.get("/commercial/proposals", requirePlatformAuth, async (req, res) => {
@@ -1315,20 +1734,31 @@ function createBillingRouters(getSupabaseAdmin, requirePlatformAuth) {
     }
     const { data, error } = await query;
     if (error) return res.status(500).json({ error: error.message });
-    return res.json(data);
+    const scoped = req.platformContext.role.key === "admin" ? data : (data || []).filter((item) => canReadAssignedResource(req.platformContext, item, "member_lead_visibility"));
+    const { page, pageSize, from, to } = parsePagination(req.query);
+    return res.json(req.query.page !== void 0 ? pageResult(scoped.slice(from, to + 1), scoped.length, page, pageSize) : scoped);
   });
   adminRouter.post("/commercial/proposals", requirePlatformAuth, async (req, res) => {
     if (!hasPermission(req.platformContext, "platform.commercial.manage")) return res.status(403).json({ error: "Forbidden" });
     const input = req.body;
     if (!input.lead_id || !input.plan_id || !Number.isInteger(Number(input.amount_cents))) return res.status(400).json({ error: "Lead, plano e valor s\xE3o obrigat\xF3rios." });
-    if (req.platformContext.role.key !== "admin" && (!input.team_id || !req.platformContext.teams.some((team) => team.id === input.team_id))) {
-      return res.status(403).json({ error: "Equipe fora do seu escopo." });
+    const db = getSupabaseAdmin();
+    const assignmentResult = await db.from("platform_lead_assignments").select("*").eq("lead_id", input.lead_id).maybeSingle();
+    const assignment = assignmentResult.data;
+    if (req.platformContext.role.key !== "admin" && (!assignment || !canReadAssignedResource(req.platformContext, assignment, "member_lead_visibility"))) {
+      return res.status(403).json({ error: "Lead fora do seu escopo." });
     }
-    const { data, error } = await getSupabaseAdmin().from("commercial_proposals").insert({
+    if (req.platformContext.role.key !== "admin" && input.team_id !== assignment.team_id) return res.status(403).json({ error: "A proposta deve permanecer na equipe atribu\xEDda ao lead." });
+    const ownerId = req.platformContext.role.key === "sales" ? req.platformContext.platformMember.id : input.owner_platform_member_id || assignment?.owner_platform_member_id || req.platformContext.platformMember.id;
+    if (input.team_id && ownerId) {
+      const target = await db.from("platform_team_members").select("platform_member_id").eq("team_id", input.team_id).eq("platform_member_id", ownerId).eq("status", "active").maybeSingle();
+      if (!target.data) return res.status(400).json({ error: "O respons\xE1vel precisa ser membro ativo da equipe." });
+    }
+    const { data, error } = await db.from("commercial_proposals").insert({
       lead_id: input.lead_id,
       plan_id: input.plan_id,
       team_id: input.team_id || null,
-      owner_platform_member_id: input.owner_platform_member_id || req.platformContext.platformMember.id,
+      owner_platform_member_id: ownerId,
       status: "pending_approval",
       amount_cents: Number(input.amount_cents),
       cycle: input.cycle,
@@ -1339,7 +1769,7 @@ function createBillingRouters(getSupabaseAdmin, requirePlatformAuth) {
       created_by_user_id: req.user.id
     }).select().single();
     if (error) return res.status(400).json({ error: error.message });
-    await getSupabaseAdmin().from("platform_audit_logs").insert({ actor_user_id: req.user.id, action: "commercial.proposal.created", entity_type: "commercial_proposals", entity_id: data.id, team_id: data.team_id, severity: "info" });
+    await db.from("platform_audit_logs").insert({ actor_user_id: req.user.id, action: "commercial.proposal.created", entity_type: "commercial_proposals", entity_id: data.id, team_id: data.team_id, severity: "info", ...auditContext(req, { result: "success", after: { amount_cents: data.amount_cents, cycle: data.cycle, status: data.status } }) });
     return res.status(201).json(data);
   });
   adminRouter.post("/commercial/proposals/:id/approve", requirePlatformAuth, async (req, res) => {
@@ -1349,6 +1779,10 @@ function createBillingRouters(getSupabaseAdmin, requirePlatformAuth) {
     if (readError) return res.status(404).json({ error: "Proposta n\xE3o encontrada." });
     if (req.platformContext.role.key !== "admin" && !req.platformContext.managedTeams.some((team) => team.id === proposal.team_id)) {
       return res.status(403).json({ error: "Proposta fora da sua al\xE7ada." });
+    }
+    if (req.platformContext.role.key !== "admin") {
+      const team = req.platformContext.managedTeams.find((item) => item.id === proposal.team_id);
+      if (!withinManagerApprovalLimit(team, proposal.amount_cents, "proposal")) return res.status(403).json({ error: "Valor acima da al\xE7ada configurada; aprova\xE7\xE3o de admin necess\xE1ria." });
     }
     const { data, error } = await db.from("commercial_proposals").update({
       status: "approved",
@@ -1366,7 +1800,7 @@ function createBillingRouters(getSupabaseAdmin, requirePlatformAuth) {
     const { data: proposal, error } = await db.from("commercial_proposals").select("*, marketing_leads(*), billing_plans(*)").eq("id", req.params.id).single();
     if (error || !proposal) return res.status(404).json({ error: "Proposta n\xE3o encontrada." });
     if (proposal.status !== "approved") return res.status(409).json({ error: "A proposta precisa estar aprovada." });
-    if (req.platformContext.role.key !== "admin" && !req.platformContext.teams.some((team) => team.id === proposal.team_id)) {
+    if (req.platformContext.role.key !== "admin" && !canReadAssignedResource(req.platformContext, proposal, "member_lead_visibility")) {
       return res.status(403).json({ error: "Proposta fora do seu escopo." });
     }
     const lead = proposal.marketing_leads;
@@ -1407,7 +1841,9 @@ function createBillingRouters(getSupabaseAdmin, requirePlatformAuth) {
     }
     const { data, error } = await query;
     if (error) return res.status(500).json({ error: error.message });
-    return res.json(data);
+    const scoped = req.platformContext.role.key === "admin" ? data : (data || []).filter((item) => canReadAssignedResource(req.platformContext, item, "member_client_visibility"));
+    const { page, pageSize, from, to } = parsePagination(req.query);
+    return res.json(req.query.page !== void 0 ? pageResult(scoped.slice(from, to + 1), scoped.length, page, pageSize) : scoped);
   });
   adminRouter.post("/commercial/contracts", requirePlatformAuth, async (req, res) => {
     if (!hasPermission(req.platformContext, "platform.commercial.manage")) return res.status(403).json({ error: "Forbidden" });
@@ -1420,6 +1856,10 @@ function createBillingRouters(getSupabaseAdmin, requirePlatformAuth) {
     if (readError) return res.status(404).json({ error: "Contrato n\xE3o encontrado." });
     if (req.platformContext.role.key !== "admin" && !req.platformContext.managedTeams.some((team) => team.id === contract.team_id)) {
       return res.status(403).json({ error: "Contrato fora da sua al\xE7ada." });
+    }
+    if (req.platformContext.role.key !== "admin") {
+      const team = req.platformContext.managedTeams.find((item) => item.id === contract.team_id);
+      if (!withinManagerApprovalLimit(team, contract.amount_cents, "contract")) return res.status(403).json({ error: "Valor acima da al\xE7ada configurada; aprova\xE7\xE3o de admin necess\xE1ria." });
     }
     const { data, error } = await db.from("commercial_contracts").update({ status: "approved", approved_by_user_id: req.user.id, approved_at: (/* @__PURE__ */ new Date()).toISOString() }).eq("id", contract.id).in("status", ["draft", "pending_approval"]).select().single();
     if (error) return res.status(409).json({ error: error.message });
@@ -1485,14 +1925,42 @@ function createBillingRouters(getSupabaseAdmin, requirePlatformAuth) {
       return res.status(503).json({ error: cleanError(error) });
     }
   });
+  adminRouter.post("/billing/subscriptions/:id/cancel", requirePlatformAuth, async (req, res) => {
+    if (req.platformContext.role?.key !== "admin" || !hasPermission(req.platformContext, "platform.billing.manage")) return res.status(403).json({ error: "Somente admin pode cancelar recorr\xEAncia." });
+    if (!req.body?.reason || String(req.body.reason).trim().length < 5) return res.status(400).json({ error: "Informe um motivo de cancelamento." });
+    const db = getSupabaseAdmin();
+    const local = await db.from("billing_subscriptions").select("*, commercial_contracts(*)").eq("id", req.params.id).single();
+    if (local.error || !local.data) return res.status(404).json({ error: "Assinatura n\xE3o encontrada." });
+    try {
+      const provider = new AsaasBillingProvider(getBillingConfig());
+      await provider.cancelSubscription(local.data.provider_subscription_id);
+      const now = (/* @__PURE__ */ new Date()).toISOString();
+      await db.from("billing_subscriptions").update({ status: "cancelled", cancelled_at: now }).eq("id", local.data.id);
+      await db.from("commercial_contracts").update({ status: "cancelled", cancelled_at: now, cancellation_at_period_end: true }).eq("id", local.data.contract_id);
+      await db.from("platform_audit_logs").insert({
+        actor_user_id: req.user.id,
+        action: "billing.subscription.cancelled",
+        entity_type: "billing_subscriptions",
+        entity_id: local.data.id,
+        team_id: local.data.commercial_contracts?.team_id || null,
+        severity: "warning",
+        ...auditContext(req, { result: "success", reason: String(req.body.reason).slice(0, 500), access_until: local.data.commercial_contracts?.ends_on || null })
+      });
+      return res.json({ success: true, accessPolicy: "period_end" });
+    } catch (error) {
+      return res.status(503).json({ error: cleanError(error) });
+    }
+  });
   adminRouter.get("/billing/webhooks", requirePlatformAuth, async (req, res) => {
     if (!hasPermission(req.platformContext, "platform.billing.webhooks.manage")) return res.status(403).json({ error: "Forbidden" });
     const status = typeof req.query.status === "string" ? req.query.status : null;
-    let query = getSupabaseAdmin().from("billing_webhook_events").select("id,provider_event_id,event_type,status,received_at,processed_at,attempts,last_error,correlation_id").order("received_at", { ascending: false }).limit(100);
+    let query = getSupabaseAdmin().from("billing_webhook_events").select("id,provider_event_id,event_type,status,received_at,processed_at,attempts,last_error,correlation_id", { count: "exact" }).order("received_at", { ascending: false });
     if (status) query = query.eq("status", status);
-    const { data, error } = await query;
+    const { page, pageSize, from, to } = parsePagination(req.query);
+    query = query.range(from, to);
+    const { data, error, count } = await query;
     if (error) return res.status(500).json({ error: error.message });
-    return res.json(data);
+    return res.json(req.query.page !== void 0 ? pageResult(data || [], count, page, pageSize) : data);
   });
   adminRouter.post("/billing/webhooks/:id/reprocess", requirePlatformAuth, async (req, res) => {
     if (!hasPermission(req.platformContext, "platform.billing.webhooks.manage")) return res.status(403).json({ error: "Forbidden" });
@@ -1500,55 +1968,30 @@ function createBillingRouters(getSupabaseAdmin, requirePlatformAuth) {
     const { data: eventRow, error } = await db.from("billing_webhook_events").select("*").eq("id", req.params.id).single();
     if (error) return res.status(404).json({ error: "Evento n\xE3o encontrado." });
     try {
-      await db.from("billing_webhook_events").update({ status: "processing", attempts: eventRow.attempts + 1, last_error: null }).eq("id", eventRow.id);
-      const status = await processStoredEvent(db, eventRow);
-      await db.from("billing_webhook_events").update({ status, processed_at: (/* @__PURE__ */ new Date()).toISOString() }).eq("id", eventRow.id);
-      return res.json({ success: true, status });
+      const provider = new AsaasBillingProvider(getBillingConfig());
+      await db.from("billing_webhook_events").update({ status: "received", next_attempt_at: (/* @__PURE__ */ new Date()).toISOString(), locked_at: null, last_error: null }).eq("id", eventRow.id);
+      const results = await processPendingWebhookEvents(db, provider, 1);
+      await db.from("platform_audit_logs").insert({ actor_user_id: req.user.id, action: "billing.webhook.reprocessed", entity_type: "billing_webhook_events", entity_id: eventRow.id, severity: "warning", ...auditContext(req, { result: results[0]?.status || "not_claimed" }) });
+      return res.json({ success: true, status: results[0]?.status || "queued" });
     } catch (reprocessError) {
-      const message = cleanError(reprocessError);
-      await db.from("billing_webhook_events").update({ status: "failed", last_error: message }).eq("id", eventRow.id);
-      return res.status(500).json({ error: message });
+      return res.status(500).json({ error: cleanError(reprocessError) });
+    }
+  });
+  adminRouter.post("/billing/reconcile", requirePlatformAuth, async (req, res) => {
+    if (req.platformContext.role?.key !== "admin" || !hasPermission(req.platformContext, "platform.billing.manage")) return res.status(403).json({ error: "Forbidden" });
+    try {
+      const result = await runBillingReconciliation(getSupabaseAdmin(), req.user.id);
+      await getSupabaseAdmin().from("platform_audit_logs").insert({ actor_user_id: req.user.id, action: "billing.reconciliation.executed", entity_type: "billing_reconciliation_runs", severity: "warning", ...auditContext(req, { result }) });
+      return res.json(result);
+    } catch {
+      return res.status(500).json({ error: "Falha na concilia\xE7\xE3o." });
     }
   });
   internalRouter.get("/reconcile", async (req, res) => {
     if (!webhookTokenMatches(req.header("authorization")?.replace(/^Bearer\s+/i, ""), process.env.CRON_SECRET)) return res.status(401).json({ error: "Unauthorized" });
-    const db = getSupabaseAdmin();
-    const run = await db.from("billing_reconciliation_runs").insert({ provider: "asaas", status: "running" }).select().single();
-    if (run.error) return res.status(500).json({ error: "N\xE3o foi poss\xEDvel iniciar a concilia\xE7\xE3o." });
     try {
-      const config = getBillingConfig();
-      if (!config.enabled) {
-        await db.from("billing_reconciliation_runs").update({ status: "completed", completed_at: (/* @__PURE__ */ new Date()).toISOString(), summary: { skipped: "billing_disabled" } }).eq("id", run.data.id);
-        return res.json({ skipped: true, reason: "billing_disabled" });
-      }
-      const provider = new AsaasBillingProvider(config);
-      const { data: subscriptions, error } = await db.from("billing_subscriptions").select("*").in("status", ["pending", "active", "past_due"]);
-      if (error) throw error;
-      let divergences = 0;
-      let errors = 0;
-      for (const subscription of subscriptions || []) {
-        try {
-          const remote = await provider.getSubscription(subscription.provider_subscription_id);
-          if (remote.status && remote.status !== subscription.provider_status) {
-            divergences += 1;
-            await db.from("billing_subscriptions").update({ provider_status: remote.status }).eq("id", subscription.id);
-          }
-        } catch {
-          errors += 1;
-        }
-      }
-      const now = (/* @__PURE__ */ new Date()).toISOString();
-      const { data: expiredGrace } = await db.from("tenant_billing_state").select("tenant_id,contract_id,access_status").eq("access_status", "grace").lt("grace_ends_at", now);
-      for (const state of expiredGrace || []) {
-        await db.from("tenant_billing_state").update({ access_status: "suspended", suspended_at: now, suspension_reason: "grace_expired" }).eq("tenant_id", state.tenant_id);
-        await db.from("tenants").update({ status: "suspended" }).eq("id", state.tenant_id);
-        await db.from("commercial_contracts").update({ status: "suspended" }).eq("id", state.contract_id);
-      }
-      const status = errors ? "completed_with_errors" : "completed";
-      await db.from("billing_reconciliation_runs").update({ status, completed_at: now, checked_count: subscriptions?.length || 0, divergence_count: divergences, corrected_count: divergences, error_count: errors, summary: { graceSuspensions: expiredGrace?.length || 0 } }).eq("id", run.data.id);
-      return res.json({ status, checked: subscriptions?.length || 0, divergences, errors, graceSuspensions: expiredGrace?.length || 0 });
-    } catch (error) {
-      await db.from("billing_reconciliation_runs").update({ status: "failed", completed_at: (/* @__PURE__ */ new Date()).toISOString(), error_count: 1, summary: { error: cleanError(error) } }).eq("id", run.data.id);
+      return res.json(await runBillingReconciliation(getSupabaseAdmin()));
+    } catch {
       return res.status(500).json({ error: "Falha na concilia\xE7\xE3o." });
     }
   });
@@ -1559,12 +2002,19 @@ function createBillingRouters(getSupabaseAdmin, requirePlatformAuth) {
 import { createClient } from "@supabase/supabase-js";
 import dotenv from "dotenv";
 import cors from "cors";
+import { randomUUID as randomUUID2 } from "node:crypto";
 dotenv.config({ path: [".env.local", ".env"] });
 async function createApp() {
   const app = express();
   app.disable("x-powered-by");
   app.use(express.json({ limit: "512kb" }));
   app.use(cors());
+  app.use((req, res, next) => {
+    const requestId = req.header("x-request-id") || randomUUID2();
+    req.requestId = requestId;
+    res.setHeader("x-request-id", requestId);
+    next();
+  });
   let _supabaseAdmin = null;
   const getSupabaseAdmin = () => {
     if (!_supabaseAdmin) {
@@ -1798,29 +2248,71 @@ async function createApp() {
   app.get("/api/admin/stats", requirePlatformAuth, async (req, res) => {
     try {
       const { platformContext } = req;
-      let clientsQuery = getSupabaseAdmin().from("platform_client_assignments").select("*", { count: "exact", head: true });
-      let leadsQuery = getSupabaseAdmin().from("platform_lead_assignments").select("*, marketing_leads!inner(*)", { count: "exact", head: true }).eq("marketing_leads.status", "new");
-      let demosQuery = getSupabaseAdmin().from("commercial_demos").select("*", { count: "exact", head: true }).in("status", ["requested", "scheduled", "approved", "active"]);
+      const db = getSupabaseAdmin();
+      const [leadAssignments, clientAssignments] = await Promise.all([
+        db.from("platform_lead_assignments").select("*"),
+        db.from("platform_client_assignments").select("*").eq("assignment_type", "commercial")
+      ]);
+      const scopedLeads = platformContext.role?.key === "admin" ? leadAssignments.data || [] : (leadAssignments.data || []).filter((item) => canReadAssignedResource(platformContext, item, "member_lead_visibility"));
+      const scopedClients = platformContext.role?.key === "admin" ? clientAssignments.data || [] : (clientAssignments.data || []).filter((item) => canReadAssignedResource(platformContext, item, "member_client_visibility"));
+      const leadIds = [...new Set(scopedLeads.map((item) => item.lead_id))];
+      const tenantIds = [...new Set(scopedClients.map((item) => item.tenant_id))];
+      let leadsQuery = db.from("marketing_leads").select("id,status");
+      let demosQuery = db.from("commercial_demos").select("id,status,lead_id");
+      let proposalsQuery = db.from("commercial_proposals").select("id,status,lead_id,amount_cents");
+      let contractsQuery = db.from("commercial_contracts").select("id,status,tenant_id,amount_cents,cycle,team_id,owner_platform_member_id");
+      let tenantsQuery = db.from("tenants").select("id,status,onboarding_status");
       if (platformContext.role?.key !== "admin") {
-        const teamIds = platformContext.teams.map((t) => t.id);
-        if (teamIds.length === 0) {
-          return res.json({ clients: 0, leads: 0, demos: 0, teams: 0 });
+        if (!leadIds.length && !tenantIds.length) return res.json({ clients: 0, leads: 0, demos: 0, teams: platformContext.teams.length, proposals: 0, contracts: 0, conversionRate: 0, onboarding: 0, subscriptions: {}, overdue: 0, mrrCents: 0, alerts: [], leadsByStatus: {}, recentActivity: [] });
+        if (leadIds.length) {
+          leadsQuery = leadsQuery.in("id", leadIds);
+          demosQuery = demosQuery.in("lead_id", leadIds);
+          proposalsQuery = proposalsQuery.in("lead_id", leadIds);
+        } else {
+          leadsQuery = leadsQuery.eq("id", randomUUID2());
+          demosQuery = demosQuery.eq("id", randomUUID2());
+          proposalsQuery = proposalsQuery.eq("id", randomUUID2());
         }
-        clientsQuery = clientsQuery.in("team_id", teamIds);
-        leadsQuery = leadsQuery.in("team_id", teamIds);
-        demosQuery = demosQuery.in("team_id", teamIds);
+        if (tenantIds.length) tenantsQuery = tenantsQuery.in("id", tenantIds);
+        else tenantsQuery = tenantsQuery.eq("id", randomUUID2());
       }
-      const [{ count: clientsCount }, { count: leadsCount }, { count: demosCount }, { count: teamsCount }] = await Promise.all([
-        clientsQuery,
+      const [leads, demos, proposals, contractsResult, tenants, teams, subscriptions, overdue, recentActivity] = await Promise.all([
         leadsQuery,
         demosQuery,
-        getSupabaseAdmin().from("platform_teams").select("*", { count: "exact", head: true }).eq("status", "active")
+        proposalsQuery,
+        contractsQuery,
+        tenantsQuery,
+        db.from("platform_teams").select("*", { count: "exact", head: true }).eq("status", "active"),
+        db.from("billing_subscriptions").select("status,amount_cents,cycle,contract_id"),
+        db.from("billing_payments").select("id,contract_id,status").eq("status", "overdue"),
+        db.from("commercial_activities").select("id,subject,activity_type,status,created_at,team_id,owner_platform_member_id").order("created_at", { ascending: false }).limit(10)
       ]);
+      const contracts = platformContext.role?.key === "admin" ? contractsResult.data || [] : (contractsResult.data || []).filter((item) => canReadAssignedResource(platformContext, item, "member_client_visibility"));
+      const contractIds = new Set(contracts.map((item) => item.id));
+      const scopedSubscriptions = (subscriptions.data || []).filter((item) => platformContext.role?.key === "admin" || contractIds.has(item.contract_id));
+      const scopedOverdue = (overdue.data || []).filter((item) => platformContext.role?.key === "admin" || contractIds.has(item.contract_id));
+      const cycleDivisor = { weekly: 52 / 12, biweekly: 26 / 12, monthly: 1, quarterly: 1 / 3, semiannual: 1 / 6, yearly: 1 / 12 };
+      const activeSubscriptions = scopedSubscriptions.filter((item) => item.status === "active");
+      const mrrCents = Math.round(activeSubscriptions.reduce((sum, item) => sum + Number(item.amount_cents || 0) * (cycleDivisor[item.cycle] || 0), 0));
+      const leadsByStatus = (leads.data || []).reduce((acc, item) => ({ ...acc, [item.status]: (acc[item.status] || 0) + 1 }), {});
+      const subscriptionStates = scopedSubscriptions.reduce((acc, item) => ({ ...acc, [item.status]: (acc[item.status] || 0) + 1 }), {});
+      const scopedRecent = platformContext.role?.key === "admin" ? recentActivity.data || [] : (recentActivity.data || []).filter((item) => canReadAssignedResource(platformContext, item, "member_lead_visibility"));
+      const alerts = [scopedOverdue.length ? { type: "overdue", count: scopedOverdue.length, label: "Pagamentos vencidos" } : null, subscriptionStates.past_due ? { type: "subscription", count: subscriptionStates.past_due, label: "Assinaturas em atraso" } : null].filter(Boolean);
       res.json({
-        clients: clientsCount || 0,
-        leads: leadsCount || 0,
-        demos: demosCount || 0,
-        teams: platformContext.role?.key === "admin" ? teamsCount || 0 : platformContext.teams.length
+        clients: tenants.data?.length || 0,
+        leads: leads.data?.length || 0,
+        demos: demos.data?.length || 0,
+        teams: platformContext.role?.key === "admin" ? teams.count || 0 : platformContext.teams.length,
+        proposals: proposals.data?.length || 0,
+        contracts: contracts.length,
+        conversionRate: leads.data?.length ? Math.round(contracts.length / leads.data.length * 1e3) / 10 : 0,
+        onboarding: (tenants.data || []).filter((item) => item.onboarding_status === "in_progress").length,
+        subscriptions: subscriptionStates,
+        overdue: scopedOverdue.length,
+        mrrCents,
+        alerts,
+        leadsByStatus,
+        recentActivity: scopedRecent
       });
     } catch (e) {
       res.status(500).json({ error: e.message });

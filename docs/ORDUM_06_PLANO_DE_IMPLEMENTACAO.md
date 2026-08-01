@@ -3,17 +3,17 @@
 ## Concluído nesta entrega
 
 - auditoria do repositório, build, Auth, API, deploy e banco real;
-- inicialização do diretório Supabase e seis migrations aplicadas/versionadas;
+- inicialização do diretório Supabase e nove migrations aplicadas/versionadas;
 - modelo comercial, planos e billing com RLS/grants restritos;
 - contrato `BillingProvider` e adapter Asaas Sandbox;
-- webhook autenticado, persistido e idempotente;
+- webhook autenticado, limitado, persistido, idempotente e processado de forma assíncrona após resposta rápida;
 - normalização de pagamentos, atraso, carência, revisão e reativação;
 - provisionamento transacional depois de pagamento confirmado;
-- conciliação diária autenticada por Vercel Cron;
-- telas administrativas de demos, contratos, planos e financeiro;
+- conciliação diária autenticada por Vercel Cron, com recuperação paginada de cobranças e divergências duráveis;
+- telas administrativas de dashboard, leads, demos, clientes, equipes/alçadas, equipe/sessões, contratos, planos, financeiro, auditoria, integrações, desempenho e deploy;
 - correções de escopo global/equipe e bloqueio de autoelevação;
 - remoção de rota temporária que expunha e-mails;
-- testes de autorização, configuração e máquina de estados;
+- testes de autorização, alçada, paginação, configuração, adapter Asaas, fila e máquina de estados, além de verificações SQL de RLS/grants;
 - documentação sincronizada.
 
 ## Condicionado à configuração externa

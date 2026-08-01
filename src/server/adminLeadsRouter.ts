@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import { canReadAssignedResource } from './authorization';
+import { auditContext, pageResult, parsePagination } from './operational';
 
 export function createAdminLeadsRouter(getSupabaseAdmin: any, requirePlatformAuth: any) {
   const router = Router();
@@ -9,9 +10,35 @@ export function createAdminLeadsRouter(getSupabaseAdmin: any, requirePlatformAut
     try {
       const { platformContext } = req;
       
-      let query = getSupabaseAdmin().from('marketing_leads').select('*, platform_lead_assignments(*, platform_teams(name), platform_members(user_id, platform_roles(key, name)))').order('created_at', { ascending: false });
-      
-      const { data, error } = await query;
+      const { page, pageSize, from, to } = parsePagination(req.query);
+      const paginated = req.query.page !== undefined;
+      let visibleLeadIds: string[] | null = null;
+      if (platformContext.role?.key !== 'admin') {
+        const visibleTeams = platformContext.teams
+          .filter((team: any) => platformContext.managedTeams.some((managed: any) => managed.id === team.id) || ['team', 'all'].includes(team.member_lead_visibility))
+          .map((team: any) => team.id);
+        let assignmentQuery = getSupabaseAdmin().from('platform_lead_assignments').select('lead_id');
+        const clauses = [`owner_platform_member_id.eq.${platformContext.platformMember.id}`];
+        if (visibleTeams.length) clauses.push(`team_id.in.(${visibleTeams.join(',')})`);
+        assignmentQuery = assignmentQuery.or(clauses.join(','));
+        const assignmentResult = await assignmentQuery;
+        if (assignmentResult.error) throw assignmentResult.error;
+        visibleLeadIds = [...new Set<string>((assignmentResult.data || []).map((item: any) => String(item.lead_id)))];
+        if (!visibleLeadIds.length) return res.json(paginated ? pageResult([], 0, page, pageSize) : []);
+      }
+
+      let query = getSupabaseAdmin().from('marketing_leads')
+        .select('*, platform_lead_assignments(*, platform_teams(name,allow_self_claim), platform_members(user_id, platform_roles(key, name))), commercial_activities(id,activity_type,subject,status,scheduled_at,result,next_action,next_action_at,created_at), commercial_demos(id,status,starts_at,expires_at,result,next_action,next_action_at)', { count: 'exact' })
+        .order('created_at', { ascending: false });
+      if (visibleLeadIds) query = query.in('id', visibleLeadIds);
+      if (typeof req.query.status === 'string' && req.query.status) query = query.eq('status', req.query.status);
+      if (typeof req.query.priority === 'string' && req.query.priority) query = query.eq('priority', req.query.priority);
+      if (typeof req.query.search === 'string' && req.query.search.trim()) {
+        const term = req.query.search.trim().replace(/[%(),]/g, '').slice(0, 100);
+        query = query.or(`name.ilike.%${term}%,email.ilike.%${term}%,company.ilike.%${term}%`);
+      }
+      if (paginated) query = query.range(from, to);
+      const { data, error, count } = await query;
       if (error) throw error;
       
       // Get users to attach names
@@ -27,12 +54,7 @@ export function createAdminLeadsRouter(getSupabaseAdmin: any, requirePlatformAut
         return { ...l, assignment, owner };
       });
       
-      // Filter based on scope
-      if (platformContext.role?.key !== 'admin') {
-        leads = leads.filter((lead: any) => canReadAssignedResource(platformContext, lead.assignment, 'member_lead_visibility'));
-      }
-      
-      res.json(leads);
+      res.json(paginated ? pageResult(leads, count, page, pageSize) : leads);
     } catch (e: any) {
       res.status(500).json({ error: e.message });
     }
@@ -50,6 +72,15 @@ export function createAdminLeadsRouter(getSupabaseAdmin: any, requirePlatformAut
         // Can a manager assign? Yes, if it's within their team.
         const isManager = platformContext.managedTeams.some((t: any) => t.id === team_id);
         if (!isManager) return res.status(403).json({ error: 'Forbidden' });
+        const current = await getSupabaseAdmin().from('platform_lead_assignments').select('*').eq('lead_id', leadId).maybeSingle();
+        if (!current.data || !platformContext.managedTeams.some((team: any) => team.id === current.data.team_id)) {
+          return res.status(403).json({ error: 'Lead fora do escopo gerenciado.' });
+        }
+      }
+      if (owner_platform_member_id) {
+        const target = await getSupabaseAdmin().from('platform_team_members').select('platform_member_id')
+          .eq('team_id', team_id).eq('platform_member_id', owner_platform_member_id).eq('status', 'active').maybeSingle();
+        if (!target.data) return res.status(400).json({ error: 'O responsável precisa ser membro ativo da equipe.' });
       }
       
       // Use RPC for safety or direct insert if we are admin
@@ -72,12 +103,39 @@ export function createAdminLeadsRouter(getSupabaseAdmin: any, requirePlatformAut
         entity_type: 'platform_lead_assignments',
         entity_id: leadId,
         severity: 'info',
-        team_id: team_id
+        team_id: team_id,
+        ...auditContext(req, { result: 'success', after: { team_id, owner_platform_member_id: owner_platform_member_id || null } })
       });
       
       res.json(data);
     } catch (e: any) {
       res.status(500).json({ error: e.message });
+    }
+  });
+
+  router.patch('/:id', requirePlatformAuth, async (req: any, res: any) => {
+    try {
+      const db = getSupabaseAdmin();
+      const { data: lead, error: leadError } = await db.from('marketing_leads')
+        .select('*, platform_lead_assignments(*)').eq('id', req.params.id).single();
+      if (leadError || !lead) return res.status(404).json({ error: 'Lead não encontrado.' });
+      const assignment = lead.platform_lead_assignments?.[0];
+      if (req.platformContext.role?.key !== 'admin' && !canReadAssignedResource(req.platformContext, assignment, 'member_lead_visibility')) {
+        return res.status(403).json({ error: 'Lead fora do seu escopo.' });
+      }
+      const allowed = ['status', 'priority'];
+      const updates = Object.fromEntries(Object.entries(req.body).filter(([key]) => allowed.includes(key)));
+      if (!Object.keys(updates).length) return res.status(400).json({ error: 'Nenhum campo permitido.' });
+      const saved = await db.from('marketing_leads').update(updates).eq('id', lead.id).select().single();
+      if (saved.error) return res.status(400).json({ error: saved.error.message });
+      await db.from('platform_audit_logs').insert({
+        actor_user_id: req.user.id, action: 'lead.updated', entity_type: 'marketing_leads', entity_id: lead.id,
+        team_id: assignment?.team_id || null, severity: 'info',
+        ...auditContext(req, { result: 'success', before: { status: lead.status, priority: lead.priority }, after: updates }),
+      });
+      return res.json(saved.data);
+    } catch (error: any) {
+      return res.status(500).json({ error: error.message });
     }
   });
 

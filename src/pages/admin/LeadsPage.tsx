@@ -1,154 +1,44 @@
-import React, { useState, useEffect } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
+import { Search } from 'lucide-react';
 import { useAuth } from '../../core/auth/AuthProvider';
-import { Search, Plus, Filter, LayoutGrid, CheckCircle, Clock, Check, X, ShieldAlert } from 'lucide-react';
 import { AssignLeadModal } from '../../components/admin/AssignLeadModal';
 
 export function LeadsPage() {
-  const { session, user } = useAuth();
+  const { session } = useAuth();
   const [leads, setLeads] = useState<any[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
+  const [pagination, setPagination] = useState({ page: 1, totalPages: 1, total: 0 });
+  const [search, setSearch] = useState(''); const [status, setStatus] = useState(''); const [priority, setPriority] = useState('');
+  const [loading, setLoading] = useState(true); const [error, setError] = useState<string | null>(null); const [success, setSuccess] = useState<string | null>(null);
   const [assignModalLead, setAssignModalLead] = useState<any>(null);
 
-  async function loadLeads() {
-    if (!session) return;
-    setIsLoading(true);
-    try {
-      const response = await fetch('/api/admin/leads', {
-        headers: { 'Authorization': `Bearer ${session.access_token}` }
-      });
-      if (response.ok) {
-        const data = await response.json();
-        setLeads(data);
-      }
-    } catch (e) {
-      console.error(e);
-    } finally {
-      setIsLoading(false);
-    }
-  }
-
-  useEffect(() => {
-    loadLeads();
+  const api = useCallback(async (path: string, init?: RequestInit) => {
+    const response = await fetch(path, { ...init, headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session?.access_token}`, ...init?.headers } });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(data.error || 'Falha na requisição.');
+    return data;
   }, [session]);
 
-  const handleClaim = async (leadId: string) => {
+  const load = useCallback(async (page = 1) => {
+    if (!session) return; setLoading(true); setError(null);
     try {
-      const response = await fetch(`/api/admin/leads/${leadId}/claim`, {
-        method: 'POST',
-        headers: { 'Authorization': `Bearer ${session?.access_token}` }
-      });
-      if (response.ok) {
-        alert("Lead assumido com sucesso!");
-        loadLeads();
-      } else {
-        const err = await response.json();
-        alert(err.error || "Erro ao assumir lead");
-      }
-    } catch (e: any) {
-      alert("Erro de comunicação");
-    }
-  };
+      const params = new URLSearchParams({ page: String(page), pageSize: '25' });
+      if (search) params.set('search', search); if (status) params.set('status', status); if (priority) params.set('priority', priority);
+      const data = await api(`/api/admin/leads?${params}`); setLeads(data.items); setPagination(data.pagination);
+    } catch (e) { setError(e instanceof Error ? e.message : 'Falha ao carregar leads.'); } finally { setLoading(false); }
+  }, [api, priority, search, session, status]);
+  useEffect(() => { const timer = setTimeout(() => load(1), 250); return () => clearTimeout(timer); }, [load]);
 
-  return (
-    <div className="max-w-7xl mx-auto">
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-8">
-        <div>
-          <h1 className="text-2xl sm:text-3xl font-bold text-[#202322] tracking-tight">Leads Comerciais</h1>
-          <p className="text-[#626866] mt-1">Gerencie leads, atribuições e self-claim.</p>
-        </div>
-      </div>
+  async function mutate(path: string, body?: unknown) { setError(null); setSuccess(null); try { await api(path, { method: 'POST', body: body ? JSON.stringify(body) : undefined }); setSuccess('Operação concluída.'); await load(pagination.page); } catch (e) { setError(e instanceof Error ? e.message : 'Falha na operação.'); } }
+  async function updateLead(id: string, updates: unknown) { setError(null); try { await api(`/api/admin/leads/${id}`, { method: 'PATCH', body: JSON.stringify(updates) }); setSuccess('Lead atualizado.'); await load(pagination.page); } catch (e) { setError(e instanceof Error ? e.message : 'Falha ao atualizar.'); } }
+  async function addActivity(leadId: string) { const subject = window.prompt('Assunto da atividade'); if (!subject) return; await mutate(`/api/admin/commercial/leads/${leadId}/activities`, { activity_type: 'note', subject, status: 'completed' }); }
+  async function releaseDemo(leadId: string) { const keys = window.prompt('Chaves das soluções do trial, separadas por vírgula (ex.: integrity,people)'); if (!keys) return; if (!window.confirm('Liberar trial de 14 dias para este lead?')) return; await mutate('/api/admin/tenants/release-demo', { tenantId: leadId, solutionIds: keys.split(',').map((key) => key.trim()).filter(Boolean) }); }
 
-      <div className="bg-white border border-[#DDD8CF]/40 rounded-2xl shadow-sm overflow-hidden">
-        {isLoading ? (
-          <div className="p-8 text-center text-gray-500">Carregando leads...</div>
-        ) : leads.length === 0 ? (
-          <div className="p-8 text-center text-gray-500">Nenhum lead encontrado para seu escopo.</div>
-        ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-left border-collapse">
-              <thead>
-                <tr className="border-b border-[#DDD8CF]/40 bg-[#F6F5F2]/50 text-xs font-semibold text-gray-500 uppercase tracking-wider">
-                  <th className="p-4 pl-6">Nome / Empresa</th>
-                  <th className="p-4">Email / Origem</th>
-                  <th className="p-4">Equipe</th>
-                  <th className="p-4">Responsável</th>
-                  <th className="p-4">Status</th>
-                  <th className="p-4">Ações</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-[#DDD8CF]/40">
-                {leads.map(lead => {
-                  const assignment = lead.assignment;
-                  const canClaim = assignment && !assignment.owner_platform_member_id && assignment.platform_teams?.allow_self_claim;
-                  
-                  return (
-                    <tr key={lead.id} className="hover:bg-gray-50/50 transition-colors group">
-                      <td className="p-4 pl-6">
-                        <div className="font-bold text-[#202322]">{lead.name}</div>
-                        <div className="text-xs text-[#626866]">{lead.company_name || 'Sem empresa'}</div>
-                      </td>
-                      <td className="p-4">
-                        <div className="text-sm text-[#202322]">{lead.email}</div>
-                        <div className="text-xs text-[#626866]">{lead.source}</div>
-                      </td>
-                      <td className="p-4">
-                        {assignment ? (
-                          <span className="inline-flex items-center px-2 py-1 rounded text-xs font-medium bg-gray-100 text-gray-700">
-                            {assignment.platform_teams?.name || 'Equipe Desconhecida'}
-                          </span>
-                        ) : (
-                          <span className="text-xs text-gray-400 italic">Não atribuído</span>
-                        )}
-                      </td>
-                      <td className="p-4">
-                        {lead.owner ? (
-                          <div className="text-sm font-medium text-[#202322]">{lead.owner.name || lead.owner.email}</div>
-                        ) : (
-                          <span className="text-xs text-orange-500 font-medium">Disponível</span>
-                        )}
-                      </td>
-                      <td className="p-4">
-                        <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider ${
-                          lead.status === 'approved' ? 'bg-green-100 text-green-700' : 'bg-blue-100 text-blue-700'
-                        }`}>
-                          {lead.status === 'approved' ? <CheckCircle className="w-3 h-3" /> : <Clock className="w-3 h-3" />}
-                          {lead.status === 'approved' ? 'Demo Liberada' : 'Novo'}
-                        </span>
-                      </td>
-                      <td className="p-4 pr-6 flex items-center gap-2">
-                        {canClaim && (
-                          <button 
-                            onClick={() => handleClaim(lead.id)}
-                            className="px-3 py-1.5 bg-[#B66E45] text-white text-xs font-bold rounded-lg hover:bg-[#a05e38]"
-                          >
-                            Assumir
-                          </button>
-                        )}
-                        <button 
-                          onClick={() => setAssignModalLead(lead)}
-                          className="px-3 py-1.5 bg-gray-100 text-gray-700 text-xs font-bold rounded-lg hover:bg-gray-200"
-                        >
-                          Atribuir
-                        </button>
-                      </td>
-                    </tr>
-                  )
-                })}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </div>
-
-      {assignModalLead && (
-        <AssignLeadModal 
-          isOpen={true} 
-          onClose={() => setAssignModalLead(null)}
-          onSuccess={() => { setAssignModalLead(null); loadLeads(); }}
-          leadId={assignModalLead.id}
-          currentAssignment={assignModalLead.assignment}
-        />
-      )}
-    </div>
-  );
+  return <div className="max-w-7xl mx-auto space-y-5">
+    <div><h1 className="text-3xl font-bold text-[#202322]">Leads comerciais</h1><p className="text-sm text-[#626866] mt-1">Funil, atribuições, histórico e demonstrações no escopo autorizado.</p></div>
+    {error && <div role="alert" className="rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-700">{error}</div>}{success && <div role="status" className="rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-700">{success}</div>}
+    <div className="grid gap-3 sm:grid-cols-3 bg-white rounded-2xl border p-4"><label className="relative"><Search className="absolute left-3 top-3 w-4 h-4 text-gray-400"/><input aria-label="Buscar leads" value={search} onChange={e=>setSearch(e.target.value)} placeholder="Nome, e-mail ou empresa" className="w-full rounded-xl border py-2.5 pl-9 pr-3 text-sm"/></label><select aria-label="Filtrar status" value={status} onChange={e=>setStatus(e.target.value)} className="rounded-xl border px-3 text-sm"><option value="">Todos os status</option>{['new','contacted','qualified','approved','rejected','converted'].map(item=><option key={item}>{item}</option>)}</select><select aria-label="Filtrar prioridade" value={priority} onChange={e=>setPriority(e.target.value)} className="rounded-xl border px-3 text-sm"><option value="">Todas as prioridades</option>{['low','normal','high','urgent'].map(item=><option key={item}>{item}</option>)}</select></div>
+    <div className="bg-white border rounded-2xl overflow-hidden">{loading?<div className="p-10 text-center text-sm">Carregando...</div>:!leads.length?<div className="p-10 text-center text-sm text-gray-500">Nenhum lead encontrado.</div>:<div className="overflow-x-auto"><table className="w-full text-sm"><thead className="bg-[#F6F5F2] text-left"><tr><th className="p-3">Contato</th><th className="p-3">Escopo</th><th className="p-3">Funil</th><th className="p-3">Prioridade</th><th className="p-3">Histórico</th><th className="p-3">Ações</th></tr></thead><tbody>{leads.map(lead=>{const assignment=lead.assignment;const canClaim=assignment&&!assignment.owner_platform_member_id&&assignment.platform_teams?.allow_self_claim;return <tr key={lead.id} className="border-t align-top"><td className="p-3"><strong>{lead.name}</strong><div className="text-gray-500">{lead.company}</div><div className="text-xs">{lead.email} · {lead.source}</div></td><td className="p-3">{assignment?.platform_teams?.name||'Não atribuído'}<div className="text-xs text-gray-500">{lead.owner?.name||lead.owner?.email||'Sem responsável'}</div></td><td className="p-3"><select aria-label={`Status de ${lead.name}`} value={lead.status} onChange={e=>updateLead(lead.id,{status:e.target.value})} className="rounded-lg border p-1.5">{['new','contacted','qualified','approved','rejected','converted'].map(item=><option key={item}>{item}</option>)}</select></td><td className="p-3"><select aria-label={`Prioridade de ${lead.name}`} value={lead.priority||'normal'} onChange={e=>updateLead(lead.id,{priority:e.target.value})} className="rounded-lg border p-1.5">{['low','normal','high','urgent'].map(item=><option key={item}>{item}</option>)}</select></td><td className="p-3 text-xs text-gray-600">{lead.commercial_activities?.length||0} atividades<br/>{lead.commercial_demos?.length||0} demos</td><td className="p-3"><div className="flex flex-wrap gap-2">{canClaim&&<button onClick={()=>mutate(`/api/admin/leads/${lead.id}/claim`)} className="rounded-lg bg-[#B66E45] px-2 py-1 text-xs text-white">Assumir</button>}<button onClick={()=>setAssignModalLead(lead)} className="rounded-lg bg-gray-100 px-2 py-1 text-xs">Atribuir</button><button onClick={()=>addActivity(lead.id)} className="rounded-lg bg-gray-100 px-2 py-1 text-xs">Atividade</button><button onClick={()=>releaseDemo(lead.id)} className="rounded-lg bg-gray-100 px-2 py-1 text-xs">Liberar demo</button></div></td></tr>})}</tbody></table></div>}</div>
+    <div className="flex justify-between items-center text-sm"><span>{pagination.total} registros</span><div className="flex gap-2"><button disabled={pagination.page<=1} onClick={()=>load(pagination.page-1)} className="rounded-lg border px-3 py-1.5 disabled:opacity-40">Anterior</button><span className="px-2 py-1.5">{pagination.page}/{Math.max(1,pagination.totalPages)}</span><button disabled={pagination.page>=pagination.totalPages} onClick={()=>load(pagination.page+1)} className="rounded-lg border px-3 py-1.5 disabled:opacity-40">Próxima</button></div></div>
+    {assignModalLead&&<AssignLeadModal isOpen onClose={()=>setAssignModalLead(null)} onSuccess={()=>{setAssignModalLead(null);load(pagination.page);}} leadId={assignModalLead.id} currentAssignment={assignModalLead.assignment}/>}
+  </div>;
 }

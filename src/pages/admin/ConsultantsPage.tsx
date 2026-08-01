@@ -254,6 +254,13 @@ export function ConsultantsPage() {
     }
   };
 
+  const handleTerminateSessions = async (memberId: string) => {
+    if (!session || !window.confirm('Encerrar todas as sessões renováveis deste usuário?')) return;
+    setActionLoadingId(memberId); setActionError('');
+    try { const res=await fetch(`/api/admin/staff/${memberId}/terminate-sessions`,{method:'POST',headers:{Authorization:`Bearer ${session.access_token}`}});const data=await res.json();if(!res.ok)throw new Error(data.error||'Falha ao encerrar sessões.');setActionSuccess('Sessões encerradas. Tokens de acesso atuais expiram no prazo configurado pelo Supabase.'); }
+    catch(err:any){setActionError(err.message||'Falha ao encerrar sessões.');}finally{setActionLoadingId(null);}
+  };
+
   const filteredMembers = members.filter(m => {
     const search = searchTerm.toLowerCase();
     const name = m.user?.user_metadata?.full_name?.toLowerCase() || '';
@@ -447,6 +454,7 @@ export function ConsultantsPage() {
                         {/* Actions */}
                         <td className="px-6 py-4 text-right">
                           <div className="flex items-center justify-end gap-2">
+                            {platformRole?.key==='admin'&&<button onClick={()=>handleTerminateSessions(member.id)} disabled={actionLoadingId===member.id} className="px-2.5 py-1 text-[11px] font-bold bg-amber-50 text-amber-800 rounded-lg" title="Encerrar sessões">Sessões</button>}
                             <button
                               onClick={() => handleOpenEditModal(member)}
                               className="p-1.5 text-gray-500 hover:text-[#202322] hover:bg-gray-100 rounded-lg transition-colors"

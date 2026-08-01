@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Search, Filter, Building, ArrowRight } from 'lucide-react';
+import { Search, ArrowRight } from 'lucide-react';
 import { Button } from '../../components/ui/Button';
 import { useAuth } from '../../core/auth/AuthProvider';
 
@@ -8,19 +8,21 @@ export function CompaniesPage() {
   const [tenants, setTenants] = useState<any[]>([]);
   const [searchTerm, setSearchTerm] = useState('');
   const [isLoading, setIsLoading] = useState(true);
+  const [page,setPage]=useState(1); const [totalPages,setTotalPages]=useState(1); const [error,setError]=useState<string|null>(null);
 
   useEffect(() => {
     async function loadTenants() {
       if (!session) return;
       try {
-        const response = await fetch('/api/admin/clients', {
+        const params=new URLSearchParams({page:String(page),pageSize:'25'});if(searchTerm)params.set('search',searchTerm);
+        const response = await fetch(`/api/admin/clients?${params}`, {
           headers: { 'Authorization': `Bearer ${session.access_token}` }
         });
         if (response.ok) {
           const data = await response.json();
-          // Filter out leads/demos, only show active/suspended tenants
-          const clients = data.filter((t: any) => t.status === 'active' || t.status === 'suspended');
-          setTenants(clients);
+          setTenants(data.items);setTotalPages(Math.max(1,data.pagination.totalPages));setError(null);
+        } else {
+          const body=await response.json().catch(()=>({}));setError(body.error||'Falha ao carregar clientes.');
         }
       } catch (e) {
         console.error(e);
@@ -29,12 +31,7 @@ export function CompaniesPage() {
       }
     }
     loadTenants();
-  }, [session]);
-
-  const filteredTenants = tenants.filter(t => 
-    t.name?.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    t.slug?.toLowerCase().includes(searchTerm.toLowerCase())
-  );
+  }, [session,page,searchTerm]);
 
   return (
     <div className="max-w-7xl mx-auto space-y-6">
@@ -44,6 +41,7 @@ export function CompaniesPage() {
           <p className="text-[#626866] mt-1 text-sm">Gerencie os clientes ativos da ORDUM.</p>
         </div>
       </div>
+      {error&&<div role="alert" className="rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-700">{error}</div>}
 
       <div className="bg-white rounded-2xl border border-[#DDD8CF]/60 shadow-sm overflow-hidden">
         <div className="p-4 border-b border-[#DDD8CF]/40 flex flex-col sm:flex-row gap-4 justify-between items-center bg-gray-50/50">
@@ -53,7 +51,7 @@ export function CompaniesPage() {
               type="text" 
               placeholder="Buscar por nome ou slug..." 
               value={searchTerm}
-              onChange={e => setSearchTerm(e.target.value)}
+              onChange={e => {setPage(1);setSearchTerm(e.target.value)}}
               className="w-full pl-9 pr-4 py-2 text-sm border border-[#DDD8CF] rounded-lg focus:outline-none focus:border-[#B66E45] focus:ring-1 focus:ring-[#B66E45]"
             />
           </div>
@@ -73,14 +71,14 @@ export function CompaniesPage() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-[#DDD8CF]/30">
-                {filteredTenants.length === 0 ? (
+                {tenants.length === 0 ? (
                   <tr>
                     <td colSpan={4} className="px-6 py-8 text-center text-gray-500 text-sm">
                       Nenhum cliente encontrado.
                     </td>
                   </tr>
                 ) : (
-                  filteredTenants.map(tenant => (
+                  tenants.map(tenant => (
                     <tr key={tenant.id} className="hover:bg-gray-50/50 transition-colors group">
                       <td className="px-6 py-4">
                         <div className="flex items-center gap-3">
@@ -128,6 +126,7 @@ export function CompaniesPage() {
           </div>
         )}
       </div>
+      <div className="flex justify-end gap-2"><button disabled={page<=1} onClick={()=>setPage(page-1)} className="border rounded-lg px-3 py-1 disabled:opacity-40">Anterior</button><span className="text-sm p-1">{page}/{totalPages}</span><button disabled={page>=totalPages} onClick={()=>setPage(page+1)} className="border rounded-lg px-3 py-1 disabled:opacity-40">Próxima</button></div>
     </div>
   );
 }

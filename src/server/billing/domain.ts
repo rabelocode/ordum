@@ -15,7 +15,7 @@ export const SUPPORTED_ASAAS_EVENTS = new Set([
   'PAYMENT_PARTIALLY_REFUNDED',
   'PAYMENT_CHARGEBACK_REQUESTED',
   'PAYMENT_CHARGEBACK_DISPUTE',
-  'AWAITING_CHARGEBACK_REVERSAL',
+  'PAYMENT_AWAITING_CHARGEBACK_REVERSAL',
   'PAYMENT_DUNNING_RECEIVED',
   'PAYMENT_DUNNING_REQUESTED',
   'SUBSCRIPTION_CREATED',
@@ -37,7 +37,7 @@ const PAYMENT_STATUS: Record<string, string> = {
   PAYMENT_PARTIALLY_REFUNDED: 'partially_refunded',
   PAYMENT_CHARGEBACK_REQUESTED: 'chargeback',
   PAYMENT_CHARGEBACK_DISPUTE: 'chargeback',
-  AWAITING_CHARGEBACK_REVERSAL: 'chargeback',
+  PAYMENT_AWAITING_CHARGEBACK_REVERSAL: 'chargeback',
   PAYMENT_DUNNING_RECEIVED: 'received',
   PAYMENT_DUNNING_REQUESTED: 'overdue',
 };
@@ -67,7 +67,7 @@ export function preserveSettledPaymentStatus(existingStatus: string | null | und
 export function accessTransitionForEvent(eventType: string): AccessStatus | null {
   if (eventType === 'PAYMENT_CONFIRMED' || eventType === 'PAYMENT_RECEIVED' || eventType === 'PAYMENT_DUNNING_RECEIVED') return 'active';
   if (eventType === 'PAYMENT_OVERDUE' || eventType === 'PAYMENT_DUNNING_REQUESTED') return 'grace';
-  if (eventType === 'PAYMENT_CHARGEBACK_REQUESTED' || eventType === 'PAYMENT_CHARGEBACK_DISPUTE') return 'review';
+  if (eventType === 'PAYMENT_CHARGEBACK_REQUESTED' || eventType === 'PAYMENT_CHARGEBACK_DISPUTE' || eventType === 'PAYMENT_AWAITING_CHARGEBACK_REVERSAL') return 'review';
   if (eventType === 'PAYMENT_REFUNDED') return 'review';
   return null;
 }

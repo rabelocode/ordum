@@ -79,4 +79,22 @@ export class AsaasBillingProvider implements BillingProvider {
   getSubscription(id: string) {
     return this.request(`/subscriptions/${encodeURIComponent(id)}`);
   }
+
+  cancelSubscription(id: string) {
+    return this.request(`/subscriptions/${encodeURIComponent(id)}`, { method: 'DELETE' });
+  }
+
+  listSubscriptions(offset = 0, limit = 100) {
+    return this.request(`/subscriptions?includeDeleted=true&limit=${Math.min(100, limit)}&offset=${Math.max(0, offset)}`);
+  }
+
+  listPayments(filters: { subscriptionId?: string; dateCreatedFrom?: string; offset?: number; limit?: number } = {}) {
+    const params = new URLSearchParams({
+      limit: String(Math.min(100, filters.limit || 100)),
+      offset: String(Math.max(0, filters.offset || 0)),
+    });
+    if (filters.subscriptionId) params.set('subscription', filters.subscriptionId);
+    if (filters.dateCreatedFrom) params.set('dateCreated[ge]', filters.dateCreatedFrom);
+    return this.request(`/payments?${params.toString()}`);
+  }
 }

@@ -10,12 +10,14 @@
     "clean": "rm -rf dist server.js",
     "start": "node dist/server.cjs",
     "lint": "tsc --noEmit",
-    "test": "node --import tsx --test test/**/*.test.ts"
+    "test": "node --import tsx --test test/**/*.test.ts",
+    "test:live-queries": "node --env-file-if-exists=.env.local scripts/validate-live-queries.mjs"
   },
   "dependencies": {
     "@google/genai": "^2.4.0",
     "@supabase/supabase-js": "^2.111.0",
     "@tailwindcss/vite": "^4.1.14",
+    "@vercel/functions": "^3.7.6",
     "@vitejs/plugin-react": "^5.0.4",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",

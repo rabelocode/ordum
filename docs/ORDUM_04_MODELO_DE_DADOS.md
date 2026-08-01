@@ -23,13 +23,13 @@ Todas as 59 tabelas públicas encontradas antes desta entrega estavam com RLS ha
 - `billing_plans`, `billing_plan_prices`, `billing_plan_solutions`;
 - `billing_customers`, `billing_subscriptions`, `billing_payments`;
 - `billing_webhook_events`, `billing_status_history`;
-- `billing_reconciliation_runs`, `tenant_billing_state`.
+- `billing_reconciliation_runs`, `billing_reconciliation_items`, `billing_webhook_rate_limits`, `tenant_billing_state`.
 
 IDs externos do Asaas têm constraints únicas. `external_reference` usa UUID interno. Valores usam `integer` em centavos. Payload bruto fica em `billing_webhook_events`, sem grants ao browser. Apenas os quatro últimos dígitos do documento fiscal podem ser mantidos no mapeamento do cliente; o contrato fica no boundary administrativo server-side.
 
 ## Provisionamento
 
-`provision_paid_contract` é uma RPC `SECURITY DEFINER` com `search_path` explícito, execução revogada de `PUBLIC`, `anon` e `authenticated`, grant apenas para `service_role` e verificação do claim `service_role`. A transação:
+`provision_paid_contract` é uma RPC `SECURITY DEFINER` com `search_path` explícito, execução revogada de `PUBLIC`, `anon` e `authenticated` e grant apenas para `service_role`. A autorização está no grant porque as novas chaves `sb_secret_*` não dependem do claim JWT legado. A transação:
 
 1. bloqueia o contrato e o pagamento;
 2. exige pagamento local `confirmed`/`received` e contrato elegível;
@@ -48,3 +48,6 @@ IDs externos do Asaas têm constraints únicas. `external_reference` usa UUID in
 - `demo_tenant_link`
 - `fix_service_role_rpc_guard`
 - `billing_foreign_key_indexes`
+- `close_admin_billing_gaps`
+- `billing_reconciliation_reviewer_index`
+- `transactional_plan_versioning`

@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import { canReadAssignedResource } from './authorization';
+import { auditContext, pageResult, parsePagination } from './operational';
 
 export function createAdminClientsRouter(getSupabaseAdmin: any, requirePlatformAuth: any) {
   const router = Router();
@@ -8,11 +9,34 @@ export function createAdminClientsRouter(getSupabaseAdmin: any, requirePlatformA
   router.get('/', requirePlatformAuth, async (req: any, res: any) => {
     try {
       const { platformContext } = req;
-      
-      const { data, error } = await getSupabaseAdmin()
+      const { page, pageSize, from, to } = parsePagination(req.query);
+      const paginated = req.query.page !== undefined;
+      let visibleTenantIds: string[] | null = null;
+      if (platformContext.role?.key !== 'admin') {
+        const visibleTeams = platformContext.teams
+          .filter((team: any) => platformContext.managedTeams.some((managed: any) => managed.id === team.id) || ['team', 'all'].includes(team.member_client_visibility))
+          .map((team: any) => team.id);
+        let assignmentQuery = getSupabaseAdmin().from('platform_client_assignments').select('tenant_id');
+        const clauses = [`owner_platform_member_id.eq.${platformContext.platformMember.id}`];
+        if (visibleTeams.length) clauses.push(`team_id.in.(${visibleTeams.join(',')})`);
+        assignmentQuery = assignmentQuery.or(clauses.join(','));
+        const assignmentResult = await assignmentQuery;
+        if (assignmentResult.error) throw assignmentResult.error;
+        visibleTenantIds = [...new Set<string>((assignmentResult.data || []).map((item: any) => String(item.tenant_id)))];
+        if (!visibleTenantIds.length) return res.json(paginated ? pageResult([], 0, page, pageSize) : []);
+      }
+
+      let query = getSupabaseAdmin()
         .from('tenants')
-        .select('*, tenant_solutions(*), platform_client_assignments(*, platform_teams(name), platform_members(user_id, platform_roles(key, name))))')
-        .in('status', ['active', 'suspended']);
+        .select('*, tenant_solutions(*), platform_client_assignments(*, platform_teams(name), platform_members(user_id, platform_roles(key, name))), tenant_billing_state(*), tenant_domains(*), memberships(id,status,user_id,employment_level), departments(id,name,active)', { count: 'exact' })
+        .in('status', ['active', 'trial', 'suspended'])
+        .order('created_at', { ascending: false });
+      if (visibleTenantIds) query = query.in('id', visibleTenantIds);
+      if (typeof req.query.status === 'string' && req.query.status) query = query.eq('status', req.query.status);
+      if (typeof req.query.search === 'string' && req.query.search.trim()) query = query.ilike('name', `%${req.query.search.trim().slice(0, 100)}%`);
+      if (paginated) query = query.range(from, to);
+
+      const { data, error, count } = await query;
 
       if (error) throw error;
       
@@ -28,12 +52,7 @@ export function createAdminClientsRouter(getSupabaseAdmin: any, requirePlatformA
         return { ...c, assignment, owner };
       });
       
-      // Filter based on scope
-      if (platformContext.role?.key !== 'admin') {
-        clients = clients.filter((client: any) => canReadAssignedResource(platformContext, client.assignment, 'member_client_visibility'));
-      }
-      
-      res.json(clients);
+      res.json(paginated ? pageResult(clients, count, page, pageSize) : clients);
     } catch (e: any) {
       res.status(500).json({ error: e.message });
     }
@@ -48,7 +67,7 @@ export function createAdminClientsRouter(getSupabaseAdmin: any, requirePlatformA
       
       const { data, error } = await getSupabaseAdmin()
         .from('tenants')
-        .select('*, tenant_solutions(solution_id, status, solutions(key)), platform_client_assignments(*, platform_teams(name), platform_members(user_id, platform_roles(key, name))))')
+        .select('*, tenant_solutions(solution_id, status, solutions(key,name)), platform_client_assignments(*, platform_teams(name), platform_members(user_id, platform_roles(key, name))), tenant_domains(*), departments(*), memberships(id,user_id,status,employment_level,joined_at), tenant_billing_state(*), commercial_contracts(*, billing_subscriptions(*), billing_payments(*))')
         .eq('id', clientId)
         .single();
         
@@ -67,7 +86,10 @@ export function createAdminClientsRouter(getSupabaseAdmin: any, requirePlatformA
         if (!canReadAssignedResource(platformContext, assignment, 'member_client_visibility')) return res.status(403).json({ error: 'Forbidden' });
       }
       
-      res.json({ ...data, assignment, owner });
+      const { data: audit } = await getSupabaseAdmin().from('platform_audit_logs')
+        .select('id,action,severity,metadata,created_at,actor_user_id,request_id')
+        .eq('entity_id', clientId).order('created_at', { ascending: false }).limit(50);
+      res.json({ ...data, assignment, owner, audit: audit || [] });
     } catch (e: any) {
       res.status(500).json({ error: e.message });
     }
@@ -83,6 +105,16 @@ export function createAdminClientsRouter(getSupabaseAdmin: any, requirePlatformA
       if (platformContext.role?.key !== 'admin') {
         const isManager = platformContext.managedTeams.some((t: any) => t.id === team_id);
         if (!isManager) return res.status(403).json({ error: 'Forbidden' });
+        const current = await getSupabaseAdmin().from('platform_client_assignments').select('*')
+          .eq('tenant_id', clientId).eq('assignment_type', 'commercial').maybeSingle();
+        if (!current.data || !platformContext.managedTeams.some((team: any) => team.id === current.data.team_id)) {
+          return res.status(403).json({ error: 'Cliente fora do escopo gerenciado.' });
+        }
+      }
+      if (owner_platform_member_id) {
+        const target = await getSupabaseAdmin().from('platform_team_members').select('platform_member_id')
+          .eq('team_id', team_id).eq('platform_member_id', owner_platform_member_id).eq('status', 'active').maybeSingle();
+        if (!target.data) return res.status(400).json({ error: 'O responsável precisa ser membro ativo da equipe.' });
       }
       
       const { data, error } = await getSupabaseAdmin()
@@ -106,7 +138,8 @@ export function createAdminClientsRouter(getSupabaseAdmin: any, requirePlatformA
         entity_type: 'platform_client_assignments',
         entity_id: clientId,
         severity: 'info',
-        team_id: team_id
+        team_id: team_id,
+        ...auditContext(req, { result: 'success', after: { team_id, owner_platform_member_id: owner_platform_member_id || null } })
       });
       
       res.json(data);
@@ -122,29 +155,18 @@ export function createAdminClientsRouter(getSupabaseAdmin: any, requirePlatformA
       const clientId = req.params.id;
       const { solutionKeys } = req.body; // e.g. ['integrity', 'people']
       
-      if (!platformContext.permissions.includes('platform.solutions.manage')) {
+      if (platformContext.role?.key !== 'admin' || !platformContext.permissions.includes('platform.solutions.manage')) {
         return res.status(403).json({ error: 'Forbidden' });
       }
-      
-      await getSupabaseAdmin().from('tenant_solutions').delete().eq('tenant_id', clientId);
-      
-      if (solutionKeys && solutionKeys.length > 0) {
-        const { data: dbSolutions, error: sErr } = await getSupabaseAdmin()
-          .from('solutions')
-          .select('id, key')
-          .in('key', solutionKeys);
-          
-        if (sErr) throw sErr;
-        
-        if (dbSolutions && dbSolutions.length > 0) {
-          const solutionsToInsert = dbSolutions.map((s: any) => ({
-            tenant_id: clientId,
-            solution_id: s.id,
-            status: 'active'
-          }));
-          await getSupabaseAdmin().from('tenant_solutions').insert(solutionsToInsert);
-        }
+      if (!Array.isArray(solutionKeys) || solutionKeys.some((key: unknown) => typeof key !== 'string')) {
+        return res.status(400).json({ error: 'solutionKeys deve ser uma lista de chaves.' });
       }
+      const before = await getSupabaseAdmin().from('tenant_solutions').select('solutions(key)').eq('tenant_id', clientId);
+      const replaced = await getSupabaseAdmin().rpc('admin_replace_tenant_solutions', {
+        p_tenant_id: clientId,
+        p_solution_keys: [...new Set(solutionKeys)],
+      });
+      if (replaced.error) throw replaced.error;
       
       await getSupabaseAdmin().from('platform_audit_logs').insert({
         actor_user_id: req.user.id,
@@ -152,7 +174,7 @@ export function createAdminClientsRouter(getSupabaseAdmin: any, requirePlatformA
         entity_type: 'tenant_solutions',
         entity_id: clientId,
         severity: 'info',
-        metadata: { solutions: solutionKeys }
+        ...auditContext(req, { result: 'success', before: before.data, after: { solutions: solutionKeys } })
       });
       
       res.json({ success: true });

@@ -1,14 +1,16 @@
 import React, { useState, useEffect } from 'react';
 import { useAuth } from '../../core/auth/AuthProvider';
 import { PlatformTeam } from '../../types/platform';
-import { ArrowLeft, Users, Settings, Plus, X, Trash2, Save, Loader2 } from 'lucide-react';
+import { ArrowLeft, Plus, Trash2, Save, Loader2 } from 'lucide-react';
 import { AddTeamMemberModal } from '../../components/admin/AddTeamMemberModal';
+import { usePlatform } from '../../core/auth/PlatformAuthProvider';
 
 export function TeamDetailPage({ teamId }: { teamId: string }) {
   const { session } = useAuth();
+  const { platformRole } = usePlatform();
   const [team, setTeam] = useState<PlatformTeam | null>(null);
   const [members, setMembers] = useState<any[]>([]);
-  const [activeTab, setActiveTab] = useState("visoGeral");
+  const [activeTab, setActiveTab] = useState("VisoGeral");
   const [isLoading, setIsLoading] = useState(true);
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
   
@@ -221,6 +223,7 @@ export function TeamDetailPage({ teamId }: { teamId: string }) {
                 <input 
                   type="text" 
                   className="w-full px-4 py-2 bg-white border border-[#DDD8CF] rounded-xl focus:outline-none focus:ring-2 focus:ring-[#B66E45]/20 focus:border-[#B66E45]"
+                  disabled={platformRole?.key !== 'admin'}
                   value={formData.name || ''}
                   onChange={e => setFormData({...formData, name: e.target.value})}
                 />
@@ -240,6 +243,7 @@ export function TeamDetailPage({ teamId }: { teamId: string }) {
                   <label className="block text-sm font-medium text-[#202322] mb-1">Tipo</label>
                   <select 
                     className="w-full px-4 py-2 bg-white border border-[#DDD8CF] rounded-xl focus:outline-none focus:ring-2 focus:ring-[#B66E45]/20 focus:border-[#B66E45]"
+                    disabled={platformRole?.key !== 'admin'}
                     value={formData.team_type || ''}
                     onChange={e => setFormData({...formData, team_type: e.target.value})}
                   >
@@ -257,6 +261,7 @@ export function TeamDetailPage({ teamId }: { teamId: string }) {
                   <label className="block text-sm font-medium text-[#202322] mb-1">Canal</label>
                   <select 
                     className="w-full px-4 py-2 bg-white border border-[#DDD8CF] rounded-xl focus:outline-none focus:ring-2 focus:ring-[#B66E45]/20 focus:border-[#B66E45]"
+                    disabled={platformRole?.key !== 'admin'}
                     value={formData.channel || ''}
                     onChange={e => setFormData({...formData, channel: e.target.value})}
                   >
@@ -309,6 +314,7 @@ export function TeamDetailPage({ teamId }: { teamId: string }) {
                       <div className="text-xs text-[#626866]">Membros podem assumir voluntariamente leads não atribuídos que chegam para esta equipe.</div>
                     </div>
                   </label>
+                  <div className="grid sm:grid-cols-2 gap-4"><label className="text-sm font-medium text-[#202322]">Alçada de proposta (centavos)<input disabled={platformRole?.key!=='admin'} type="number" min="0" value={formData.settings?.proposal_approval_limit_cents??''} onChange={e=>setFormData({...formData,settings:{...(formData.settings||{}),proposal_approval_limit_cents:e.target.value===''?null:Number(e.target.value)}})} className="mt-1 w-full px-4 py-2 border rounded-xl disabled:bg-gray-100"/><span className="block text-xs text-gray-500 mt-1">Vazio exige aprovação de admin.</span></label><label className="text-sm font-medium text-[#202322]">Alçada de contrato (centavos)<input disabled={platformRole?.key!=='admin'} type="number" min="0" value={formData.settings?.contract_approval_limit_cents??''} onChange={e=>setFormData({...formData,settings:{...(formData.settings||{}),contract_approval_limit_cents:e.target.value===''?null:Number(e.target.value)}})} className="mt-1 w-full px-4 py-2 border rounded-xl disabled:bg-gray-100"/><span className="block text-xs text-gray-500 mt-1">Vazio exige aprovação de admin.</span></label></div>
                 </div>
               </div>
               

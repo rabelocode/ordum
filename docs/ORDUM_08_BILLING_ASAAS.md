@@ -2,7 +2,7 @@
 
 ## Estado e regras
 
-A integração usa a API v3 do Asaas exclusivamente no Sandbox. `BILLING_ENABLED=false` é o padrão e produção é recusada pelo código. A API usa `access_token`, `Content-Type: application/json` e `User-Agent`. O webhook valida `asaas-access-token` com comparação constante, persiste antes do negócio e usa o ID único do evento para idempotência.
+A integração usa a API v3 do Asaas exclusivamente no Sandbox. `BILLING_ENABLED=false` é o padrão e produção é recusada pelo código. A API usa `access_token`, `Content-Type: application/json` e `User-Agent`. O webhook valida `asaas-access-token` com comparação constante, aplica limite de taxa no banco, persiste antes do negócio, responde `200` imediatamente e delega o processamento ao `waitUntil` da Vercel. A fila durável é retomada pela conciliação caso uma execução assíncrona seja interrompida.
 
 Referências vigentes: [autenticação](https://docs.asaas.com/docs/autentica%C3%A7%C3%A3o-1), [assinaturas](https://docs.asaas.com/docs/assinaturas), [webhooks](https://docs.asaas.com/docs/sobre-os-webhooks), [eventos de cobrança](https://docs.asaas.com/docs/webhook-para-cobrancas) e [eventos de assinatura](https://docs.asaas.com/docs/eventos-para-assinaturas).
 
@@ -63,13 +63,16 @@ Reembolso parcial não suspende automaticamente. Eventos desconhecidos são pers
 
 ## Eventos configurados
 
-Pagamentos: `PAYMENT_CREATED`, `PAYMENT_UPDATED`, `PAYMENT_CONFIRMED`, `PAYMENT_RECEIVED`, `PAYMENT_OVERDUE`, `PAYMENT_CREDIT_CARD_CAPTURE_REFUSED`, `PAYMENT_DELETED`, `PAYMENT_RESTORED`, `PAYMENT_REFUNDED`, `PAYMENT_PARTIALLY_REFUNDED`, `PAYMENT_CHARGEBACK_REQUESTED`, `PAYMENT_CHARGEBACK_DISPUTE`, `AWAITING_CHARGEBACK_REVERSAL`, `PAYMENT_DUNNING_REQUESTED` e `PAYMENT_DUNNING_RECEIVED`.
+Pagamentos: `PAYMENT_CREATED`, `PAYMENT_UPDATED`, `PAYMENT_CONFIRMED`, `PAYMENT_RECEIVED`, `PAYMENT_OVERDUE`, `PAYMENT_CREDIT_CARD_CAPTURE_REFUSED`, `PAYMENT_DELETED`, `PAYMENT_RESTORED`, `PAYMENT_REFUNDED`, `PAYMENT_PARTIALLY_REFUNDED`, `PAYMENT_CHARGEBACK_REQUESTED`, `PAYMENT_CHARGEBACK_DISPUTE`, `PAYMENT_AWAITING_CHARGEBACK_REVERSAL`, `PAYMENT_DUNNING_REQUESTED` e `PAYMENT_DUNNING_RECEIVED`.
 
 Assinaturas: `SUBSCRIPTION_CREATED`, `SUBSCRIPTION_UPDATED`, `SUBSCRIPTION_INACTIVATED` e `SUBSCRIPTION_DELETED`.
 
-## Limites atuais
+## Operação e limites
 
 - Não armazena cartão e não implementa split/subconta.
-- O processamento ocorre no request depois da persistência; está correto para baixo volume e reprocessável. Uma fila dedicada é a evolução para alto volume.
-- A conciliação consulta assinaturas e aplica suspensão por carência; recuperação histórica completa de cobranças deverá ser homologada com a chave Sandbox.
+- A fila usa `billing_webhook_events`, claim atômico com `FOR UPDATE SKIP LOCKED`, backoff e retomada pelo cron; uma infraestrutura de filas dedicada só será necessária se o volume exceder o serverless.
+- A conciliação percorre assinaturas e cobranças paginadas, recupera pagamentos ausentes, corrige divergências seguras e grava itens críticos para revisão em `billing_reconciliation_items`.
+- Cancelar usa `DELETE /subscriptions/{id}` no Asaas, impede novas cobranças e preserva pagamentos liquidados. A Ordum mantém acesso até `paid_through` e suspende após o período.
+- Reembolso/chargeback exige consulta direta da cobrança antes da transição irreversível; reembolso parcial não suspende automaticamente.
+- A homologação ponta a ponta continua bloqueada apenas pelos segredos Sandbox ausentes.
 - Produção não foi chamada nem cobrada nesta entrega.

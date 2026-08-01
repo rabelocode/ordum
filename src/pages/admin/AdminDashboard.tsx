@@ -1,12 +1,12 @@
 import React, { useState, useEffect } from 'react';
 import { usePlatform } from '../../core/auth/PlatformAuthProvider';
 import { useAuth } from '../../core/auth/AuthProvider';
-import { Users, Building, Activity, ShieldCheck, Box, UserPlus, FileText } from 'lucide-react';
+import { Users, Building, Activity, Box, FileText, WalletCards, AlertTriangle } from 'lucide-react';
 
 export function AdminDashboard() {
   const { platformRole, memberTeams, managedTeams } = usePlatform();
   const { session } = useAuth();
-  const [stats, setStats] = useState({ clients: '-', leads: '-', demos: '-', teams: '-' });
+  const [stats, setStats] = useState<any>({ clients: '-', leads: '-', demos: '-', teams: '-', proposals: '-', contracts: '-', conversionRate: 0, onboarding: 0, overdue: 0, mrrCents: 0, alerts: [], leadsByStatus: {}, recentActivity: [] });
 
   useEffect(() => {
     async function loadStats() {
@@ -38,6 +38,12 @@ export function AdminDashboard() {
             : 'Bem-vindo ao seu painel de controle da ORDUM.'}
         </p>
       </div>
+
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+        {[['Propostas',stats.proposals,FileText],['Contratos',stats.contracts,FileText],['Conversão',`${stats.conversionRate}%`,Activity],['MRR confirmado',new Intl.NumberFormat('pt-BR',{style:'currency',currency:'BRL'}).format((stats.mrrCents||0)/100),WalletCards]].map(([label,value,Icon]:any)=><div key={label} className="bg-white p-5 rounded-2xl border"><Icon className="w-5 h-5 text-[#B66E45]"/><div className="text-xs text-gray-500 uppercase font-bold mt-3">{label}</div><div className="text-2xl font-black mt-1">{value}</div></div>)}
+      </div>
+
+      {(stats.alerts?.length>0||stats.onboarding>0)&&<div className="rounded-2xl border border-amber-200 bg-amber-50 p-4"><div className="flex gap-2"><AlertTriangle className="w-5 h-5 text-amber-700"/><div><strong>Alertas operacionais</strong><p className="text-sm mt-1">{stats.onboarding} clientes em implantação{stats.alerts.map((alert:any)=>` · ${alert.count} ${alert.label.toLowerCase()}`).join('')}</p></div></div></div>}
 
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
         <div className="bg-white p-6 rounded-2xl border border-[#DDD8CF]/40 shadow-sm">
@@ -78,10 +84,10 @@ export function AdminDashboard() {
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
         <div className="bg-white rounded-2xl border border-[#DDD8CF]/40 p-8 shadow-sm">
           <h2 className="text-xl font-bold text-[#202322] mb-6">Atividade Recente</h2>
-          <div className="flex flex-col items-center justify-center h-48 text-gray-400">
+          {stats.recentActivity?.length===0?<div className="flex flex-col items-center justify-center h-48 text-gray-400">
             <Activity className="w-12 h-12 mb-4 opacity-20" />
             <p>Nenhuma atividade registrada hoje.</p>
-          </div>
+          </div>:<div className="space-y-3">{stats.recentActivity.map((item:any)=><div key={item.id} className="rounded-xl bg-gray-50 p-3"><strong className="text-sm">{item.subject}</strong><div className="text-xs text-gray-500">{item.activity_type} · {item.status} · {new Date(item.created_at).toLocaleString('pt-BR')}</div></div>)}</div>}
         </div>
 
         <div className="bg-white rounded-2xl border border-[#DDD8CF]/40 p-8 shadow-sm">

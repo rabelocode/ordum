@@ -2,11 +2,13 @@ import React, { useState, useEffect } from 'react';
 import { ArrowLeft, Loader2, Save } from 'lucide-react';
 import { useAuth } from '../../core/auth/AuthProvider';
 import { AssignLeadModal } from '../../components/admin/AssignLeadModal'; // We can reuse it for client assignment
+import { usePlatform } from '../../core/auth/PlatformAuthProvider';
 
 export function CompanyDetailPage({ tenantId }: { tenantId: string }) {
   const { session } = useAuth();
+  const { platformRole } = usePlatform();
   const [tenant, setTenant] = useState<any>(null);
-  const [activeTab, setActiveTab] = useState("overview");
+  const [activeTab, setActiveTab] = useState("visoogeral");
   const [isSaving, setIsSaving] = useState(false);
   const [solutionKeys, setSolutionKeys] = useState<string[]>([]);
   const [isAssignModalOpen, setIsAssignModalOpen] = useState(false);
@@ -66,6 +68,7 @@ export function CompanyDetailPage({ tenantId }: { tenantId: string }) {
   };
 
   if (!tenant) return <div className="p-8 text-center">Carregando...</div>;
+  const contracts = Array.isArray(tenant.commercial_contracts) ? tenant.commercial_contracts : tenant.commercial_contracts ? [tenant.commercial_contracts] : [];
 
   return (
     <div className="max-w-7xl mx-auto space-y-6">
@@ -102,7 +105,7 @@ export function CompanyDetailPage({ tenantId }: { tenantId: string }) {
         </div>
         
         <div className="flex border-b border-[#DDD8CF]/40 overflow-x-auto">
-          {["Visão Geral", "Soluções", "Responsáveis"].map(tab => {
+          {["Visão Geral", "Soluções", "Responsáveis", "Domínios", "Unidades", "Usuários", "Financeiro", "Auditoria"].map(tab => {
             const tabId = tab.toLowerCase().replace(/[^a-z]/g, '');
             return (
               <button
@@ -144,7 +147,8 @@ export function CompanyDetailPage({ tenantId }: { tenantId: string }) {
                   { key: 'talent', name: 'Atração de Talentos' }
                 ].map(sol => (
                   <label key={sol.key} className="flex items-center gap-3 p-4 bg-white rounded-xl border border-gray-200 cursor-pointer hover:bg-gray-50 transition-colors">
-                    <input 
+                    <input
+                      disabled={platformRole?.key !== 'admin'}
                       type="checkbox" 
                       className="w-5 h-5 text-[#B66E45] border-gray-300 rounded focus:ring-[#B66E45]"
                       checked={solutionKeys.includes(sol.key)}
@@ -158,7 +162,7 @@ export function CompanyDetailPage({ tenantId }: { tenantId: string }) {
                 ))}
               </div>
               
-              <div className="flex justify-end pt-4">
+              {platformRole?.key === 'admin' && <div className="flex justify-end pt-4">
                 <button 
                   onClick={handleSaveSolutions}
                   disabled={isSaving}
@@ -167,7 +171,7 @@ export function CompanyDetailPage({ tenantId }: { tenantId: string }) {
                   {isSaving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
                   Atualizar Soluções
                 </button>
-              </div>
+              </div>}
             </div>
           )}
 
@@ -195,6 +199,11 @@ export function CompanyDetailPage({ tenantId }: { tenantId: string }) {
               )}
             </div>
           )}
+          {activeTab === 'domnios' && <div className="space-y-3"><h2 className="text-lg font-bold">Domínios</h2>{tenant.tenant_domains?.length?tenant.tenant_domains.map((item:any)=><div key={item.id} className="rounded-xl border p-4"><strong>{item.hostname}</strong><div className="text-xs text-gray-500">{item.is_primary?'Principal':'Alternativo'} · {item.verified_at?'verificado':'pendente'}</div></div>):<p className="text-sm text-gray-500">Nenhum domínio cadastrado.</p>}</div>}
+          {activeTab === 'unidades' && <div className="space-y-3"><h2 className="text-lg font-bold">Unidades organizacionais</h2><p className="text-xs text-gray-500">Representadas pela estrutura de departamentos do tenant.</p>{tenant.departments?.length?tenant.departments.map((item:any)=><div key={item.id} className="rounded-xl border p-4"><strong>{item.name}</strong><div className="text-xs text-gray-500">{item.active?'Ativa':'Inativa'}</div></div>):<p className="text-sm text-gray-500">Nenhuma unidade cadastrada.</p>}</div>}
+          {activeTab === 'usurios' && <div className="space-y-3"><h2 className="text-lg font-bold">Usuários e memberships</h2>{tenant.memberships?.length?tenant.memberships.map((item:any)=><div key={item.id} className="rounded-xl border p-4"><strong>{item.employment_level}</strong><div className="text-xs text-gray-500">{item.status} · {item.user_id}</div></div>):<p className="text-sm text-gray-500">Nenhum usuário vinculado.</p>}</div>}
+          {activeTab === 'financeiro' && <div className="space-y-3"><h2 className="text-lg font-bold">Contrato, assinatura e pagamentos</h2><div className="rounded-xl bg-gray-50 border p-4"><div>Status de acesso: <strong>{tenant.tenant_billing_state?.access_status||'sem cobrança'}</strong></div><div className="text-sm text-gray-500">Pago até: {tenant.tenant_billing_state?.paid_through||'—'} · carência até: {tenant.tenant_billing_state?.grace_ends_at||'—'}</div></div>{contracts.map((contract:any)=><div key={contract.id} className="rounded-xl border p-4"><strong>Contrato #{contract.contract_number} · {contract.status}</strong><div className="text-sm text-gray-500">{Array.isArray(contract.billing_subscriptions)?contract.billing_subscriptions.length:(contract.billing_subscriptions?1:0)} assinatura · {contract.billing_payments?.length||0} pagamentos</div></div>)}</div>}
+          {activeTab === 'auditoria' && <div className="space-y-3"><h2 className="text-lg font-bold">Auditoria do cliente</h2>{tenant.audit?.length?tenant.audit.map((item:any)=><div key={item.id} className="rounded-xl border p-4"><strong>{item.action}</strong><div className="text-xs text-gray-500">{new Date(item.created_at).toLocaleString('pt-BR')} · {item.severity}</div></div>):<p className="text-sm text-gray-500">Nenhum evento associado diretamente.</p>}</div>}
         </div>
       </div>
 

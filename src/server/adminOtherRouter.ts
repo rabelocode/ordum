@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import { publicBillingHealth } from './billing/config';
+import { auditContext, pageResult, parsePagination } from './operational';
 
 export function createAdminOtherRouter(getSupabaseAdmin: any, requirePlatformAuth: any) {
   const router = Router();
@@ -422,22 +423,25 @@ export function createAdminOtherRouter(getSupabaseAdmin: any, requirePlatformAut
     try {
       const { platformContext } = req;
       
+      const { page, pageSize, from, to } = parsePagination(req.query);
       let query = getSupabaseAdmin()
         .from('platform_audit_logs')
-        .select('*')
+        .select('*', { count: 'exact' })
         .order('created_at', { ascending: false })
-        .limit(100);
+        .range(from, to);
+      if (typeof req.query.action === 'string' && req.query.action) query = query.ilike('action', `%${req.query.action.replace(/[%(),]/g, '').slice(0, 100)}%`);
+      if (typeof req.query.severity === 'string' && req.query.severity) query = query.eq('severity', req.query.severity);
         
       if (platformContext.role?.key !== 'admin') {
         if (!platformContext.permissions.includes('platform.audit.team.read')) {
           return res.status(403).json({ error: 'Forbidden' });
         }
         const teamIds = platformContext.managedTeams.map((t: any) => t.id);
-        if (teamIds.length === 0) return res.json([]);
+        if (teamIds.length === 0) return res.json(pageResult([], 0, page, pageSize));
         query = query.in('team_id', teamIds);
       }
       
-      const { data, error } = await query;
+      const { data, error, count } = await query;
       if (error) throw error;
       
       const { data: usersData } = await getSupabaseAdmin().auth.admin.listUsers();
@@ -446,7 +450,7 @@ export function createAdminOtherRouter(getSupabaseAdmin: any, requirePlatformAut
         return { ...log, actor_email: user?.email || 'Sistema' };
       });
       
-      res.json(result);
+      res.json(pageResult(result, count, page, pageSize));
     } catch (e: any) {
       res.status(500).json({ error: e.message });
     }
@@ -460,20 +464,86 @@ export function createAdminOtherRouter(getSupabaseAdmin: any, requirePlatformAut
         return res.status(403).json({ error: 'Forbidden' });
       }
       
-      const { data, error } = await getSupabaseAdmin().from('platform_roles').select('id').limit(1);
-      
+      const dbStart = performance.now();
+      const { error } = await getSupabaseAdmin().from('platform_roles').select('id').limit(1);
+      const databaseLatencyMs = Math.round(performance.now() - dbStart);
+      const authStart = performance.now();
+      const authCheck = await getSupabaseAdmin().auth.admin.listUsers({ page: 1, perPage: 1 });
+      const authLatencyMs = Math.round(performance.now() - authStart);
+      const [lastWebhook, queue, lastReconciliation] = await Promise.all([
+        getSupabaseAdmin().from('billing_webhook_events').select('event_type,status,received_at').order('received_at', { ascending: false }).limit(1).maybeSingle(),
+        getSupabaseAdmin().from('billing_webhook_events').select('*', { count: 'exact', head: true }).in('status', ['received', 'processing', 'failed']),
+        getSupabaseAdmin().from('billing_reconciliation_runs').select('status,started_at,completed_at,error_count,summary').order('started_at', { ascending: false }).limit(1).maybeSingle(),
+      ]);
       res.json({
-        status: 'operational',
+        status: !error && !authCheck.error ? 'operational' : 'degraded',
         timestamp: new Date().toISOString(),
         environment: process.env.NODE_ENV || 'development',
-        database: error ? 'error' : 'connected',
-        auth: 'connected',
+        database: { status: error ? 'error' : 'connected', latencyMs: databaseLatencyMs },
+        auth: { status: authCheck.error ? 'error' : 'connected', latencyMs: authLatencyMs },
         billing: publicBillingHealth(),
+        webhook: { last: lastWebhook.data || null, queued: queue.count || 0 },
+        reconciliation: lastReconciliation.data || null,
+        deploy: { commitSha: process.env.VERCEL_GIT_COMMIT_SHA || null, url: process.env.VERCEL_URL || null, region: process.env.VERCEL_REGION || null },
         uptime: process.uptime()
       });
     } catch (e: any) {
       res.status(500).json({ error: e.message });
     }
+  });
+
+  router.post('/staff/:id/terminate-sessions', requirePlatformAuth, async (req: any, res: any) => {
+    if (req.platformContext.role?.key !== 'admin') return res.status(403).json({ error: 'Somente admin pode encerrar sessões.' });
+    const db = getSupabaseAdmin();
+    const target = await db.from('platform_members').select('id,user_id').eq('id', req.params.id).single();
+    if (target.error) return res.status(404).json({ error: 'Membro não encontrado.' });
+    if (target.data.user_id === req.user.id) return res.status(403).json({ error: 'Encerre sua própria sessão pelo logout.' });
+    const result = await db.rpc('admin_terminate_user_sessions', { p_user_id: target.data.user_id });
+    if (result.error) return res.status(500).json({ error: result.error.message });
+    await db.from('platform_audit_logs').insert({ actor_user_id: req.user.id, action: 'platform.member.sessions_terminated', entity_type: 'platform_members', entity_id: target.data.id, severity: 'warning', ...auditContext(req, { result: 'success' }) });
+    return res.json({ success: true });
+  });
+
+  router.get('/system/solutions', requirePlatformAuth, async (req: any, res: any) => {
+    if (!req.platformContext.permissions.includes('platform.solutions.read') && req.platformContext.role?.key !== 'admin') return res.status(403).json({ error: 'Forbidden' });
+    const result = await getSupabaseAdmin().from('solutions').select('id,key,name,created_at').order('name');
+    if (result.error) return res.status(500).json({ error: result.error.message });
+    return res.json(result.data);
+  });
+
+  router.patch('/system/solutions/:id', requirePlatformAuth, async (req: any, res: any) => {
+    if (req.platformContext.role?.key !== 'admin' || !req.platformContext.permissions.includes('platform.solutions.manage')) return res.status(403).json({ error: 'Forbidden' });
+    const name = typeof req.body?.name === 'string' ? req.body.name.trim().slice(0, 100) : '';
+    if (!name) return res.status(400).json({ error: 'Nome é obrigatório.' });
+    const db = getSupabaseAdmin(); const before = await db.from('solutions').select('*').eq('id', req.params.id).single();
+    if (before.error) return res.status(404).json({ error: 'Solução não encontrada.' });
+    const saved = await db.from('solutions').update({ name }).eq('id', req.params.id).select().single();
+    if (saved.error) return res.status(400).json({ error: saved.error.message });
+    await db.from('platform_audit_logs').insert({ actor_user_id: req.user.id, action: 'platform.solution.updated', entity_type: 'solutions', entity_id: req.params.id, severity: 'info', ...auditContext(req, { result: 'success', before: { name: before.data.name }, after: { name } }) });
+    return res.json(saved.data);
+  });
+
+  router.get('/system/deploy', requirePlatformAuth, async (req: any, res: any) => {
+    if (!req.platformContext.permissions.includes('platform.deploy.read') && req.platformContext.role?.key !== 'admin') return res.status(403).json({ error: 'Forbidden' });
+    return res.json({ commitSha: process.env.VERCEL_GIT_COMMIT_SHA || null, commitMessage: process.env.VERCEL_GIT_COMMIT_MESSAGE || null, branch: process.env.VERCEL_GIT_COMMIT_REF || null, url: process.env.VERCEL_URL || null, region: process.env.VERCEL_REGION || null, environment: process.env.VERCEL_ENV || process.env.NODE_ENV || 'development' });
+  });
+
+  router.get('/system/settings', requirePlatformAuth, async (req: any, res: any) => {
+    if (!req.platformContext.permissions.includes('platform.settings.read') && req.platformContext.role?.key !== 'admin') return res.status(403).json({ error: 'Forbidden' });
+    return res.json({ billing: publicBillingHealth(), publicSignup: false, authProvider: 'supabase', billingProvider: 'asaas', billingEnvironment: process.env.ASAAS_ENV || 'sandbox', webhookConfigured: Boolean(process.env.ASAAS_WEBHOOK_TOKEN), cronConfigured: Boolean(process.env.CRON_SECRET) });
+  });
+
+  router.get('/performance/own', requirePlatformAuth, async (req: any, res: any) => {
+    const db = getSupabaseAdmin();
+    const memberId = req.platformContext.platformMember.id;
+    const [leads, activities, proposals, contracts] = await Promise.all([
+      db.from('platform_lead_assignments').select('*', { count: 'exact', head: true }).eq('owner_platform_member_id', memberId),
+      db.from('commercial_activities').select('*', { count: 'exact', head: true }).eq('owner_platform_member_id', memberId).eq('status', 'completed'),
+      db.from('commercial_proposals').select('*', { count: 'exact', head: true }).eq('owner_platform_member_id', memberId),
+      db.from('commercial_contracts').select('amount_cents,status').eq('owner_platform_member_id', memberId).in('status', ['active', 'approved', 'pending_payment']),
+    ]);
+    const revenueCents = (contracts.data || []).reduce((sum: number, contract: any) => sum + Number(contract.amount_cents || 0), 0);
+    return res.json({ assignedLeads: leads.count || 0, completedActivities: activities.count || 0, proposals: proposals.count || 0, contracts: contracts.data?.length || 0, contractedRecurringCents: revenueCents });
   });
 
   return router;
