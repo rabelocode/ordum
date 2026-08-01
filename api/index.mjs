@@ -102,10 +102,14 @@ function createAdminLeadsRouter(getSupabaseAdmin, requirePlatformAuth) {
       const { platformContext } = req;
       const leadId = req.params.id;
       const { team_id, owner_platform_member_id } = req.body;
+      if (!team_id || typeof req.body?.reason !== "string" || !req.body.reason.trim()) {
+        return res.status(400).json({ error: "Equipe e motivo da transfer\xEAncia s\xE3o obrigat\xF3rios." });
+      }
+      const current = await getSupabaseAdmin().from("platform_lead_assignments").select("*").eq("lead_id", leadId).maybeSingle();
+      if (current.error) throw current.error;
       if (platformContext.role?.key !== "admin") {
         const isManager = platformContext.managedTeams.some((t) => t.id === team_id);
         if (!isManager) return res.status(403).json({ error: "Forbidden" });
-        const current = await getSupabaseAdmin().from("platform_lead_assignments").select("*").eq("lead_id", leadId).maybeSingle();
         if (!current.data || !platformContext.managedTeams.some((team) => team.id === current.data.team_id)) {
           return res.status(403).json({ error: "Lead fora do escopo gerenciado." });
         }
@@ -121,6 +125,15 @@ function createAdminLeadsRouter(getSupabaseAdmin, requirePlatformAuth) {
         assigned_by_user_id: req.user.id
       }, { onConflict: "lead_id" }).select().single();
       if (error) throw error;
+      await getSupabaseAdmin().from("commercial_lead_assignment_history").insert({
+        lead_id: leadId,
+        from_team_id: current.data?.team_id || null,
+        to_team_id: team_id,
+        from_owner_platform_member_id: current.data?.owner_platform_member_id || null,
+        to_owner_platform_member_id: owner_platform_member_id || null,
+        reason: req.body.reason.trim(),
+        actor_user_id: req.user.id
+      });
       await getSupabaseAdmin().from("platform_audit_logs").insert({
         actor_user_id: req.user.id,
         action: "lead.assigned",
@@ -144,7 +157,10 @@ function createAdminLeadsRouter(getSupabaseAdmin, requirePlatformAuth) {
       if (req.platformContext.role?.key !== "admin" && !canReadAssignedResource(req.platformContext, assignment, "member_lead_visibility")) {
         return res.status(403).json({ error: "Lead fora do seu escopo." });
       }
-      const allowed = ["status", "priority"];
+      if (Object.prototype.hasOwnProperty.call(req.body, "status")) {
+        return res.status(409).json({ error: "Altera\xE7\xF5es de estado usam a m\xE1quina de transi\xE7\xE3o e exigem motivo." });
+      }
+      const allowed = ["priority", "qualification_state", "first_contact_at", "won_reason", "lost_reason"];
       const updates = Object.fromEntries(Object.entries(req.body).filter(([key]) => allowed.includes(key)));
       if (!Object.keys(updates).length) return res.status(400).json({ error: "Nenhum campo permitido." });
       const saved = await db.from("marketing_leads").update(updates).eq("id", lead.id).select().single();
@@ -158,6 +174,71 @@ function createAdminLeadsRouter(getSupabaseAdmin, requirePlatformAuth) {
         severity: "info",
         ...auditContext(req, { result: "success", before: { status: lead.status, priority: lead.priority }, after: updates })
       });
+      return res.json(saved.data);
+    } catch (error) {
+      return res.status(500).json({ error: error.message });
+    }
+  });
+  router.get("/:id/duplicates", requirePlatformAuth, async (req, res) => {
+    try {
+      const db = getSupabaseAdmin();
+      const leadResult = await db.from("marketing_leads").select("id,platform_lead_assignments(*)").eq("id", req.params.id).maybeSingle();
+      if (leadResult.error || !leadResult.data) return res.status(404).json({ error: "Lead n\xE3o encontrado." });
+      const assignment = leadResult.data.platform_lead_assignments?.[0];
+      if (!canReadAssignedResource(req.platformContext, assignment, "member_lead_visibility")) return res.status(403).json({ error: "Lead fora do seu escopo." });
+      const keys = await db.from("commercial_lead_identity_keys").select("key_type,key_hash").eq("lead_id", req.params.id);
+      if (keys.error) throw keys.error;
+      if (!keys.data?.length) return res.json({ duplicates: [], matchedBy: [] });
+      const hashes = [...new Set(keys.data.map((key) => key.key_hash))];
+      const matches = await db.from("commercial_lead_identity_keys").select("lead_id,key_type").in("key_hash", hashes).neq("lead_id", req.params.id).limit(100);
+      if (matches.error) throw matches.error;
+      const leadIds = [...new Set((matches.data || []).map((item) => item.lead_id))];
+      if (!leadIds.length) return res.json({ duplicates: [], matchedBy: [] });
+      const leads = await db.from("marketing_leads").select("id,name,email,company,phone,status,created_at,platform_lead_assignments(*)").in("id", leadIds);
+      if (leads.error) throw leads.error;
+      const visible = (leads.data || []).filter((lead) => canReadAssignedResource(req.platformContext, lead.platform_lead_assignments?.[0], "member_lead_visibility"));
+      return res.json({ duplicates: visible, matches: (matches.data || []).filter((match) => visible.some((lead) => lead.id === match.lead_id)) });
+    } catch (error) {
+      return res.status(500).json({ error: error.message });
+    }
+  });
+  router.post("/:id/auto-assign", requirePlatformAuth, async (req, res) => {
+    try {
+      const teamId = req.body?.teamId;
+      const reason = typeof req.body?.reason === "string" ? req.body.reason.trim() : "";
+      if (!teamId || !reason) return res.status(400).json({ error: "Equipe e motivo s\xE3o obrigat\xF3rios." });
+      if (req.platformContext.role?.key !== "admin" && !req.platformContext.managedTeams.some((team) => team.id === teamId)) return res.status(403).json({ error: "Equipe fora do escopo gerenciado." });
+      const result = await getSupabaseAdmin().rpc("admin_auto_assign_lead", { p_lead_id: req.params.id, p_team_id: teamId, p_actor_user_id: req.user.id, p_reason: reason });
+      if (result.error) return res.status(409).json({ error: result.error.message });
+      return res.json({ ownerPlatformMemberId: result.data });
+    } catch (error) {
+      return res.status(500).json({ error: error.message });
+    }
+  });
+  router.post("/:id/recalculate-score", requirePlatformAuth, async (req, res) => {
+    try {
+      const db = getSupabaseAdmin();
+      const lead = await db.from("marketing_leads").select("*").eq("id", req.params.id).maybeSingle();
+      if (lead.error || !lead.data) return res.status(404).json({ error: "Lead n\xE3o encontrado." });
+      const assignmentResult = await db.from("platform_lead_assignments").select("*").eq("lead_id", req.params.id).maybeSingle();
+      if (!canReadAssignedResource(req.platformContext, assignmentResult.data, "member_lead_visibility")) return res.status(403).json({ error: "Lead fora do seu escopo." });
+      const rules = await db.from("commercial_scoring_rules").select("*").eq("active", true).order("priority").limit(100);
+      if (rules.error) throw rules.error;
+      const explanations = [];
+      let score = 0;
+      for (const rule of rules.data || []) {
+        const actual = rule.field.split(".").reduce((value, key) => value?.[key], lead.data);
+        const expected = rule.comparison_value;
+        const matched = rule.operator === "present" ? actual !== null && actual !== void 0 && String(actual).trim() !== "" : rule.operator === "equals" ? String(actual ?? "").toLowerCase() === String(expected ?? "").toLowerCase() : rule.operator === "contains" ? String(actual ?? "").toLowerCase().includes(String(expected ?? "").toLowerCase()) : rule.operator === "in" ? Array.isArray(expected) && expected.map(String).includes(String(actual)) : rule.operator === "gte" ? Number(actual) >= Number(expected) : rule.operator === "lte" ? Number(actual) <= Number(expected) : false;
+        if (matched) {
+          score += Number(rule.points);
+          explanations.push({ ruleId: rule.id, name: rule.name, points: rule.points });
+        }
+      }
+      score = Math.max(0, Math.min(100, score));
+      const saved = await db.from("marketing_leads").update({ score, score_explanation: explanations, updated_at: (/* @__PURE__ */ new Date()).toISOString() }).eq("id", req.params.id).select("id,score,score_explanation").single();
+      if (saved.error) throw saved.error;
+      await db.from("platform_audit_logs").insert({ actor_user_id: req.user.id, action: "lead.score_recalculated", entity_type: "marketing_leads", entity_id: req.params.id, severity: "info", ...auditContext(req, { result: "success", after: { score, matched_rules: explanations.length } }) });
       return res.json(saved.data);
     } catch (error) {
       return res.status(500).json({ error: error.message });
@@ -208,7 +289,7 @@ function createAdminClientsRouter(getSupabaseAdmin, requirePlatformAuth) {
       const { platformContext } = req;
       const { page, pageSize, from, to } = parsePagination(req.query);
       const paginated = req.query.page !== void 0;
-      let visibleTenantIds = null;
+      let visibleTenantIds2 = null;
       if (platformContext.role?.key !== "admin") {
         const visibleTeams = platformContext.teams.filter((team) => platformContext.managedTeams.some((managed) => managed.id === team.id) || ["team", "all"].includes(team.member_client_visibility)).map((team) => team.id);
         let assignmentQuery = getSupabaseAdmin().from("platform_client_assignments").select("tenant_id");
@@ -217,11 +298,11 @@ function createAdminClientsRouter(getSupabaseAdmin, requirePlatformAuth) {
         assignmentQuery = assignmentQuery.or(clauses.join(","));
         const assignmentResult = await assignmentQuery;
         if (assignmentResult.error) throw assignmentResult.error;
-        visibleTenantIds = [...new Set((assignmentResult.data || []).map((item) => String(item.tenant_id)))];
-        if (!visibleTenantIds.length) return res.json(paginated ? pageResult([], 0, page, pageSize) : []);
+        visibleTenantIds2 = [...new Set((assignmentResult.data || []).map((item) => String(item.tenant_id)))];
+        if (!visibleTenantIds2.length) return res.json(paginated ? pageResult([], 0, page, pageSize) : []);
       }
       let query = getSupabaseAdmin().from("tenants").select("*, tenant_solutions(*), platform_client_assignments(*, platform_teams(name), platform_members(user_id, platform_roles(key, name))), tenant_billing_state(*), tenant_domains(*), memberships(id,status,user_id,employment_level), departments(id,name,active)", { count: "exact" }).in("status", ["active", "trial", "suspended"]).order("created_at", { ascending: false });
-      if (visibleTenantIds) query = query.in("id", visibleTenantIds);
+      if (visibleTenantIds2) query = query.in("id", visibleTenantIds2);
       if (typeof req.query.status === "string" && req.query.status) query = query.eq("status", req.query.status);
       if (typeof req.query.search === "string" && req.query.search.trim()) query = query.ilike("name", `%${req.query.search.trim().slice(0, 100)}%`);
       if (paginated) query = query.range(from, to);
@@ -269,11 +350,14 @@ function createAdminClientsRouter(getSupabaseAdmin, requirePlatformAuth) {
       const { platformContext } = req;
       const clientId = req.params.id;
       const { team_id, owner_platform_member_id } = req.body;
+      const reason = typeof req.body?.reason === "string" ? req.body.reason.trim() : "";
+      if (!team_id || !reason) return res.status(400).json({ error: "Equipe e motivo da transfer\xEAncia s\xE3o obrigat\xF3rios." });
+      const previous = await getSupabaseAdmin().from("platform_client_assignments").select("*").eq("tenant_id", clientId).eq("assignment_type", "commercial").maybeSingle();
+      if (previous.error) throw previous.error;
       if (platformContext.role?.key !== "admin") {
         const isManager = platformContext.managedTeams.some((t) => t.id === team_id);
         if (!isManager) return res.status(403).json({ error: "Forbidden" });
-        const current = await getSupabaseAdmin().from("platform_client_assignments").select("*").eq("tenant_id", clientId).eq("assignment_type", "commercial").maybeSingle();
-        if (!current.data || !platformContext.managedTeams.some((team) => team.id === current.data.team_id)) {
+        if (!previous.data || !platformContext.managedTeams.some((team) => team.id === previous.data.team_id)) {
           return res.status(403).json({ error: "Cliente fora do escopo gerenciado." });
         }
       }
@@ -297,7 +381,7 @@ function createAdminClientsRouter(getSupabaseAdmin, requirePlatformAuth) {
         entity_id: clientId,
         severity: "info",
         team_id,
-        ...auditContext(req, { result: "success", after: { team_id, owner_platform_member_id: owner_platform_member_id || null } })
+        ...auditContext(req, { result: "success", reason, before: previous.data ? { team_id: previous.data.team_id, owner_platform_member_id: previous.data.owner_platform_member_id } : null, after: { team_id, owner_platform_member_id: owner_platform_member_id || null } })
       });
       res.json(data);
     } catch (e) {
@@ -774,10 +858,278 @@ function createAdminOtherRouter(getSupabaseAdmin, requirePlatformAuth) {
   return router;
 }
 
-// src/server/adminTeamsRouter.ts
+// src/server/adminControlPlaneRouter.ts
 import { Router as Router4 } from "express";
-function createAdminTeamsRouter(getSupabaseAdmin, requirePlatformAuth) {
+var MODULES = {
+  onboarding: { table: "onboarding_runs", select: "*, tenants(id,name,lifecycle_status), onboarding_items(*)", permission: "platform.onboarding.read", tenantField: "tenant_id", ownerField: "owner_platform_member_id", orderField: "created_at" },
+  success: { table: "customer_success_accounts", select: "*, tenants(id,name,lifecycle_status,risk_level)", permission: "platform.success.read", tenantField: "tenant_id", ownerField: "manager_platform_member_id", orderField: "updated_at" },
+  support: { table: "support_tickets", select: "*, tenants(id,name), solutions(id,key,name)", permission: "platform.support.read", tenantField: "tenant_id", teamField: "team_id", ownerField: "owner_platform_member_id", orderField: "created_at" },
+  privacy: { table: "lgpd_requests", select: "id,request_number,tenant_id,request_type,status,data_subject_reference,legal_hold,retention_until,due_at,owner_platform_member_id,reason,result_summary,excludes_integrity_data,created_at,updated_at,completed_at,tenants(id,name)", permission: "platform.privacy.read", tenantField: "tenant_id", ownerField: "owner_platform_member_id", orderField: "created_at" },
+  targets: { table: "sales_targets", select: "*", permission: "platform.targets.read", teamField: "team_id", ownerField: "platform_member_id", orderField: "period_start" },
+  operations: { table: "platform_operational_events", select: "id,source,event_type,status,correlation_id,attempts,last_error,payload_summary,next_attempt_at,started_at,completed_at,created_at", permission: "platform.operations.read", orderField: "created_at" }
+};
+function hasPermission(context, permission) {
+  return context.role?.key === "admin" || context.permissions.includes(permission);
+}
+function cleanUuidList(value) {
+  if (typeof value !== "string" || !value.trim()) return null;
+  const values = value.split(",").map((item) => item.trim()).filter((item) => /^[0-9a-f-]{36}$/i.test(item));
+  return values.length ? [...new Set(values)].slice(0, 100) : null;
+}
+function validDate(value, fallback) {
+  if (typeof value !== "string") return fallback;
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.valueOf()) ? fallback : parsed;
+}
+async function visibleTenantIds(db, context) {
+  if (isGlobalAdmin(context)) return null;
+  const visibleTeams = context.teams.filter((team) => context.managedTeams.some((managed) => managed.id === team.id) || ["team", "all"].includes(team.member_client_visibility)).map((team) => team.id);
+  const clauses = [`owner_platform_member_id.eq.${context.platformMember.id}`];
+  if (visibleTeams.length) clauses.push(`team_id.in.(${visibleTeams.join(",")})`);
+  const result = await db.from("platform_client_assignments").select("tenant_id").eq("assignment_type", "commercial").or(clauses.join(","));
+  if (result.error) throw result.error;
+  return [...new Set((result.data || []).map((item) => String(item.tenant_id)))];
+}
+function intersectAllowed(requested, allowed) {
+  if (allowed === null) return requested;
+  if (requested === null) return allowed;
+  const allowedSet = new Set(allowed);
+  return requested.filter((id) => allowedSet.has(id));
+}
+function csvCell(value) {
+  const raw = value === null || value === void 0 ? "" : typeof value === "object" ? JSON.stringify(value) : String(value);
+  const text = /^[=+\-@]/.test(raw) ? `'${raw}` : raw;
+  return `"${text.replace(/"/g, '""').replace(/[\r\n]+/g, " ")}"`;
+}
+function createAdminControlPlaneRouter(getSupabaseAdmin, requirePlatformAuth) {
   const router = Router4();
+  router.get("/control-plane/metrics", requirePlatformAuth, async (req, res) => {
+    try {
+      const db = getSupabaseAdmin();
+      const now = /* @__PURE__ */ new Date();
+      const defaultFrom = new Date(now.valueOf() - 30 * 864e5);
+      const from = validDate(req.query.from, defaultFrom);
+      const to = validDate(req.query.to, now);
+      if (from >= to || to.valueOf() - from.valueOf() > 366 * 864e5) return res.status(400).json({ error: "Per\xEDodo inv\xE1lido ou superior a 366 dias." });
+      const requestedTeams = cleanUuidList(req.query.team);
+      const requestedOwners = cleanUuidList(req.query.owner);
+      const requestedTenants = cleanUuidList(req.query.tenant);
+      const requestedPlans = cleanUuidList(req.query.plan);
+      const context = req.platformContext;
+      const allowedTenants = await visibleTenantIds(db, context);
+      const tenantIds = intersectAllowed(requestedTenants, allowedTenants);
+      if (allowedTenants !== null && tenantIds?.length === 0) {
+        return res.json({ current: null, previous: null, emptyReason: "Nenhum registro est\xE1 dispon\xEDvel no escopo e filtros selecionados." });
+      }
+      let teamIds = requestedTeams;
+      let ownerIds = requestedOwners;
+      if (!isGlobalAdmin(context)) {
+        const managed = context.managedTeams.map((team) => team.id);
+        const visible = context.teams.filter((team) => ["team", "all"].includes(team.member_lead_visibility)).map((team) => team.id);
+        const allowedTeams = [.../* @__PURE__ */ new Set([...managed, ...visible])];
+        teamIds = intersectAllowed(requestedTeams, allowedTeams);
+        if (!teamIds?.length) ownerIds = [context.platformMember.id];
+        else if (requestedOwners?.length) ownerIds = requestedOwners.includes(context.platformMember.id) ? [context.platformMember.id] : null;
+      }
+      const duration = to.valueOf() - from.valueOf();
+      const previousFrom = new Date(from.valueOf() - duration);
+      const args = (start, end) => ({
+        p_from: start.toISOString(),
+        p_to: end.toISOString(),
+        p_team_ids: teamIds,
+        p_owner_ids: ownerIds,
+        p_tenant_ids: tenantIds,
+        p_plan_ids: requestedPlans,
+        p_is_admin: isGlobalAdmin(context)
+      });
+      const [currentResult, previousResult] = await Promise.all([
+        db.rpc("admin_control_plane_metrics", args(from, to)),
+        db.rpc("admin_control_plane_metrics", args(previousFrom, from))
+      ]);
+      if (currentResult.error) throw currentResult.error;
+      if (previousResult.error) throw previousResult.error;
+      return res.json({ current: currentResult.data, previous: previousResult.data, emptyReason: currentResult.data?.has_commercial_data || currentResult.data?.has_financial_data ? null : "Ainda n\xE3o h\xE1 dados suficientes no per\xEDodo selecionado." });
+    } catch (error) {
+      return res.status(500).json({ error: error.message });
+    }
+  });
+  router.get("/control-plane/filters", requirePlatformAuth, async (req, res) => {
+    try {
+      const db = getSupabaseAdmin();
+      const context = req.platformContext;
+      const teamIds = isGlobalAdmin(context) ? null : context.teams.map((team) => team.id);
+      let teamsQuery = db.from("platform_teams").select("id,name,status").eq("status", "active").order("name");
+      if (teamIds !== null) {
+        if (!teamIds.length) return res.json({ teams: [], people: [], plans: [], solutions: [] });
+        teamsQuery = teamsQuery.in("id", teamIds);
+      }
+      const [teams, members, plans, solutions] = await Promise.all([
+        teamsQuery,
+        db.from("platform_members").select("id,user_id,status,relationship_type,platform_roles(key,name)").eq("status", "active"),
+        db.from("billing_plans").select("id,code,version,name,active").order("name"),
+        db.from("solutions").select("id,key,name").order("name")
+      ]);
+      for (const result of [teams, members, plans, solutions]) if (result.error) throw result.error;
+      return res.json({ teams: teams.data || [], people: members.data || [], plans: plans.data || [], solutions: solutions.data || [] });
+    } catch (error) {
+      return res.status(500).json({ error: error.message });
+    }
+  });
+  router.get("/control-plane/modules/:module", requirePlatformAuth, async (req, res) => {
+    try {
+      const config = MODULES[req.params.module];
+      if (!config) return res.status(404).json({ error: "M\xF3dulo n\xE3o encontrado." });
+      if (!hasPermission(req.platformContext, config.permission)) return res.status(403).json({ error: "Forbidden" });
+      if (req.params.module === "operations" && !isGlobalAdmin(req.platformContext)) return res.status(403).json({ error: "Opera\xE7\xF5es globais exigem perfil admin." });
+      const db = getSupabaseAdmin();
+      const { page, pageSize, from, to } = parsePagination(req.query);
+      let query = db.from(config.table).select(config.select, { count: "exact" }).order(config.orderField, { ascending: false }).range(from, to);
+      const tenants = config.tenantField ? await visibleTenantIds(db, req.platformContext) : null;
+      if (config.tenantField && tenants !== null) {
+        if (!tenants.length) return res.json(pageResult([], 0, page, pageSize));
+        query = query.in(config.tenantField, tenants);
+      }
+      if (config.teamField && !isGlobalAdmin(req.platformContext)) {
+        const teamIds = req.platformContext.teams.map((team) => team.id);
+        if (!teamIds.length && config.ownerField) query = query.eq(config.ownerField, req.platformContext.platformMember.id);
+        else if (teamIds.length) query = query.or(`${config.teamField}.in.(${teamIds.join(",")}),${config.ownerField}.eq.${req.platformContext.platformMember.id}`);
+      }
+      if (typeof req.query.status === "string" && req.query.status) query = query.eq("status", req.query.status);
+      const result = await query;
+      if (result.error) throw result.error;
+      return res.json(pageResult(result.data || [], result.count, page, pageSize));
+    } catch (error) {
+      return res.status(500).json({ error: error.message });
+    }
+  });
+  router.post("/control-plane/transition", requirePlatformAuth, async (req, res) => {
+    try {
+      const { entityType, entityId, toStatus, reason, teamId, tenantId, requestId, metadata } = req.body || {};
+      if (!["lead", "proposal", "contract", "tenant", "onboarding", "support", "lgpd"].includes(entityType)) return res.status(400).json({ error: "Tipo de recurso inv\xE1lido." });
+      if (!entityId || !toStatus || typeof reason !== "string" || !reason.trim()) return res.status(400).json({ error: "Recurso, pr\xF3ximo estado e motivo s\xE3o obrigat\xF3rios." });
+      const permission = entityType === "onboarding" ? "platform.onboarding.manage" : entityType === "support" ? "platform.support.manage" : entityType === "lgpd" ? "platform.privacy.manage" : entityType === "tenant" ? "platform.clients.manage" : "platform.commercial.manage";
+      if (!hasPermission(req.platformContext, permission)) return res.status(403).json({ error: "Forbidden" });
+      if (!isGlobalAdmin(req.platformContext) && teamId && !req.platformContext.managedTeams.some((team) => team.id === teamId)) return res.status(403).json({ error: "Recurso fora do escopo gerenciado." });
+      const result = await getSupabaseAdmin().rpc("admin_transition_control_plane", {
+        p_entity_type: entityType,
+        p_entity_id: entityId,
+        p_to_status: toStatus,
+        p_actor_user_id: req.user.id,
+        p_reason: reason.trim(),
+        p_request_id: requestId || req.requestId || null,
+        p_team_id: teamId || null,
+        p_tenant_id: tenantId || null,
+        p_metadata: metadata || {}
+      });
+      if (result.error) return res.status(409).json({ error: result.error.message });
+      return res.json({ status: result.data });
+    } catch (error) {
+      return res.status(500).json({ error: error.message });
+    }
+  });
+  router.post("/control-plane/onboarding/start", requirePlatformAuth, async (req, res) => {
+    if (!hasPermission(req.platformContext, "platform.onboarding.manage")) return res.status(403).json({ error: "Forbidden" });
+    const tenants = await visibleTenantIds(getSupabaseAdmin(), req.platformContext);
+    if (tenants !== null && !tenants.includes(req.body?.tenantId)) return res.status(403).json({ error: "Cliente fora do escopo." });
+    const result = await getSupabaseAdmin().rpc("admin_start_onboarding", {
+      p_tenant_id: req.body?.tenantId,
+      p_template_id: req.body?.templateId,
+      p_actor_user_id: req.user.id,
+      p_owner_platform_member_id: req.body?.ownerId || null
+    });
+    if (result.error) return res.status(409).json({ error: result.error.message });
+    return res.status(201).json({ id: result.data });
+  });
+  router.post("/control-plane/onboarding/:id/refresh", requirePlatformAuth, async (req, res) => {
+    if (!hasPermission(req.platformContext, "platform.onboarding.manage")) return res.status(403).json({ error: "Forbidden" });
+    const result = await getSupabaseAdmin().rpc("admin_refresh_onboarding_progress", { p_run_id: req.params.id, p_actor_user_id: req.user.id });
+    if (result.error) return res.status(409).json({ error: result.error.message });
+    return res.json({ progressPercent: result.data });
+  });
+  router.get("/control-plane/tenants/:id/entitlements", requirePlatformAuth, async (req, res) => {
+    if (!hasPermission(req.platformContext, "platform.clients.read")) return res.status(403).json({ error: "Forbidden" });
+    const tenants = await visibleTenantIds(getSupabaseAdmin(), req.platformContext);
+    if (tenants !== null && !tenants.includes(req.params.id)) return res.status(403).json({ error: "Cliente fora do escopo." });
+    const result = await getSupabaseAdmin().rpc("admin_effective_entitlements", { p_tenant_id: req.params.id });
+    if (result.error) throw result.error;
+    return res.json(result.data);
+  });
+  router.get("/access/matrix", requirePlatformAuth, async (req, res) => {
+    if (!hasPermission(req.platformContext, "platform.access.simulate")) return res.status(403).json({ error: "Forbidden" });
+    const db = getSupabaseAdmin();
+    const [members, permissions, memberships] = await Promise.all([
+      db.from("platform_members").select("id,user_id,status,relationship_type,platform_roles(id,key,name)"),
+      db.from("platform_role_permissions").select("role_id,platform_permissions(key,category,description)"),
+      db.from("platform_team_members").select("platform_member_id,team_id,team_role,status,platform_teams(id,name)")
+    ]);
+    for (const result of [members, permissions, memberships]) if (result.error) throw result.error;
+    return res.json({ members: members.data || [], rolePermissions: permissions.data || [], teamMemberships: memberships.data || [], rule: "relationship_type \xE9 informativo e nunca concede privil\xE9gios." });
+  });
+  router.post("/access/simulate", requirePlatformAuth, async (req, res) => {
+    if (!hasPermission(req.platformContext, "platform.access.simulate")) return res.status(403).json({ error: "Forbidden" });
+    const { platformMemberId, permission, teamId, ownerPlatformMemberId } = req.body || {};
+    const db = getSupabaseAdmin();
+    const member = await db.from("platform_members").select("id,status,relationship_type,platform_roles(id,key,name)").eq("id", platformMemberId).maybeSingle();
+    if (member.error || !member.data) return res.status(404).json({ error: "Usu\xE1rio n\xE3o encontrado." });
+    const role = member.data.platform_roles;
+    const rolePermission = await db.from("platform_role_permissions").select("platform_permissions!inner(key)").eq("role_id", role.id).eq("platform_permissions.key", permission).maybeSingle();
+    const membership = teamId ? await db.from("platform_team_members").select("team_role,status,platform_teams(name,member_lead_visibility,member_client_visibility)").eq("platform_member_id", platformMemberId).eq("team_id", teamId).maybeSingle() : { data: null, error: null };
+    let allowed = member.data.status === "active" && (role.key === "admin" || Boolean(rolePermission.data));
+    let origin = allowed ? `papel:${role.key}` : member.data.status !== "active" ? "usu\xE1rio suspenso" : `papel:${role.key} sem ${permission}`;
+    if (allowed && role.key !== "admin" && teamId) {
+      const teamScope = membership.data?.status === "active" && (membership.data.team_role === "manager" || ownerPlatformMemberId === platformMemberId || ["team", "all"].includes(membership.data.platform_teams?.member_client_visibility));
+      allowed = Boolean(teamScope);
+      origin = allowed ? `equipe:${membership.data?.platform_teams?.name || teamId}` : "fora do escopo da equipe/owner";
+    }
+    return res.json({ allowed, role: role.key, relationshipType: member.data.relationship_type, teamId: teamId || null, permission, origin, note: "relationship_type n\xE3o participa da decis\xE3o." });
+  });
+  router.get("/control-plane/search", requirePlatformAuth, async (req, res) => {
+    const term = typeof req.query.q === "string" ? req.query.q.trim().replace(/[%(),]/g, "").slice(0, 80) : "";
+    if (term.length < 2) return res.json({ items: [] });
+    const db = getSupabaseAdmin();
+    const tenantScope = await visibleTenantIds(db, req.platformContext);
+    let tenantQuery = db.from("tenants").select("id,name,slug,lifecycle_status").ilike("name", `%${term}%`).limit(8);
+    if (tenantScope !== null) {
+      if (!tenantScope.length) tenantQuery = tenantQuery.eq("id", "00000000-0000-0000-0000-000000000000");
+      else tenantQuery = tenantQuery.in("id", tenantScope);
+    }
+    const tenants = await tenantQuery;
+    if (tenants.error) throw tenants.error;
+    return res.json({ items: (tenants.data || []).map((item) => ({ type: "client", id: item.id, title: item.name, subtitle: item.lifecycle_status, href: `#/admin/empresas/${item.id}` })) });
+  });
+  router.get("/control-plane/export/:resource", requirePlatformAuth, async (req, res) => {
+    if (!hasPermission(req.platformContext, "platform.exports.execute")) return res.status(403).json({ error: "Forbidden" });
+    const resource = String(req.params.resource);
+    const allowed = {
+      clients: { table: "tenants", columns: "id,name,slug,status,lifecycle_status,risk_level,created_at", permission: "platform.clients.read", tenantField: "id" },
+      support: { table: "support_tickets", columns: "id,ticket_number,tenant_id,category,priority,severity,status,subject,sla_due_at,created_at", permission: "platform.support.read", tenantField: "tenant_id" }
+    };
+    const config = allowed[resource];
+    if (!config || !hasPermission(req.platformContext, config.permission)) return res.status(404).json({ error: "Exporta\xE7\xE3o indispon\xEDvel." });
+    const db = getSupabaseAdmin();
+    const tenants = await visibleTenantIds(db, req.platformContext);
+    let query = db.from(config.table).select(config.columns).limit(1e3);
+    if (tenants !== null) {
+      if (!tenants.length) return res.status(204).end();
+      query = query.in(config.tenantField, tenants);
+    }
+    const result = await query;
+    if (result.error) throw result.error;
+    const rows = result.data || [];
+    const headers = rows.length ? Object.keys(rows[0]) : config.columns.split(",");
+    const csv = ["sep=,", headers.map(csvCell).join(","), ...rows.map((row) => headers.map((header) => csvCell(row[header])).join(","))].join("\r\n");
+    await db.from("platform_audit_logs").insert({ actor_user_id: req.user.id, action: "admin.exported", entity_type: resource, severity: "info", ...auditContext(req, { result: "success", row_count: rows.length, excludes_integrity_data: true }) });
+    res.setHeader("Content-Type", "text/csv; charset=utf-8");
+    res.setHeader("Content-Disposition", `attachment; filename="ordum-${resource}.csv"`);
+    return res.send(`\uFEFF${csv}`);
+  });
+  return router;
+}
+
+// src/server/adminTeamsRouter.ts
+import { Router as Router5 } from "express";
+function createAdminTeamsRouter(getSupabaseAdmin, requirePlatformAuth) {
+  const router = Router5();
   router.get("/", requirePlatformAuth, async (req, res) => {
     try {
       const { platformContext } = req;
@@ -994,7 +1346,7 @@ function createAdminTeamsRouter(getSupabaseAdmin, requirePlatformAuth) {
 
 // src/server/billing/router.ts
 import { createHash, timingSafeEqual } from "node:crypto";
-import { Router as Router5 } from "express";
+import { Router as Router6 } from "express";
 import { waitUntil } from "@vercel/functions";
 
 // src/server/billing/asaas.ts
@@ -1193,7 +1545,7 @@ function safeProviderMetadata(value) {
 }
 
 // src/server/billing/router.ts
-function hasPermission(context, permission) {
+function hasPermission2(context, permission) {
   return context.role?.key === "admin" || context.permissions.includes(permission);
 }
 function webhookTokenMatches(actual, expected) {
@@ -1518,9 +1870,9 @@ async function runBillingReconciliation(db, triggeredByUserId) {
   }
 }
 function createBillingRouters(getSupabaseAdmin, requirePlatformAuth) {
-  const publicRouter = Router5();
-  const adminRouter = Router5();
-  const internalRouter = Router5();
+  const publicRouter = Router6();
+  const adminRouter = Router6();
+  const internalRouter = Router6();
   publicRouter.post("/asaas", async (req, res) => {
     const db = getSupabaseAdmin();
     let config;
@@ -1574,7 +1926,7 @@ function createBillingRouters(getSupabaseAdmin, requirePlatformAuth) {
     return res.status(200).json({ received: true, status: "received", correlationId: eventRow.correlation_id });
   });
   adminRouter.get("/billing/overview", requirePlatformAuth, async (req, res) => {
-    if (!hasPermission(req.platformContext, "platform.billing.read")) return res.status(403).json({ error: "Forbidden" });
+    if (!hasPermission2(req.platformContext, "platform.billing.read")) return res.status(403).json({ error: "Forbidden" });
     const db = getSupabaseAdmin();
     const contractIds = await scopedContractIds(db, req.platformContext);
     if (contractIds && !contractIds.length) return res.json({
@@ -1606,7 +1958,7 @@ function createBillingRouters(getSupabaseAdmin, requirePlatformAuth) {
     });
   });
   adminRouter.get("/billing/records", requirePlatformAuth, async (req, res) => {
-    if (!hasPermission(req.platformContext, "platform.billing.read")) return res.status(403).json({ error: "Forbidden" });
+    if (!hasPermission2(req.platformContext, "platform.billing.read")) return res.status(403).json({ error: "Forbidden" });
     const db = getSupabaseAdmin();
     const contractIds = await scopedContractIds(db, req.platformContext);
     const { page, pageSize, from, to } = parsePagination(req.query);
@@ -1629,13 +1981,13 @@ function createBillingRouters(getSupabaseAdmin, requirePlatformAuth) {
     });
   });
   adminRouter.get("/billing/plans", requirePlatformAuth, async (req, res) => {
-    if (!hasPermission(req.platformContext, "platform.billing.read")) return res.status(403).json({ error: "Forbidden" });
+    if (!hasPermission2(req.platformContext, "platform.billing.read")) return res.status(403).json({ error: "Forbidden" });
     const { data, error } = await getSupabaseAdmin().from("billing_plans").select("*, billing_plan_prices(*), billing_plan_solutions(*, solutions(id,key,name))").order("code").order("version", { ascending: false });
     if (error) return res.status(500).json({ error: error.message });
     return res.json(data);
   });
   adminRouter.post("/billing/plans", requirePlatformAuth, async (req, res) => {
-    if (!hasPermission(req.platformContext, "platform.billing.manage")) return res.status(403).json({ error: "Forbidden" });
+    if (!hasPermission2(req.platformContext, "platform.billing.manage")) return res.status(403).json({ error: "Forbidden" });
     const { code, name, description, trial_days, grace_days, limits, amount_cents, cycle, billing_type, solution_ids, solution_limits } = req.body;
     if (!code || !name) return res.status(400).json({ error: "C\xF3digo e nome s\xE3o obrigat\xF3rios." });
     const db = getSupabaseAdmin();
@@ -1659,7 +2011,7 @@ function createBillingRouters(getSupabaseAdmin, requirePlatformAuth) {
     return res.status(201).json(saved.data);
   });
   adminRouter.get("/commercial/catalog", requirePlatformAuth, async (req, res) => {
-    if (!hasPermission(req.platformContext, "platform.commercial.read")) return res.status(403).json({ error: "Forbidden" });
+    if (!hasPermission2(req.platformContext, "platform.commercial.read")) return res.status(403).json({ error: "Forbidden" });
     const db = getSupabaseAdmin();
     const [solutions, teams] = await Promise.all([
       db.from("solutions").select("id,key,name").order("name"),
@@ -1670,7 +2022,7 @@ function createBillingRouters(getSupabaseAdmin, requirePlatformAuth) {
     return res.json({ solutions: solutions.data, teams: scopedTeams });
   });
   adminRouter.get("/commercial/demos", requirePlatformAuth, async (req, res) => {
-    if (!hasPermission(req.platformContext, "platform.commercial.read")) return res.status(403).json({ error: "Forbidden" });
+    if (!hasPermission2(req.platformContext, "platform.commercial.read")) return res.status(403).json({ error: "Forbidden" });
     let query = getSupabaseAdmin().from("commercial_demos").select("*, marketing_leads(id,name,email,company,status), platform_teams(id,name)").order("created_at", { ascending: false });
     if (req.platformContext.role.key !== "admin") {
       const teamIds = req.platformContext.teams.map((team) => team.id);
@@ -1684,7 +2036,7 @@ function createBillingRouters(getSupabaseAdmin, requirePlatformAuth) {
     return res.json(req.query.page !== void 0 ? pageResult(scoped.slice(from, to + 1), scoped.length, page, pageSize) : scoped);
   });
   adminRouter.patch("/commercial/demos/:id", requirePlatformAuth, async (req, res) => {
-    if (!hasPermission(req.platformContext, "platform.commercial.manage")) return res.status(403).json({ error: "Forbidden" });
+    if (!hasPermission2(req.platformContext, "platform.commercial.manage")) return res.status(403).json({ error: "Forbidden" });
     const db = getSupabaseAdmin();
     const existing = await db.from("commercial_demos").select("*").eq("id", req.params.id).single();
     if (existing.error) return res.status(404).json({ error: "Demonstra\xE7\xE3o n\xE3o encontrada." });
@@ -1697,7 +2049,7 @@ function createBillingRouters(getSupabaseAdmin, requirePlatformAuth) {
     return res.json(saved.data);
   });
   adminRouter.post("/commercial/leads/:leadId/activities", requirePlatformAuth, async (req, res) => {
-    if (!hasPermission(req.platformContext, "platform.commercial.manage")) return res.status(403).json({ error: "Forbidden" });
+    if (!hasPermission2(req.platformContext, "platform.commercial.manage")) return res.status(403).json({ error: "Forbidden" });
     const { activity_type, subject, description, scheduled_at, status, result, next_action, next_action_at } = req.body;
     if (!activity_type || !subject) return res.status(400).json({ error: "Tipo e assunto s\xE3o obrigat\xF3rios." });
     const db = getSupabaseAdmin();
@@ -1725,7 +2077,7 @@ function createBillingRouters(getSupabaseAdmin, requirePlatformAuth) {
     return res.status(201).json(data);
   });
   adminRouter.get("/commercial/proposals", requirePlatformAuth, async (req, res) => {
-    if (!hasPermission(req.platformContext, "platform.commercial.read")) return res.status(403).json({ error: "Forbidden" });
+    if (!hasPermission2(req.platformContext, "platform.commercial.read")) return res.status(403).json({ error: "Forbidden" });
     let query = getSupabaseAdmin().from("commercial_proposals").select("*, marketing_leads(id,name,email,company), billing_plans(id,name,code,version)").order("created_at", { ascending: false });
     if (req.platformContext.role.key !== "admin") {
       const teamIds = req.platformContext.teams.map((team) => team.id);
@@ -1739,7 +2091,7 @@ function createBillingRouters(getSupabaseAdmin, requirePlatformAuth) {
     return res.json(req.query.page !== void 0 ? pageResult(scoped.slice(from, to + 1), scoped.length, page, pageSize) : scoped);
   });
   adminRouter.post("/commercial/proposals", requirePlatformAuth, async (req, res) => {
-    if (!hasPermission(req.platformContext, "platform.commercial.manage")) return res.status(403).json({ error: "Forbidden" });
+    if (!hasPermission2(req.platformContext, "platform.commercial.manage")) return res.status(403).json({ error: "Forbidden" });
     const input = req.body;
     if (!input.lead_id || !input.plan_id || !Number.isInteger(Number(input.amount_cents))) return res.status(400).json({ error: "Lead, plano e valor s\xE3o obrigat\xF3rios." });
     const db = getSupabaseAdmin();
@@ -1773,7 +2125,7 @@ function createBillingRouters(getSupabaseAdmin, requirePlatformAuth) {
     return res.status(201).json(data);
   });
   adminRouter.post("/commercial/proposals/:id/approve", requirePlatformAuth, async (req, res) => {
-    if (!hasPermission(req.platformContext, "platform.commercial.approve")) return res.status(403).json({ error: "Forbidden" });
+    if (!hasPermission2(req.platformContext, "platform.commercial.approve")) return res.status(403).json({ error: "Forbidden" });
     const db = getSupabaseAdmin();
     const { data: proposal, error: readError } = await db.from("commercial_proposals").select("*").eq("id", req.params.id).single();
     if (readError) return res.status(404).json({ error: "Proposta n\xE3o encontrada." });
@@ -1784,18 +2136,42 @@ function createBillingRouters(getSupabaseAdmin, requirePlatformAuth) {
       const team = req.platformContext.managedTeams.find((item) => item.id === proposal.team_id);
       if (!withinManagerApprovalLimit(team, proposal.amount_cents, "proposal")) return res.status(403).json({ error: "Valor acima da al\xE7ada configurada; aprova\xE7\xE3o de admin necess\xE1ria." });
     }
-    const { data, error } = await db.from("commercial_proposals").update({
-      status: "approved",
-      approved_by_user_id: req.user.id,
-      approved_at: (/* @__PURE__ */ new Date()).toISOString(),
-      approval_notes: req.body.approval_notes || null
-    }).eq("id", proposal.id).eq("status", "pending_approval").select().single();
-    if (error) return res.status(409).json({ error: error.message });
-    await db.from("platform_audit_logs").insert({ actor_user_id: req.user.id, action: "commercial.proposal.approved", entity_type: "commercial_proposals", entity_id: proposal.id, team_id: proposal.team_id, severity: "info" });
-    return res.json(data);
+    const reason = typeof req.body.approval_notes === "string" ? req.body.approval_notes.trim() : "";
+    if (!reason) return res.status(400).json({ error: "A justificativa da aprova\xE7\xE3o \xE9 obrigat\xF3ria." });
+    const transitioned = await db.rpc("admin_transition_control_plane", {
+      p_entity_type: "proposal",
+      p_entity_id: proposal.id,
+      p_to_status: "approved",
+      p_actor_user_id: req.user.id,
+      p_reason: reason,
+      p_team_id: proposal.team_id,
+      p_tenant_id: null,
+      p_request_id: req.requestId || null,
+      p_metadata: { approval_limit_checked: true, amount_cents: proposal.amount_cents }
+    });
+    if (transitioned.error) return res.status(409).json({ error: transitioned.error.message });
+    await db.from("commercial_proposals").update({ approval_notes: reason }).eq("id", proposal.id);
+    const saved = await db.from("commercial_proposals").select("*").eq("id", proposal.id).single();
+    return res.json(saved.data);
+  });
+  adminRouter.post("/commercial/proposals/:id/versions", requirePlatformAuth, async (req, res) => {
+    if (!hasPermission2(req.platformContext, "platform.commercial.manage")) return res.status(403).json({ error: "Forbidden" });
+    const reason = typeof req.body?.reason === "string" ? req.body.reason.trim() : "";
+    if (!reason) return res.status(400).json({ error: "O motivo da nova vers\xE3o \xE9 obrigat\xF3rio." });
+    const db = getSupabaseAdmin();
+    const existing = await db.from("commercial_proposals").select("*").eq("id", req.params.id).maybeSingle();
+    if (existing.error || !existing.data) return res.status(404).json({ error: "Proposta n\xE3o encontrada." });
+    if (!canReadAssignedResource(req.platformContext, existing.data, "member_lead_visibility")) return res.status(403).json({ error: "Proposta fora do seu escopo." });
+    const allowedChanges = ["plan_id", "amount_cents", "cycle", "billing_type", "valid_until", "discount_cents", "notes", "vigency_starts_on", "vigency_ends_on", "limits_snapshot"];
+    const changes = Object.fromEntries(Object.entries(req.body?.changes || {}).filter(([key]) => allowedChanges.includes(key)));
+    const created = await db.rpc("admin_create_proposal_version", { p_proposal_id: req.params.id, p_actor_user_id: req.user.id, p_changes: changes });
+    if (created.error) return res.status(409).json({ error: created.error.message });
+    await db.from("platform_audit_logs").insert({ actor_user_id: req.user.id, action: "commercial.proposal.version_created", entity_type: "commercial_proposals", entity_id: created.data, team_id: existing.data.team_id, severity: "info", ...auditContext(req, { result: "success", reason, supersedes: existing.data.id }) });
+    const saved = await db.from("commercial_proposals").select("*,commercial_proposal_items(*)").eq("id", created.data).single();
+    return res.status(201).json(saved.data);
   });
   adminRouter.post("/commercial/proposals/:id/create-contract", requirePlatformAuth, async (req, res) => {
-    if (!hasPermission(req.platformContext, "platform.commercial.manage")) return res.status(403).json({ error: "Forbidden" });
+    if (!hasPermission2(req.platformContext, "platform.commercial.manage")) return res.status(403).json({ error: "Forbidden" });
     const db = getSupabaseAdmin();
     const { data: proposal, error } = await db.from("commercial_proposals").select("*, marketing_leads(*), billing_plans(*)").eq("id", req.params.id).single();
     if (error || !proposal) return res.status(404).json({ error: "Proposta n\xE3o encontrada." });
@@ -1832,7 +2208,7 @@ function createBillingRouters(getSupabaseAdmin, requirePlatformAuth) {
     return res.status(201).json(contract);
   });
   adminRouter.get("/commercial/contracts", requirePlatformAuth, async (req, res) => {
-    if (!hasPermission(req.platformContext, "platform.commercial.read")) return res.status(403).json({ error: "Forbidden" });
+    if (!hasPermission2(req.platformContext, "platform.commercial.read")) return res.status(403).json({ error: "Forbidden" });
     let query = getSupabaseAdmin().from("commercial_contracts").select("*, billing_plans(name,code,version), commercial_contract_items(*, solutions(id,key,name)), billing_subscriptions(id,status,provider_subscription_id), tenant_billing_state(access_status,paid_through,grace_ends_at)").order("created_at", { ascending: false });
     if (req.platformContext.role.key !== "admin") {
       const teamIds = req.platformContext.teams.map((team) => team.id);
@@ -1846,11 +2222,11 @@ function createBillingRouters(getSupabaseAdmin, requirePlatformAuth) {
     return res.json(req.query.page !== void 0 ? pageResult(scoped.slice(from, to + 1), scoped.length, page, pageSize) : scoped);
   });
   adminRouter.post("/commercial/contracts", requirePlatformAuth, async (req, res) => {
-    if (!hasPermission(req.platformContext, "platform.commercial.manage")) return res.status(403).json({ error: "Forbidden" });
+    if (!hasPermission2(req.platformContext, "platform.commercial.manage")) return res.status(403).json({ error: "Forbidden" });
     return res.status(405).json({ error: "Crie o contrato a partir de uma proposta aprovada." });
   });
   adminRouter.post("/commercial/contracts/:id/approve", requirePlatformAuth, async (req, res) => {
-    if (!hasPermission(req.platformContext, "platform.commercial.approve")) return res.status(403).json({ error: "Forbidden" });
+    if (!hasPermission2(req.platformContext, "platform.commercial.approve")) return res.status(403).json({ error: "Forbidden" });
     const db = getSupabaseAdmin();
     const { data: contract, error: readError } = await db.from("commercial_contracts").select("*").eq("id", req.params.id).single();
     if (readError) return res.status(404).json({ error: "Contrato n\xE3o encontrado." });
@@ -1861,13 +2237,25 @@ function createBillingRouters(getSupabaseAdmin, requirePlatformAuth) {
       const team = req.platformContext.managedTeams.find((item) => item.id === contract.team_id);
       if (!withinManagerApprovalLimit(team, contract.amount_cents, "contract")) return res.status(403).json({ error: "Valor acima da al\xE7ada configurada; aprova\xE7\xE3o de admin necess\xE1ria." });
     }
-    const { data, error } = await db.from("commercial_contracts").update({ status: "approved", approved_by_user_id: req.user.id, approved_at: (/* @__PURE__ */ new Date()).toISOString() }).eq("id", contract.id).in("status", ["draft", "pending_approval"]).select().single();
-    if (error) return res.status(409).json({ error: error.message });
-    await db.from("platform_audit_logs").insert({ actor_user_id: req.user.id, action: "commercial.contract.approved", entity_type: "commercial_contracts", entity_id: contract.id, team_id: contract.team_id, severity: "info" });
-    return res.json(data);
+    const reason = typeof req.body?.reason === "string" ? req.body.reason.trim() : "";
+    if (!reason) return res.status(400).json({ error: "A justificativa da aprova\xE7\xE3o \xE9 obrigat\xF3ria." });
+    const transitioned = await db.rpc("admin_transition_control_plane", {
+      p_entity_type: "contract",
+      p_entity_id: contract.id,
+      p_to_status: "approved",
+      p_actor_user_id: req.user.id,
+      p_reason: reason,
+      p_team_id: contract.team_id,
+      p_tenant_id: contract.tenant_id || null,
+      p_request_id: req.requestId || null,
+      p_metadata: { approval_limit_checked: true, amount_cents: contract.amount_cents }
+    });
+    if (transitioned.error) return res.status(409).json({ error: transitioned.error.message });
+    const saved = await db.from("commercial_contracts").select("*").eq("id", contract.id).single();
+    return res.json(saved.data);
   });
   adminRouter.post("/commercial/contracts/:id/start-billing", requirePlatformAuth, async (req, res) => {
-    if (!hasPermission(req.platformContext, "platform.billing.manage")) return res.status(403).json({ error: "Forbidden" });
+    if (!hasPermission2(req.platformContext, "platform.billing.manage")) return res.status(403).json({ error: "Forbidden" });
     try {
       const config = getBillingConfig();
       const provider = new AsaasBillingProvider(config);
@@ -1926,7 +2314,7 @@ function createBillingRouters(getSupabaseAdmin, requirePlatformAuth) {
     }
   });
   adminRouter.post("/billing/subscriptions/:id/cancel", requirePlatformAuth, async (req, res) => {
-    if (req.platformContext.role?.key !== "admin" || !hasPermission(req.platformContext, "platform.billing.manage")) return res.status(403).json({ error: "Somente admin pode cancelar recorr\xEAncia." });
+    if (req.platformContext.role?.key !== "admin" || !hasPermission2(req.platformContext, "platform.billing.manage")) return res.status(403).json({ error: "Somente admin pode cancelar recorr\xEAncia." });
     if (!req.body?.reason || String(req.body.reason).trim().length < 5) return res.status(400).json({ error: "Informe um motivo de cancelamento." });
     const db = getSupabaseAdmin();
     const local = await db.from("billing_subscriptions").select("*, commercial_contracts(*)").eq("id", req.params.id).single();
@@ -1952,7 +2340,7 @@ function createBillingRouters(getSupabaseAdmin, requirePlatformAuth) {
     }
   });
   adminRouter.get("/billing/webhooks", requirePlatformAuth, async (req, res) => {
-    if (!hasPermission(req.platformContext, "platform.billing.webhooks.manage")) return res.status(403).json({ error: "Forbidden" });
+    if (!hasPermission2(req.platformContext, "platform.billing.webhooks.manage")) return res.status(403).json({ error: "Forbidden" });
     const status = typeof req.query.status === "string" ? req.query.status : null;
     let query = getSupabaseAdmin().from("billing_webhook_events").select("id,provider_event_id,event_type,status,received_at,processed_at,attempts,last_error,correlation_id", { count: "exact" }).order("received_at", { ascending: false });
     if (status) query = query.eq("status", status);
@@ -1963,7 +2351,7 @@ function createBillingRouters(getSupabaseAdmin, requirePlatformAuth) {
     return res.json(req.query.page !== void 0 ? pageResult(data || [], count, page, pageSize) : data);
   });
   adminRouter.post("/billing/webhooks/:id/reprocess", requirePlatformAuth, async (req, res) => {
-    if (!hasPermission(req.platformContext, "platform.billing.webhooks.manage")) return res.status(403).json({ error: "Forbidden" });
+    if (!hasPermission2(req.platformContext, "platform.billing.webhooks.manage")) return res.status(403).json({ error: "Forbidden" });
     const db = getSupabaseAdmin();
     const { data: eventRow, error } = await db.from("billing_webhook_events").select("*").eq("id", req.params.id).single();
     if (error) return res.status(404).json({ error: "Evento n\xE3o encontrado." });
@@ -1978,7 +2366,7 @@ function createBillingRouters(getSupabaseAdmin, requirePlatformAuth) {
     }
   });
   adminRouter.post("/billing/reconcile", requirePlatformAuth, async (req, res) => {
-    if (req.platformContext.role?.key !== "admin" || !hasPermission(req.platformContext, "platform.billing.manage")) return res.status(403).json({ error: "Forbidden" });
+    if (req.platformContext.role?.key !== "admin" || !hasPermission2(req.platformContext, "platform.billing.manage")) return res.status(403).json({ error: "Forbidden" });
     try {
       const result = await runBillingReconciliation(getSupabaseAdmin(), req.user.id);
       await getSupabaseAdmin().from("platform_audit_logs").insert({ actor_user_id: req.user.id, action: "billing.reconciliation.executed", entity_type: "billing_reconciliation_runs", severity: "warning", ...auditContext(req, { result }) });
@@ -2240,6 +2628,7 @@ async function createApp() {
   app.use("/api/admin/teams", createAdminTeamsRouter(getSupabaseAdmin, requirePlatformAuth));
   app.use("/api/admin/leads", createAdminLeadsRouter(getSupabaseAdmin, requirePlatformAuth));
   app.use("/api/admin/clients", createAdminClientsRouter(getSupabaseAdmin, requirePlatformAuth));
+  app.use("/api/admin", createAdminControlPlaneRouter(getSupabaseAdmin, requirePlatformAuth));
   app.use("/api/admin", createAdminOtherRouter(getSupabaseAdmin, requirePlatformAuth));
   const billingRouters = createBillingRouters(getSupabaseAdmin, requirePlatformAuth);
   app.use("/api/webhooks", billingRouters.publicRouter);

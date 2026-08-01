@@ -101,13 +101,16 @@ export function createAdminClientsRouter(getSupabaseAdmin: any, requirePlatformA
       const { platformContext } = req;
       const clientId = req.params.id;
       const { team_id, owner_platform_member_id } = req.body;
+      const reason = typeof req.body?.reason === 'string' ? req.body.reason.trim() : '';
+      if (!team_id || !reason) return res.status(400).json({ error: 'Equipe e motivo da transferência são obrigatórios.' });
+      const previous = await getSupabaseAdmin().from('platform_client_assignments').select('*')
+        .eq('tenant_id', clientId).eq('assignment_type', 'commercial').maybeSingle();
+      if (previous.error) throw previous.error;
       
       if (platformContext.role?.key !== 'admin') {
         const isManager = platformContext.managedTeams.some((t: any) => t.id === team_id);
         if (!isManager) return res.status(403).json({ error: 'Forbidden' });
-        const current = await getSupabaseAdmin().from('platform_client_assignments').select('*')
-          .eq('tenant_id', clientId).eq('assignment_type', 'commercial').maybeSingle();
-        if (!current.data || !platformContext.managedTeams.some((team: any) => team.id === current.data.team_id)) {
+        if (!previous.data || !platformContext.managedTeams.some((team: any) => team.id === previous.data.team_id)) {
           return res.status(403).json({ error: 'Cliente fora do escopo gerenciado.' });
         }
       }
@@ -139,7 +142,7 @@ export function createAdminClientsRouter(getSupabaseAdmin: any, requirePlatformA
         entity_id: clientId,
         severity: 'info',
         team_id: team_id,
-        ...auditContext(req, { result: 'success', after: { team_id, owner_platform_member_id: owner_platform_member_id || null } })
+        ...auditContext(req, { result: 'success', reason, before: previous.data ? { team_id: previous.data.team_id, owner_platform_member_id: previous.data.owner_platform_member_id } : null, after: { team_id, owner_platform_member_id: owner_platform_member_id || null } })
       });
       
       res.json(data);

@@ -3,6 +3,7 @@ import path from 'path';
 import { createAdminLeadsRouter } from './src/server/adminLeadsRouter';
 import { createAdminClientsRouter } from './src/server/adminClientsRouter';
 import { createAdminOtherRouter } from './src/server/adminOtherRouter';
+import { createAdminControlPlaneRouter } from './src/server/adminControlPlaneRouter';
 import { createAdminTeamsRouter } from './src/server/adminTeamsRouter';
 import { createBillingRouters } from './src/server/billing/router';
 import { createClient } from '@supabase/supabase-js';
@@ -316,6 +317,7 @@ export async function createApp() {
   app.use("/api/admin/teams", createAdminTeamsRouter(getSupabaseAdmin, requirePlatformAuth));
   app.use("/api/admin/leads", createAdminLeadsRouter(getSupabaseAdmin, requirePlatformAuth));
   app.use("/api/admin/clients", createAdminClientsRouter(getSupabaseAdmin, requirePlatformAuth));
+  app.use("/api/admin", createAdminControlPlaneRouter(getSupabaseAdmin, requirePlatformAuth));
   app.use("/api/admin", createAdminOtherRouter(getSupabaseAdmin, requirePlatformAuth));
 
   const billingRouters = createBillingRouters(getSupabaseAdmin, requirePlatformAuth);

@@ -657,12 +657,34 @@ export function createBillingRouters(getSupabaseAdmin: () => any, requirePlatfor
       const team = req.platformContext.managedTeams.find((item: any) => item.id === proposal.team_id);
       if (!withinManagerApprovalLimit(team, proposal.amount_cents, 'proposal')) return res.status(403).json({ error: 'Valor acima da alçada configurada; aprovação de admin necessária.' });
     }
-    const { data, error } = await db.from('commercial_proposals').update({
-      status: 'approved', approved_by_user_id: req.user.id, approved_at: new Date().toISOString(), approval_notes: req.body.approval_notes || null,
-    }).eq('id', proposal.id).eq('status', 'pending_approval').select().single();
-    if (error) return res.status(409).json({ error: error.message });
-    await db.from('platform_audit_logs').insert({ actor_user_id: req.user.id, action: 'commercial.proposal.approved', entity_type: 'commercial_proposals', entity_id: proposal.id, team_id: proposal.team_id, severity: 'info' });
-    return res.json(data);
+    const reason = typeof req.body.approval_notes === 'string' ? req.body.approval_notes.trim() : '';
+    if (!reason) return res.status(400).json({ error: 'A justificativa da aprovação é obrigatória.' });
+    const transitioned = await db.rpc('admin_transition_control_plane', {
+      p_entity_type: 'proposal', p_entity_id: proposal.id, p_to_status: 'approved', p_actor_user_id: req.user.id,
+      p_reason: reason, p_team_id: proposal.team_id, p_tenant_id: null, p_request_id: req.requestId || null,
+      p_metadata: { approval_limit_checked: true, amount_cents: proposal.amount_cents },
+    });
+    if (transitioned.error) return res.status(409).json({ error: transitioned.error.message });
+    await db.from('commercial_proposals').update({ approval_notes: reason }).eq('id', proposal.id);
+    const saved = await db.from('commercial_proposals').select('*').eq('id', proposal.id).single();
+    return res.json(saved.data);
+  });
+
+  adminRouter.post('/commercial/proposals/:id/versions', requirePlatformAuth, async (req: any, res) => {
+    if (!hasPermission(req.platformContext, 'platform.commercial.manage')) return res.status(403).json({ error: 'Forbidden' });
+    const reason = typeof req.body?.reason === 'string' ? req.body.reason.trim() : '';
+    if (!reason) return res.status(400).json({ error: 'O motivo da nova versão é obrigatório.' });
+    const db = getSupabaseAdmin();
+    const existing = await db.from('commercial_proposals').select('*').eq('id', req.params.id).maybeSingle();
+    if (existing.error || !existing.data) return res.status(404).json({ error: 'Proposta não encontrada.' });
+    if (!canReadAssignedResource(req.platformContext, existing.data, 'member_lead_visibility')) return res.status(403).json({ error: 'Proposta fora do seu escopo.' });
+    const allowedChanges = ['plan_id','amount_cents','cycle','billing_type','valid_until','discount_cents','notes','vigency_starts_on','vigency_ends_on','limits_snapshot'];
+    const changes = Object.fromEntries(Object.entries(req.body?.changes || {}).filter(([key]) => allowedChanges.includes(key)));
+    const created = await db.rpc('admin_create_proposal_version', { p_proposal_id: req.params.id, p_actor_user_id: req.user.id, p_changes: changes });
+    if (created.error) return res.status(409).json({ error: created.error.message });
+    await db.from('platform_audit_logs').insert({ actor_user_id: req.user.id, action: 'commercial.proposal.version_created', entity_type: 'commercial_proposals', entity_id: created.data, team_id: existing.data.team_id, severity: 'info', ...auditContext(req, { result: 'success', reason, supersedes: existing.data.id }) });
+    const saved = await db.from('commercial_proposals').select('*,commercial_proposal_items(*)').eq('id', created.data).single();
+    return res.status(201).json(saved.data);
   });
 
   adminRouter.post('/commercial/proposals/:id/create-contract', requirePlatformAuth, async (req: any, res) => {
@@ -728,10 +750,16 @@ export function createBillingRouters(getSupabaseAdmin: () => any, requirePlatfor
       const team = req.platformContext.managedTeams.find((item: any) => item.id === contract.team_id);
       if (!withinManagerApprovalLimit(team, contract.amount_cents, 'contract')) return res.status(403).json({ error: 'Valor acima da alçada configurada; aprovação de admin necessária.' });
     }
-    const { data, error } = await db.from('commercial_contracts').update({ status: 'approved', approved_by_user_id: req.user.id, approved_at: new Date().toISOString() }).eq('id', contract.id).in('status', ['draft','pending_approval']).select().single();
-    if (error) return res.status(409).json({ error: error.message });
-    await db.from('platform_audit_logs').insert({ actor_user_id: req.user.id, action: 'commercial.contract.approved', entity_type: 'commercial_contracts', entity_id: contract.id, team_id: contract.team_id, severity: 'info' });
-    return res.json(data);
+    const reason = typeof req.body?.reason === 'string' ? req.body.reason.trim() : '';
+    if (!reason) return res.status(400).json({ error: 'A justificativa da aprovação é obrigatória.' });
+    const transitioned = await db.rpc('admin_transition_control_plane', {
+      p_entity_type: 'contract', p_entity_id: contract.id, p_to_status: 'approved', p_actor_user_id: req.user.id,
+      p_reason: reason, p_team_id: contract.team_id, p_tenant_id: contract.tenant_id || null,
+      p_request_id: req.requestId || null, p_metadata: { approval_limit_checked: true, amount_cents: contract.amount_cents },
+    });
+    if (transitioned.error) return res.status(409).json({ error: transitioned.error.message });
+    const saved = await db.from('commercial_contracts').select('*').eq('id', contract.id).single();
+    return res.json(saved.data);
   });
 
   adminRouter.post('/commercial/contracts/:id/start-billing', requirePlatformAuth, async (req: any, res) => {
