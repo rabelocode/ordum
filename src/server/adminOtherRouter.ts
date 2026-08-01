@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import { publicBillingHealth } from './billing/config';
 
 export function createAdminOtherRouter(getSupabaseAdmin: any, requirePlatformAuth: any) {
   const router = Router();
@@ -24,7 +25,7 @@ export function createAdminOtherRouter(getSupabaseAdmin: any, requirePlatformAut
       const { data: usersData, error: userErr } = await getSupabaseAdmin().auth.admin.listUsers();
       if (userErr) throw userErr;
       
-      const result = members.map((m: any) => {
+      let result = members.map((m: any) => {
         const user = usersData.users.find((u: any) => u.id === m.user_id);
         const role = m.platform_roles;
         const teams = (m.platform_team_members || []).map((tm: any) => tm.platform_teams);
@@ -41,6 +42,13 @@ export function createAdminOtherRouter(getSupabaseAdmin: any, requirePlatformAut
           teams
         };
       });
+
+      if (platformContext.role?.key !== 'admin') {
+        const managedTeamIds = new Set(platformContext.managedTeams.map((team: any) => team.id));
+        result = result.filter((member: any) => member.user_id === req.user.id || (
+          member.role?.key === 'sales' && member.platform_team_members?.some((membership: any) => managedTeamIds.has(membership.team_id))
+        ));
+      }
       
       res.json(result);
     } catch (e: any) {
@@ -70,6 +78,12 @@ export function createAdminOtherRouter(getSupabaseAdmin: any, requirePlatformAut
       if (callerRoleKey === 'manager' && role_key !== 'sales') {
         return res.status(403).json({ error: 'Gerentes só podem convidar membros para a função Sales (Vendas).' });
       }
+      if (callerRoleKey === 'manager') {
+        const managedTeamIds = new Set(platformContext.managedTeams.map((team: any) => team.id));
+        if (!Array.isArray(team_ids) || team_ids.length === 0 || team_ids.some((teamId: string) => !managedTeamIds.has(teamId))) {
+          return res.status(403).json({ error: 'Gerentes só podem convidar Sales para equipes que gerenciam.' });
+        }
+      }
 
       // Rule: Admin = Partner
       let finalRelationshipType = relationship_type;
@@ -87,6 +101,7 @@ export function createAdminOtherRouter(getSupabaseAdmin: any, requirePlatformAut
         .select('id')
         .eq('key', role_key)
         .single();
+      if (!roleData) return res.status(400).json({ error: 'Função interna inválida.' });
 
       // Call Supabase Admin invite API
       let userId: string;
@@ -159,7 +174,7 @@ export function createAdminOtherRouter(getSupabaseAdmin: any, requirePlatformAut
         entity_type: 'platform_members',
         entity_id: member.id,
         severity: 'info',
-        details: { email, role_key, relationship_type: finalRelationshipType }
+        metadata: { email, role_key, relationship_type: finalRelationshipType }
       });
 
       res.json({ success: true, member });
@@ -173,7 +188,9 @@ export function createAdminOtherRouter(getSupabaseAdmin: any, requirePlatformAut
   router.patch('/staff/:id', requirePlatformAuth, async (req: any, res: any) => {
     try {
       const { platformContext } = req;
-      if (!platformContext.permissions.includes('platform.staff.manage') && platformContext.role?.key !== 'admin') {
+      const callerRoleKey = platformContext.role?.key;
+      const isManager = callerRoleKey === 'manager';
+      if (!platformContext.permissions.includes('platform.staff.manage') && callerRoleKey !== 'admin' && !isManager) {
         return res.status(403).json({ error: 'Forbidden' });
       }
 
@@ -189,6 +206,21 @@ export function createAdminOtherRouter(getSupabaseAdmin: any, requirePlatformAut
 
       if (tgtErr || !targetMember) {
         return res.status(404).json({ error: 'Membro não encontrado.' });
+      }
+
+      if (targetMember.user_id === req.user.id && role_key && role_key !== targetMember.platform_roles?.key) {
+        return res.status(403).json({ error: 'Ninguém pode alterar a própria função global.' });
+      }
+
+      if (isManager) {
+        const managedTeamIds = new Set(platformContext.managedTeams.map((team: any) => team.id));
+        const { data: targetTeams } = await getSupabaseAdmin().from('platform_team_members')
+          .select('team_id').eq('platform_member_id', memberId).eq('status', 'active');
+        const inScope = (targetTeams || []).some((team: any) => managedTeamIds.has(team.team_id));
+        const requestedTeamsAreScoped = !Array.isArray(team_ids) || (team_ids.length > 0 && team_ids.every((teamId: string) => managedTeamIds.has(teamId)));
+        if (targetMember.platform_roles?.key !== 'sales' || (role_key && role_key !== 'sales') || !inScope || !requestedTeamsAreScoped) {
+          return res.status(403).json({ error: 'Gerentes só podem administrar vendedores das próprias equipes.' });
+        }
       }
 
       const targetCurrentRole = targetMember.platform_roles?.key;
@@ -228,7 +260,7 @@ export function createAdminOtherRouter(getSupabaseAdmin: any, requirePlatformAut
           entity_type: 'platform_members',
           entity_id: memberId,
           severity: 'info',
-          details: { old: targetMember.relationship_type, new: finalRelationshipType }
+          metadata: { old: targetMember.relationship_type, new: finalRelationshipType }
         });
       }
 
@@ -252,7 +284,7 @@ export function createAdminOtherRouter(getSupabaseAdmin: any, requirePlatformAut
             entity_type: 'platform_members',
             entity_id: memberId,
             severity: 'info',
-            details: { old: targetCurrentRole, new: role_key }
+            metadata: { old: targetCurrentRole, new: role_key }
           });
         }
       }
@@ -281,7 +313,7 @@ export function createAdminOtherRouter(getSupabaseAdmin: any, requirePlatformAut
           entity_type: 'platform_members',
           entity_id: memberId,
           severity: 'info',
-          details: { team_ids }
+          metadata: { team_ids }
         });
       }
 
@@ -396,7 +428,7 @@ export function createAdminOtherRouter(getSupabaseAdmin: any, requirePlatformAut
         .order('created_at', { ascending: false })
         .limit(100);
         
-      if (!platformContext.permissions.includes('platform.audit.read') && platformContext.role?.key !== 'admin') {
+      if (platformContext.role?.key !== 'admin') {
         if (!platformContext.permissions.includes('platform.audit.team.read')) {
           return res.status(403).json({ error: 'Forbidden' });
         }
@@ -436,6 +468,7 @@ export function createAdminOtherRouter(getSupabaseAdmin: any, requirePlatformAut
         environment: process.env.NODE_ENV || 'development',
         database: error ? 'error' : 'connected',
         auth: 'connected',
+        billing: publicBillingHealth(),
         uptime: process.uptime()
       });
     } catch (e: any) {

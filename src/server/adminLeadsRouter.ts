@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import { canReadAssignedResource } from './authorization';
 
 export function createAdminLeadsRouter(getSupabaseAdmin: any, requirePlatformAuth: any) {
   const router = Router();
@@ -9,13 +10,6 @@ export function createAdminLeadsRouter(getSupabaseAdmin: any, requirePlatformAut
       const { platformContext } = req;
       
       let query = getSupabaseAdmin().from('marketing_leads').select('*, platform_lead_assignments(*, platform_teams(name), platform_members(user_id, platform_roles(key, name)))').order('created_at', { ascending: false });
-      
-      const isSales = platformContext.role.key === 'sales';
-      if (!platformContext.permissions.includes('platform.leads.read')) {
-        // Only show leads assigned to their teams or self
-        // This is complex. We'll fetch all and filter in memory for now, or just rely on RLS/RPC if we could.
-        // Actually, let's just let it return and we filter in memory based on scope.
-      }
       
       const { data, error } = await query;
       if (error) throw error;
@@ -34,28 +28,8 @@ export function createAdminLeadsRouter(getSupabaseAdmin: any, requirePlatformAut
       });
       
       // Filter based on scope
-      if (!platformContext.permissions.includes('platform.leads.read')) {
-        const myTeamIds = platformContext.teams.map((t: any) => t.id);
-        const myMemberId = platformContext.platformMember.id;
-        
-        leads = leads.filter((l: any) => {
-          const a = l.assignment;
-          if (!a) {
-            // Unassigned lead. Does the team allow self claim? We should probably let them see it if it's assigned to their team but no owner.
-            // Wait, if it has no assignment, it's globally unassigned. Should sales see it?
-            // Usually sales shouldn't see unassigned leads unless they have permission. 
-            return false;
-          }
-          if (a.owner_platform_member_id === myMemberId) return true;
-          
-          if (myTeamIds.includes(a.team_id)) {
-            // Find team visibility
-            const team = platformContext.teams.find((t: any) => t.id === a.team_id);
-            if (platformContext.managedTeams.some((t: any) => t.id === a.team_id)) return true; // Manager of this team
-            if (team?.member_lead_visibility === 'team' || team?.member_lead_visibility === 'all') return true;
-          }
-          return false;
-        });
+      if (platformContext.role?.key !== 'admin') {
+        leads = leads.filter((lead: any) => canReadAssignedResource(platformContext, lead.assignment, 'member_lead_visibility'));
       }
       
       res.json(leads);
@@ -72,7 +46,7 @@ export function createAdminLeadsRouter(getSupabaseAdmin: any, requirePlatformAut
       const { team_id, owner_platform_member_id } = req.body;
       
       // Basic permission check
-      if (!platformContext.permissions.includes('platform.leads.manage')) {
+      if (platformContext.role?.key !== 'admin') {
         // Can a manager assign? Yes, if it's within their team.
         const isManager = platformContext.managedTeams.some((t: any) => t.id === team_id);
         if (!isManager) return res.status(403).json({ error: 'Forbidden' });
@@ -85,8 +59,7 @@ export function createAdminLeadsRouter(getSupabaseAdmin: any, requirePlatformAut
           lead_id: leadId,
           team_id,
           owner_platform_member_id: owner_platform_member_id || null,
-          assigned_by: platformContext.platformMember.id,
-          status: 'active'
+          assigned_by_user_id: req.user.id
         }, { onConflict: 'lead_id' })
         .select()
         .single();
@@ -140,7 +113,7 @@ export function createAdminLeadsRouter(getSupabaseAdmin: any, requirePlatformAut
       // Concurrency safe update
       const { data, error } = await getSupabaseAdmin()
         .from('platform_lead_assignments')
-        .update({ owner_platform_member_id: myMemberId, status: 'active' })
+        .update({ owner_platform_member_id: myMemberId, updated_at: new Date().toISOString() })
         .eq('lead_id', leadId)
         .is('owner_platform_member_id', null)
         .select()

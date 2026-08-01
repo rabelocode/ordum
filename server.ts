@@ -4,6 +4,7 @@ import { createAdminLeadsRouter } from './src/server/adminLeadsRouter';
 import { createAdminClientsRouter } from './src/server/adminClientsRouter';
 import { createAdminOtherRouter } from './src/server/adminOtherRouter';
 import { createAdminTeamsRouter } from './src/server/adminTeamsRouter';
+import { createBillingRouters } from './src/server/billing/router';
 import { createClient } from '@supabase/supabase-js';
 import dotenv from 'dotenv';
 import cors from 'cors';
@@ -13,16 +14,17 @@ dotenv.config({ path: ['.env.local', '.env'] });
 export async function createApp() {
   const app = express();
 
-  app.use(express.json());
+  app.disable('x-powered-by');
+  app.use(express.json({ limit: '512kb' }));
   app.use(cors());
 
   let _supabaseAdmin: any = null;
   const getSupabaseAdmin = () => {
     if (!_supabaseAdmin) {
       const url = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || '';
-      const key = process.env.SUPABASE_SECRET_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_PUBLISHABLE_KEY || process.env.VITE_SUPABASE_PUBLISHABLE_KEY || process.env.VITE_SUPABASE_ANON_KEY || process.env.SUPABASE_ANON_KEY || '';
+      const key = process.env.SUPABASE_SECRET_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY || '';
       if (!url || !key) {
-        throw new Error("Missing Supabase credentials");
+        throw new Error("Missing server-side Supabase credentials");
       }
       _supabaseAdmin = createClient(url, key, { auth: { autoRefreshToken: false, persistSession: false } });
     }
@@ -68,6 +70,10 @@ export async function createApp() {
       const permissions = (rolePerms || [])
         .map((rp: any) => rp.platform_permissions?.key)
         .filter(Boolean);
+
+      if (!permissions.includes('platform.access') && role.key !== 'admin') {
+        return res.status(403).json({ error: 'Forbidden: platform.access is required' });
+      }
       
       const { data: teamMemberships } = await getSupabaseAdmin()
         .from('platform_team_members')
@@ -177,183 +183,88 @@ export async function createApp() {
 
 
   app.get("/api/admin/tenants", requirePlatformAuth, async (req, res) => {
-    try {
-      const { data: leads, error: leadsErr } = await getSupabaseAdmin().from('marketing_leads').select('*');
-      if (leadsErr) throw leadsErr;
-
-      const { data: tenantsData, error: tenantsErr } = await getSupabaseAdmin()
-        .from('tenants')
-        .select(`
-          *,
-          tenant_solutions (*)
-        `);
-      if (tenantsErr) throw tenantsErr;
-
-      const result = [];
-      
-      for (const lead of (leads || [])) {
-        if (lead.status === 'approved') continue;
-        result.push({
-          id: lead.id,
-          slug: '',
-          legalName: lead.company,
-          displayName: lead.company,
-          logoInitials: lead.company.substring(0, 2).toUpperCase(),
-          primaryColor: '#353938',
-          lifecycleStatus: lead.status === 'new' ? 'demo_requested' : 'demo_requested',
-          isFictionalDemo: false,
-          solutionEntitlements: [],
-          createdAt: lead.created_at,
-          email: lead.email,
-          contactName: lead.name
-        });
-      }
-
-      for (const t of (tenantsData || [])) {
-        const solutions = (t.tenant_solutions || []).map((ts: any) => ({
-          solutionId: ts.solution_id,
-          status: ts.status
-        }));
-        
-        let status = t.status;
-        if (status === 'active') status = 'demo_approved';
-        
-        const settings = (t.settings as any) || {};
-        result.push({
-          id: t.id,
-          slug: t.slug,
-          legalName: t.name,
-          displayName: t.name,
-          logoInitials: settings.logoInitials || t.name.substring(0, 2).toUpperCase(),
-          primaryColor: settings.primaryColor || '#B66E45',
-          lifecycleStatus: status,
-          isFictionalDemo: false,
-          solutionEntitlements: solutions,
-          createdAt: t.created_at
-        });
-      }
-
-      res.json(result);
-    } catch (e: any) {
-      console.error(e);
-      res.status(500).json({ error: e.message });
-    }
+    res.redirect(307, '/api/admin/clients');
   });
 
   app.get("/api/admin/tenants/:id", requirePlatformAuth, async (req, res) => {
-    try {
-      const { platformContext } = req as any;
-      if (!platformContext.permissions.includes('platform.tenants.read')) {
-        return res.status(403).json({ error: 'Forbidden' });
-      }
-      const tenantId = req.params.id;
-      
-      const { data, error } = await getSupabaseAdmin()
-        .from('tenants')
-        .select('*, tenant_solutions(*)')
-        .eq('id', tenantId)
-        .single();
-        
-      if (error) throw error;
-      res.json(data);
-    } catch (e: any) {
-      res.status(500).json({ error: e.message });
-    }
+    res.redirect(307, `/api/admin/clients/${encodeURIComponent(req.params.id)}`);
   });
 
   app.post("/api/admin/tenants/release-demo", requirePlatformAuth, async (req, res) => {
     try {
+      const { platformContext } = req as any;
+      if (!platformContext.permissions.includes('platform.demos.manage') && platformContext.role?.key !== 'admin') {
+        return res.status(403).json({ error: 'Forbidden' });
+      }
       const { tenantId, solutionIds, primaryColor, logoInitials } = req.body;
-      
-      const { data: lead } = await getSupabaseAdmin().from('marketing_leads').select('*').eq('id', tenantId).single();
-      
-      if (!lead) {
-        return res.status(404).json({ error: "Lead not found" });
+      if (!Array.isArray(solutionIds) || solutionIds.length === 0) return res.status(400).json({ error: 'Selecione ao menos uma solução para o trial.' });
+
+      const db = getSupabaseAdmin();
+      const { data: lead, error: leadError } = await db.from('marketing_leads').select('*').eq('id', tenantId).single();
+      if (leadError || !lead) return res.status(404).json({ error: 'Lead not found' });
+      const { data: leadAssignment } = await db.from('platform_lead_assignments').select('*').eq('lead_id', lead.id).maybeSingle();
+
+      if (platformContext.role?.key !== 'admin') {
+        const managesTeam = leadAssignment && platformContext.managedTeams.some((team: any) => team.id === leadAssignment.team_id);
+        const ownsLead = leadAssignment?.owner_platform_member_id === platformContext.platformMember.id;
+        if (!managesTeam && !ownsLead) return res.status(403).json({ error: 'Lead fora do seu escopo.' });
       }
 
-      const slug = lead.company.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
-
-      let { data: tenant } = await getSupabaseAdmin().from('tenants').select('*').eq('slug', slug).single();
-      
-      if (!tenant) {
-        const { data: newTenant, error: tErr } = await getSupabaseAdmin().from('tenants').insert({
-          name: lead.company,
-          slug: slug,
-          status: 'active',
-          settings: { primaryColor, logoInitials }
-        }).select().single();
-        if (tErr) throw tErr;
-        tenant = newTenant;
-      }
-
-      await getSupabaseAdmin().from('tenant_solutions').delete().eq('tenant_id', tenant.id);
-      
-      if (solutionIds && solutionIds.length > 0) {
-        // Fetch solutions by key to get their actual UUIDs
-        const { data: dbSolutions, error: sErr } = await getSupabaseAdmin().from('solutions').select('id, key').in('key', solutionIds);
-        if (sErr) throw sErr;
-        
-        if (dbSolutions && dbSolutions.length > 0) {
-          const solutionsToInsert = dbSolutions.map((s: any) => ({
-            tenant_id: tenant.id,
-            solution_id: s.id,
-            status: 'contracted'
-          }));
-          await getSupabaseAdmin().from('tenant_solutions').insert(solutionsToInsert);
-        }
-      }
-
-      const { data: { users }, error: uErr } = await getSupabaseAdmin().auth.admin.listUsers();
-      let user = (users as any[]).find(u => u.email === lead.email);
-      
+      const { data: { users }, error: usersError } = await db.auth.admin.listUsers({ page: 1, perPage: 1000 });
+      if (usersError) throw usersError;
+      let user = (users as any[]).find((candidate) => candidate.email?.toLowerCase() === lead.email.toLowerCase());
       if (!user) {
-        const { data: inviteData, error: inviteErr } = await getSupabaseAdmin().auth.admin.inviteUserByEmail(lead.email, {
+        const origin = process.env.APP_URL || req.headers.origin || `${req.protocol}://${req.get('host')}`;
+        const { data: inviteData, error: inviteError } = await db.auth.admin.inviteUserByEmail(lead.email, {
+          redirectTo: `${String(origin).replace(/\/$/, '')}/#/auth/accept-invite`,
           data: { full_name: lead.name }
         });
-        if (inviteErr) throw inviteErr;
+        if (inviteError) throw inviteError;
         user = inviteData.user;
-        
-        // Profile is created automatically by on_auth_user_created trigger
       }
 
-            let { data: membership, error: mErr } = await getSupabaseAdmin().from('memberships').select('*').eq('tenant_id', tenant.id).eq('user_id', user.id).single();
-      if (!membership) {
-        const { data: newMembership, error: mInsErr } = await getSupabaseAdmin().from('memberships').insert({
-          tenant_id: tenant.id,
-          user_id: user.id,
-          status: 'active'
-        }).select().single();
-        if (mInsErr) throw mInsErr;
-        membership = newMembership;
-      }
-      
-      const { data: role } = await getSupabaseAdmin().from('roles').select('id').eq('key', 'tenant_admin').single();
-      if (role) {
-                  const { data: existingRole } = await getSupabaseAdmin().from('membership_roles').select('*').eq('membership_id', membership.id).eq('role_id', role.id).single();
-         if (!existingRole) {
-           await getSupabaseAdmin().from('membership_roles').insert({
-             membership_id: membership.id,
-             role_id: role.id
-           });
-         }
-      }
-
-      
-      // Preserve lead assignment to client assignment
-      const { data: leadAssignment } = await getSupabaseAdmin().from('platform_lead_assignments').select('*').eq('lead_id', lead.id).single();
-      if (leadAssignment) {
-        await getSupabaseAdmin().from('platform_client_assignments').insert({
-          tenant_id: tenant.id,
-          team_id: leadAssignment.team_id,
-          owner_platform_member_id: leadAssignment.owner_platform_member_id,
-          assigned_by: (req as any).platformContext?.platformMember?.id || null,
-          status: 'active'
+      const baseSlug = lead.company.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '').slice(0, 48) || 'demo';
+      const slug = `${baseSlug}-${lead.id.replace(/-/g, '').slice(0, 8)}`;
+      let { data: tenant } = await db.from('tenants').select('*').eq('slug', slug).maybeSingle();
+      if (!tenant) {
+        const { data: provisionedTenantId, error: provisionError } = await db.rpc('provision_tenant', {
+          p_name: lead.company,
+          p_slug: slug,
+          p_owner_user_id: user.id
         });
+        if (provisionError) throw provisionError;
+        const tenantResult = await db.from('tenants').select('*').eq('id', provisionedTenantId).single();
+        if (tenantResult.error) throw tenantResult.error;
+        tenant = tenantResult.data;
       }
-      
-      await getSupabaseAdmin().from('marketing_leads').update({ status: 'approved' }).eq('id', lead.id);
 
-      res.json({ success: true, tenant });
+      const expiresAt = new Date(Date.now() + 14 * 86_400_000).toISOString();
+      await db.from('tenants').update({ status: 'trial', settings: { ...(tenant.settings || {}), primaryColor, logoInitials, demo: true, demoExpiresAt: expiresAt } }).eq('id', tenant.id);
+      await db.from('tenant_solutions').delete().eq('tenant_id', tenant.id);
+      const { data: dbSolutions, error: solutionError } = await db.from('solutions').select('id,key').in('key', solutionIds);
+      if (solutionError) throw solutionError;
+      if (dbSolutions?.length) await db.from('tenant_solutions').insert(dbSolutions.map((solution: any) => ({ tenant_id: tenant.id, solution_id: solution.id, status: 'trial' })));
+
+      if (leadAssignment) await db.from('platform_client_assignments').upsert({
+        tenant_id: tenant.id, team_id: leadAssignment.team_id,
+        owner_platform_member_id: leadAssignment.owner_platform_member_id,
+        assigned_by_user_id: (req as any).user.id, assignment_type: 'commercial', status: 'active'
+      }, { onConflict: 'tenant_id,team_id,assignment_type' });
+
+      await db.from('marketing_leads').update({ status: 'contacted' }).eq('id', lead.id);
+      await db.from('commercial_demos').upsert({
+        lead_id: lead.id, tenant_id: tenant.id, team_id: leadAssignment?.team_id || null,
+        owner_platform_member_id: leadAssignment?.owner_platform_member_id || null,
+        status: 'active', starts_at: new Date().toISOString(), expires_at: expiresAt,
+        approved_by_user_id: (req as any).user.id, approved_at: new Date().toISOString()
+      }, { onConflict: 'lead_id' });
+      await db.from('platform_audit_logs').insert({
+        actor_user_id: (req as any).user.id, action: 'demo.released', entity_type: 'commercial_demos',
+        entity_id: lead.id, team_id: leadAssignment?.team_id || null, severity: 'info',
+        metadata: { tenant_id: tenant.id, expires_at: expiresAt, solution_keys: solutionIds }
+      });
+
+      res.json({ success: true, tenant: { ...tenant, status: 'trial' }, expiresAt });
     } catch (e: any) {
       console.error(e);
       res.status(500).json({ error: e.message });
@@ -362,9 +273,22 @@ export async function createApp() {
 
   app.post("/api/admin/tenants/revoke-demo", requirePlatformAuth, async (req, res) => {
     try {
+      const { platformContext } = req as any;
+      if (!platformContext.permissions.includes('platform.demos.manage') && platformContext.role?.key !== 'admin') {
+        return res.status(403).json({ error: 'Forbidden' });
+      }
       const { tenantId } = req.body;
+      const db = getSupabaseAdmin();
+      const { data: assignment } = await db.from('platform_client_assignments').select('*').eq('tenant_id', tenantId).eq('assignment_type', 'commercial').maybeSingle();
+      if (platformContext.role?.key !== 'admin') {
+        const managesTeam = assignment && platformContext.managedTeams.some((team: any) => team.id === assignment.team_id);
+        const ownsClient = assignment?.owner_platform_member_id === platformContext.platformMember.id;
+        if (!managesTeam && !ownsClient) return res.status(403).json({ error: 'Demonstração fora do seu escopo.' });
+      }
       // Update tenant status to suspended
-      await getSupabaseAdmin().from("tenants").update({ status: "suspended" }).eq("id", tenantId);
+      await db.from('tenants').update({ status: 'suspended' }).eq('id', tenantId);
+      await db.from('commercial_demos').update({ status: 'revoked' }).eq('tenant_id', tenantId);
+      await db.from('platform_audit_logs').insert({ actor_user_id: (req as any).user.id, action: 'demo.revoked', entity_type: 'commercial_demos', entity_id: tenantId, team_id: assignment?.team_id || null, severity: 'warning' });
       res.json({ success: true });
     } catch (e: any) {
       console.error(e);
@@ -372,41 +296,12 @@ export async function createApp() {
     }
   });
 
-    app.get("/api/admin/consultants", requirePlatformAuth, async (req, res) => {
-    try {
-      const { platformContext } = req as any;
-      if (!platformContext.permissions.includes('platform.staff.read')) {
-        return res.status(403).json({ error: 'Forbidden' });
-      }
-      
-      const { data: members, error: memberErr } = await getSupabaseAdmin()
-        .from('platform_members')
-        .select('*, platform_member_roles(platform_roles(*))');
-        
-      if (memberErr) throw memberErr;
-      
-      const { data: usersData, error: userErr } = await getSupabaseAdmin().auth.admin.listUsers();
-      if (userErr) throw userErr;
-      
-      const result = members.map((m: any) => {
-        const user = usersData.users.find((u: any) => u.id === m.user_id);
-        const role = m.platform_member_roles?.[0]?.platform_roles;
-        return {
-          ...m,
-          user,
-          role
-        };
-      });
-      
-      res.json(result);
-    } catch (e: any) {
-      console.error(e);
-      res.status(500).json({ error: e.message });
-    }
+  app.get('/api/admin/consultants', requirePlatformAuth, async (_req, res) => {
+    res.redirect(307, '/api/admin/staff');
   });
 
   app.get("/api/admin/contracts", requirePlatformAuth, async (req, res) => {
-    res.json([]);
+    res.redirect(307, '/api/admin/commercial/contracts');
   });
 
   
@@ -414,6 +309,11 @@ export async function createApp() {
   app.use("/api/admin/leads", createAdminLeadsRouter(getSupabaseAdmin, requirePlatformAuth));
   app.use("/api/admin/clients", createAdminClientsRouter(getSupabaseAdmin, requirePlatformAuth));
   app.use("/api/admin", createAdminOtherRouter(getSupabaseAdmin, requirePlatformAuth));
+
+  const billingRouters = createBillingRouters(getSupabaseAdmin, requirePlatformAuth);
+  app.use('/api/webhooks', billingRouters.publicRouter);
+  app.use('/api/admin', billingRouters.adminRouter);
+  app.use('/api/internal/billing', billingRouters.internalRouter);
 
 
   app.get("/api/admin/stats", requirePlatformAuth, async (req, res) => {
@@ -423,9 +323,9 @@ export async function createApp() {
       // Scoped counts
       let clientsQuery = getSupabaseAdmin().from('platform_client_assignments').select('*', { count: 'exact', head: true });
       let leadsQuery = getSupabaseAdmin().from('platform_lead_assignments').select('*, marketing_leads!inner(*)', { count: 'exact', head: true }).eq('marketing_leads.status', 'new');
-      let demosQuery = getSupabaseAdmin().from('platform_lead_assignments').select('*, marketing_leads!inner(*)', { count: 'exact', head: true }).eq('marketing_leads.status', 'approved');
+      let demosQuery = getSupabaseAdmin().from('commercial_demos').select('*', { count: 'exact', head: true }).in('status', ['requested', 'scheduled', 'approved', 'active']);
       
-      if (!platformContext.permissions.includes('platform.leads.read')) {
+      if (platformContext.role?.key !== 'admin') {
         const teamIds = platformContext.teams.map((t: any) => t.id);
         if (teamIds.length === 0) {
            return res.json({ clients: 0, leads: 0, demos: 0, teams: 0 });
@@ -446,7 +346,7 @@ export async function createApp() {
         clients: clientsCount || 0,
         leads: leadsCount || 0,
         demos: demosCount || 0,
-        teams: platformContext.permissions.includes('platform.teams.read') ? (teamsCount || 0) : platformContext.teams.length
+        teams: platformContext.role?.key === 'admin' ? (teamsCount || 0) : platformContext.teams.length
       });
     } catch (e: any) {
       res.status(500).json({ error: e.message });
@@ -454,16 +354,6 @@ export async function createApp() {
   });
 
   
-  app.get("/api/temp-slugs", async (req, res) => {
-    try {
-      const { data: tenants } = await getSupabaseAdmin().from('tenants').select('slug, name');
-      const { data: users } = await getSupabaseAdmin().auth.admin.listUsers();
-      res.json({ tenants, users: users?.users?.map(u => ({ email: u.email })) });
-    } catch (e: any) {
-      res.status(500).json({ error: e.message });
-    }
-  });
-
   app.get("/api/public/tenants/resolve", async (req, res) => {
     try {
       const { slug, domain } = req.query;
@@ -474,21 +364,21 @@ export async function createApp() {
           .from('tenants')
           .select('id, name, slug, status, settings')
           .eq('slug', slug)
-          .eq('status', 'active')
+          .in('status', ['active', 'trial'])
           .single();
         if (!error && data) tenant = data;
       } else if (domain) {
         const { data: td, error: e1 } = await getSupabaseAdmin()
           .from('tenant_domains')
           .select('tenant_id')
-          .eq('domain', domain)
+          .eq('hostname', domain)
           .single();
         if (!e1 && td) {
           const { data, error } = await getSupabaseAdmin()
             .from('tenants')
             .select('id, name, slug, status, settings')
             .eq('id', td.tenant_id)
-            .eq('status', 'active')
+            .in('status', ['active', 'trial'])
             .single();
           if (!error && data) tenant = data;
         }

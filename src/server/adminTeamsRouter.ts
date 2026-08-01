@@ -9,7 +9,7 @@ export function createAdminTeamsRouter(getSupabaseAdmin: any, requirePlatformAut
       const { platformContext } = req;
       let query = getSupabaseAdmin().from('platform_teams').select('*').order('name');
       
-      if (!platformContext.permissions.includes('platform.teams.read')) {
+      if (platformContext.role?.key !== 'admin') {
         const teamIds = platformContext.teams.map((t: any) => t.id);
         if (teamIds.length === 0) return res.json([]);
         query = query.in('id', teamIds);
@@ -27,7 +27,7 @@ export function createAdminTeamsRouter(getSupabaseAdmin: any, requirePlatformAut
   router.post('/', requirePlatformAuth, async (req: any, res: any) => {
     try {
       const { platformContext } = req;
-      if (!platformContext.permissions.includes('platform.teams.manage')) {
+      if (platformContext.role?.key !== 'admin' || !platformContext.permissions.includes('platform.teams.create')) {
         return res.status(403).json({ error: 'Forbidden' });
       }
       
@@ -68,7 +68,7 @@ export function createAdminTeamsRouter(getSupabaseAdmin: any, requirePlatformAut
       const { platformContext } = req;
       const teamId = req.params.id;
       
-      if (!platformContext.permissions.includes('platform.teams.read')) {
+      if (platformContext.role?.key !== 'admin') {
         const isMember = platformContext.teams.some((t: any) => t.id === teamId);
         if (!isMember) return res.status(403).json({ error: 'Forbidden' });
       }
@@ -88,14 +88,17 @@ export function createAdminTeamsRouter(getSupabaseAdmin: any, requirePlatformAut
       const teamId = req.params.id;
       
       let isManager = false;
-      if (!platformContext.permissions.includes('platform.teams.manage')) {
+      if (platformContext.role?.key !== 'admin') {
         // Check if user is manager of this team
         isManager = platformContext.managedTeams.some((t: any) => t.id === teamId);
         if (!isManager) return res.status(403).json({ error: 'Forbidden' });
       }
       
-      const updates = { ...req.body };
-      delete updates.id; // Prevent updating ID
+      const allowedFields = isManager
+        ? ['description', 'member_lead_visibility', 'member_client_visibility', 'allow_self_claim']
+        : ['name', 'description', 'team_type', 'channel', 'status', 'member_lead_visibility', 'member_client_visibility', 'allow_self_claim', 'settings'];
+      const updates = Object.fromEntries(Object.entries(req.body).filter(([key]) => allowedFields.includes(key)));
+      if (Object.keys(updates).length === 0) return res.status(400).json({ error: 'No valid fields to update' });
       
       const { data, error } = await getSupabaseAdmin()
         .from('platform_teams')
@@ -128,7 +131,7 @@ export function createAdminTeamsRouter(getSupabaseAdmin: any, requirePlatformAut
       const { platformContext } = req;
       const teamId = req.params.id;
       
-      if (!platformContext.permissions.includes('platform.teams.read')) {
+      if (platformContext.role?.key !== 'admin') {
         const isMember = platformContext.teams.some((t: any) => t.id === teamId);
         if (!isMember) return res.status(403).json({ error: 'Forbidden' });
       }
@@ -185,7 +188,7 @@ export function createAdminTeamsRouter(getSupabaseAdmin: any, requirePlatformAut
       const { platform_member_id, team_role } = req.body;
       
       let isManager = false;
-      const hasGlobal = platformContext.permissions.includes('platform.teams.manage');
+      const hasGlobal = platformContext.role?.key === 'admin';
       if (!hasGlobal) {
         isManager = platformContext.managedTeams.some((t: any) => t.id === teamId);
         if (!isManager) return res.status(403).json({ error: 'Forbidden' });
@@ -238,9 +241,17 @@ export function createAdminTeamsRouter(getSupabaseAdmin: any, requirePlatformAut
       const platform_member_id = req.params.memberId;
       
       let isManager = false;
-      if (!platformContext.permissions.includes('platform.teams.manage')) {
+      if (platformContext.role?.key !== 'admin') {
         isManager = platformContext.managedTeams.some((t: any) => t.id === teamId);
         if (!isManager) return res.status(403).json({ error: 'Forbidden' });
+        const { data: target } = await getSupabaseAdmin().from('platform_team_members')
+          .select('team_role, platform_members(platform_roles(key))')
+          .eq('team_id', teamId)
+          .eq('platform_member_id', platform_member_id)
+          .maybeSingle();
+        if (target?.team_role === 'manager' || target?.platform_members?.platform_roles?.key !== 'sales') {
+          return res.status(403).json({ error: 'Managers can only remove Sales members from their team' });
+        }
       }
       
       const { error } = await getSupabaseAdmin()

@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import { canReadAssignedResource } from './authorization';
 
 export function createAdminClientsRouter(getSupabaseAdmin: any, requirePlatformAuth: any) {
   const router = Router();
@@ -28,22 +29,8 @@ export function createAdminClientsRouter(getSupabaseAdmin: any, requirePlatformA
       });
       
       // Filter based on scope
-      if (!platformContext.permissions.includes('platform.clients.read')) {
-        const myTeamIds = platformContext.teams.map((t: any) => t.id);
-        const myMemberId = platformContext.platformMember.id;
-        
-        clients = clients.filter((c: any) => {
-          const a = c.assignment;
-          if (!a) return false;
-          if (a.owner_platform_member_id === myMemberId) return true;
-          
-          if (myTeamIds.includes(a.team_id)) {
-            const team = platformContext.teams.find((t: any) => t.id === a.team_id);
-            if (platformContext.managedTeams.some((t: any) => t.id === a.team_id)) return true;
-            if (team?.member_client_visibility === 'team' || team?.member_client_visibility === 'all') return true;
-          }
-          return false;
-        });
+      if (platformContext.role?.key !== 'admin') {
+        clients = clients.filter((client: any) => canReadAssignedResource(platformContext, client.assignment, 'member_client_visibility'));
       }
       
       res.json(clients);
@@ -76,19 +63,8 @@ export function createAdminClientsRouter(getSupabaseAdmin: any, requirePlatformA
       }
       
       // Checking permissions (similar to list)
-      if (!platformContext.permissions.includes('platform.clients.read')) {
-        const myTeamIds = platformContext.teams.map((t: any) => t.id);
-        const myMemberId = platformContext.platformMember.id;
-        let canView = false;
-        
-        if (assignment && assignment.owner_platform_member_id === myMemberId) canView = true;
-        else if (assignment && myTeamIds.includes(assignment.team_id)) {
-           const team = platformContext.teams.find((t: any) => t.id === assignment.team_id);
-           if (platformContext.managedTeams.some((t: any) => t.id === assignment.team_id)) canView = true;
-           else if (team?.member_client_visibility === 'team' || team?.member_client_visibility === 'all') canView = true;
-        }
-        
-        if (!canView) return res.status(403).json({ error: 'Forbidden' });
+      if (platformContext.role?.key !== 'admin') {
+        if (!canReadAssignedResource(platformContext, assignment, 'member_client_visibility')) return res.status(403).json({ error: 'Forbidden' });
       }
       
       res.json({ ...data, assignment, owner });
@@ -104,7 +80,7 @@ export function createAdminClientsRouter(getSupabaseAdmin: any, requirePlatformA
       const clientId = req.params.id;
       const { team_id, owner_platform_member_id } = req.body;
       
-      if (!platformContext.permissions.includes('platform.clients.manage')) {
+      if (platformContext.role?.key !== 'admin') {
         const isManager = platformContext.managedTeams.some((t: any) => t.id === team_id);
         if (!isManager) return res.status(403).json({ error: 'Forbidden' });
       }
@@ -115,9 +91,10 @@ export function createAdminClientsRouter(getSupabaseAdmin: any, requirePlatformA
           tenant_id: clientId,
           team_id,
           owner_platform_member_id: owner_platform_member_id || null,
-          assigned_by: platformContext.platformMember.id,
+          assigned_by_user_id: req.user.id,
+          assignment_type: 'commercial',
           status: 'active'
-        }, { onConflict: 'tenant_id' })
+        }, { onConflict: 'tenant_id,team_id,assignment_type' })
         .select()
         .single();
         
@@ -163,7 +140,7 @@ export function createAdminClientsRouter(getSupabaseAdmin: any, requirePlatformA
           const solutionsToInsert = dbSolutions.map((s: any) => ({
             tenant_id: clientId,
             solution_id: s.id,
-            status: 'contracted'
+            status: 'active'
           }));
           await getSupabaseAdmin().from('tenant_solutions').insert(solutionsToInsert);
         }

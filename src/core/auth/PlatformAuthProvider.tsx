@@ -126,13 +126,13 @@ export function PlatformAuthProvider({ children }: { children: React.ReactNode }
 
   const canReadTeam = (teamId: string) => {
     if (isPlatformSuspended) return false;
-    if (platformCan('platform.teams.read')) return true;
+    if (platformRole?.key === 'admin') return true;
     return memberTeams.some(t => t.id === teamId);
   };
 
   const canManageTeam = (teamId: string) => {
     if (isPlatformSuspended) return false;
-    if (platformCan('platform.teams.manage')) return true;
+    if (platformRole?.key === 'admin') return true;
     return managedTeams.some(t => t.id === teamId);
   };
 
