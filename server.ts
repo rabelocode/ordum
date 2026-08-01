@@ -9,11 +9,10 @@ import { createClient } from '@supabase/supabase-js';
 import dotenv from 'dotenv';
 import cors from 'cors';
 
-dotenv.config();
+dotenv.config({ path: ['.env.local', '.env'] });
 
-async function startServer() {
+export async function createApp() {
   const app = express();
-  const PORT = 3000;
 
   app.use(express.json());
   app.use(cors());
@@ -22,7 +21,7 @@ async function startServer() {
   const getSupabaseAdmin = () => {
     if (!_supabaseAdmin) {
       const url = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || '';
-      const key = process.env.SUPABASE_SECRET_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.VITE_SUPABASE_ANON_KEY || process.env.SUPABASE_ANON_KEY || '';
+      const key = process.env.SUPABASE_SECRET_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_PUBLISHABLE_KEY || process.env.VITE_SUPABASE_PUBLISHABLE_KEY || '';
       if (!url || !key) {
         throw new Error("Missing Supabase credentials");
       }
@@ -528,10 +527,18 @@ async function startServer() {
   
   
   
-  app.listen(PORT, "0.0.0.0", () => {
-    console.log(`Server running on port ${PORT}`);
+  return app;
+}
+
+async function startServer() {
+  const app = await createApp();
+  const port = Number(process.env.PORT || 3000);
+
+  app.listen(port, "0.0.0.0", () => {
+    console.log(`Server running on port ${port}`);
   });
 }
 
-
-startServer();
+if (!process.env.VERCEL) {
+  startServer();
+}
