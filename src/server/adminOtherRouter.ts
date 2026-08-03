@@ -1,6 +1,8 @@
 import { Router } from 'express';
 import { publicBillingHealth } from './billing/config';
 import { auditContext, pageResult, parsePagination } from './operational';
+import { captureServerAnalytics } from './analytics';
+import { reportServerError } from './observability';
 
 export function createAdminOtherRouter(getSupabaseAdmin: any, requirePlatformAuth: any) {
   const router = Router();
@@ -175,13 +177,15 @@ export function createAdminOtherRouter(getSupabaseAdmin: any, requirePlatformAut
         entity_type: 'platform_members',
         entity_id: member.id,
         severity: 'info',
-        metadata: { email, role_key, relationship_type: finalRelationshipType }
+        metadata: { role_key, relationship_type: finalRelationshipType }
       });
+
+      void captureServerAnalytics('user_invited', req.user.id, { role: role_key, source: 'platform_admin' });
 
       res.json({ success: true, member });
     } catch (e: any) {
-      console.error('Error in POST /api/admin/staff:', e);
-      res.status(500).json({ error: e.message });
+      reportServerError(e, req, 'platform_member_invite');
+      res.status(500).json({ error: 'Não foi possível concluir o convite.' });
     }
   });
 

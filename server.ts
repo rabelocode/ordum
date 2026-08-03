@@ -11,21 +11,29 @@ import dotenv from 'dotenv';
 import cors from 'cors';
 import { randomUUID } from 'node:crypto';
 import { canReadAssignedResource } from './src/server/authorization';
+import { initServerObservability, installServerErrorHandler, reportServerError } from './src/server/observability';
 
 dotenv.config({ path: ['.env.local', '.env'] });
 
 export async function createApp() {
+  initServerObservability();
   const app = express();
 
   app.disable('x-powered-by');
-  app.use(express.json({ limit: '512kb' }));
-  app.use(cors());
   app.use((req, res, next) => {
     const requestId = req.header('x-request-id') || randomUUID();
     (req as any).requestId = requestId;
     res.setHeader('x-request-id', requestId);
     next();
   });
+  app.use(express.json({ limit: '512kb' }));
+  app.use((error: unknown, req: express.Request, res: express.Response, next: express.NextFunction) => {
+    if (error instanceof SyntaxError && Object.prototype.hasOwnProperty.call(error, 'body')) {
+      return res.status(400).json({ error: 'Invalid JSON body', requestId: (req as any).requestId });
+    }
+    next(error);
+  });
+  app.use(cors());
 
   let _supabaseAdmin: any = null;
   const getSupabaseAdmin = () => {
@@ -104,7 +112,7 @@ export async function createApp() {
       };
       next();
     } catch (e: any) {
-      console.error('requirePlatformAuth error:', e);
+      reportServerError(e, req, 'platform_auth');
       return res.status(500).json({ error: "Configuration error on server" });
     }
   };
@@ -185,8 +193,8 @@ export async function createApp() {
         tenantMemberships: tenantMemberships || []
       });
     } catch (e: any) {
-      console.error("Error in /api/admin/me:", e);
-      return res.status(500).json({ error: e.message });
+      reportServerError(e, req, 'admin_session_resolve');
+      return res.status(500).json({ error: 'Não foi possível resolver a sessão administrativa.' });
     }
   });
 
@@ -275,8 +283,8 @@ export async function createApp() {
 
       res.json({ success: true, tenant: { ...tenant, status: 'trial' }, expiresAt });
     } catch (e: any) {
-      console.error(e);
-      res.status(500).json({ error: e.message });
+      reportServerError(e, req, 'demo_release');
+      res.status(500).json({ error: 'Não foi possível liberar a demonstração.' });
     }
   });
 
@@ -300,8 +308,8 @@ export async function createApp() {
       await db.from('platform_audit_logs').insert({ actor_user_id: (req as any).user.id, action: 'demo.revoked', entity_type: 'commercial_demos', entity_id: tenantId, team_id: assignment?.team_id || null, severity: 'warning' });
       res.json({ success: true });
     } catch (e: any) {
-      console.error(e);
-      res.status(500).json({ error: e.message });
+      reportServerError(e, req, 'demo_revoke');
+      res.status(500).json({ error: 'Não foi possível revogar a demonstração.' });
     }
   });
 
@@ -420,6 +428,13 @@ export async function createApp() {
     } catch (e: any) {
       res.status(500).json({ error: e.message });
     }
+  });
+
+  installServerErrorHandler(app);
+  app.use((error: unknown, req: express.Request, res: express.Response, _next: express.NextFunction) => {
+    reportServerError(error, req, 'unhandled_request');
+    if (res.headersSent) return;
+    res.status(500).json({ error: 'Unexpected server error', requestId: (req as any).requestId });
   });
 
   

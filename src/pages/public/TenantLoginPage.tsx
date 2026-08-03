@@ -3,6 +3,7 @@ import { ArrowLeft, Lock, Mail, ArrowRight, Activity, ShieldAlert, Loader2 } fro
 import { Button } from "../../components/ui/Button";
 import { authService } from "../../services/auth";
 import { useAuth } from "../../core/auth/AuthProvider";
+import { captureClientException } from '../../lib/observability';
 
 interface TenantLoginPageProps {
   slug: string;
@@ -62,7 +63,7 @@ export function TenantLoginPage({ slug }: TenantLoginPageProps) {
       await authService.signInWithEmailPassword(email.trim(), password);
       window.location.hash = "#/workspace";
     } catch (err: any) {
-      console.error("Login error:", err);
+      captureClientException(err, { operation: 'tenant_login' });
       const msg = err.message || "";
       if (msg.includes("Invalid login credentials")) {
         setErrorMessage("E-mail ou senha incorretos.");

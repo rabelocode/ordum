@@ -3,6 +3,7 @@ import { Lock, CheckCircle2, AlertCircle, Loader2 } from "lucide-react";
 import { Button } from "../../components/ui/Button";
 import { authService } from "../../services/auth";
 import { supabase } from "../../lib/supabase";
+import { captureClientException } from '../../lib/observability';
 
 export function ResetPasswordPage() {
   const [newPassword, setNewPassword] = useState("");
@@ -46,7 +47,7 @@ export function ResetPasswordPage() {
       await authService.updatePassword(newPassword);
       setIsSuccess(true);
     } catch (err: any) {
-      console.error("Password reset error:", err);
+      captureClientException(err, { operation: 'password_reset' });
       setErrorMessage(err.message || "Erro ao redefinir senha. O link pode estar expirado.");
     } finally {
       setIsSubmitting(false);

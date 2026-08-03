@@ -3,6 +3,7 @@ import { User, Lock, CheckCircle2, AlertCircle, Loader2, ArrowRight } from "luci
 import { Button } from "../../components/ui/Button";
 import { authService } from "../../services/auth";
 import { supabase } from "../../lib/supabase";
+import { captureClientException } from '../../lib/observability';
 
 export function AcceptInvitePage() {
   const [fullName, setFullName] = useState("");
@@ -44,7 +45,7 @@ export function AcceptInvitePage() {
         }
       }
     } catch (e) {
-      console.error(e);
+      captureClientException(e, { operation: 'invite_session' });
     }
     window.location.hash = "#/login";
   };
@@ -78,7 +79,7 @@ export function AcceptInvitePage() {
         window.location.hash = "#/login";
       }
     } catch (err: any) {
-      console.error("Invite acceptance error:", err);
+      captureClientException(err, { operation: 'invite_acceptance' });
       setErrorMessage(err.message || "Erro ao concluir cadastro. O convite pode estar expirado.");
     } finally {
       setIsSubmitting(false);

@@ -1,6 +1,7 @@
 import React, { createContext, useContext, useEffect, useState } from "react";
 import { useAuth } from "./AuthProvider";
 import { PlatformMember, PlatformRole, PlatformTeam } from "../../types/platform";
+import { captureClientException } from '../../lib/observability';
 
 interface TenantMembershipInfo {
   id: string;
@@ -108,7 +109,7 @@ export function PlatformAuthProvider({ children }: { children: React.ReactNode }
         setPlatformError(errData.error || `Erro do servidor (${response.status})`);
       }
     } catch (e: any) {
-      console.error("Failed to load platform context:", e);
+      captureClientException(e, { operation: 'platform_context_load' });
       setPlatformError(e.message || "Erro de conexão com o servidor.");
     } finally {
       setIsPlatformLoading(false);
