@@ -24,6 +24,11 @@ export async function createApp() {
     const requestId = req.header('x-request-id') || randomUUID();
     (req as any).requestId = requestId;
     res.setHeader('x-request-id', requestId);
+    res.setHeader('x-content-type-options', 'nosniff');
+    res.setHeader('x-frame-options', 'DENY');
+    res.setHeader('referrer-policy', 'strict-origin-when-cross-origin');
+    res.setHeader('permissions-policy', 'camera=(), microphone=(), geolocation=()');
+    if (req.path.startsWith('/api/')) res.setHeader('cache-control', 'no-store');
     next();
   });
   app.use(express.json({ limit: '512kb' }));

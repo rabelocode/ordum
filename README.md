@@ -19,6 +19,7 @@ npm run lint
 npm run typecheck
 npm test
 npm run build
+npm run test:e2e
 ```
 
 Consultas remotas autorizadas podem ser validadas separadamente com `npm run test:live-queries`. Esse comando exige credenciais locais e nunca integra o CI público.

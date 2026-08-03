@@ -102,6 +102,7 @@ Referências: [funções SECURITY DEFINER](https://supabase.com/docs/guides/data
 - checklist sem conclusão inventada e conclusão baseada em fatos;
 - validação estática de migrations e varredura de segredos;
 - CI reproduzível sem segredos de produção.
+- cinco smoke tests Playwright para home, login, admin, headers, JSON inválido e ausência dos bundles do servidor no diretório público.
 
 ## Pendências prioritárias
 
