@@ -6,6 +6,7 @@ import {
 } from "lucide-react";
 import { PlatformAuthProvider, usePlatform } from "../../core/auth/PlatformAuthProvider";
 import { useAuth } from "../../core/auth/AuthProvider";
+import { PageShellSkeleton } from "../../components/ui/LoadingSkeletons";
 
 function AdminLayoutInner({ children, currentPath }: { children: React.ReactNode, currentPath: string }) {
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
@@ -64,14 +65,7 @@ function AdminLayoutInner({ children, currentPath }: { children: React.ReactNode
 
   // 1. Loading State: show skeleton spinner without flicker of "Acesso Negado"
   if (isAuthLoading || isPlatformLoading) {
-    return (
-      <div className="min-h-screen flex items-center justify-center bg-[#F6F5F2]">
-        <div className="flex flex-col items-center gap-3">
-          <div className="h-8 w-8 animate-spin rounded-full border-4 border-[#DDD8CF] border-t-[#B66E45]" />
-          <span className="text-xs font-semibold text-[#626866]">Verificando credenciais e autorização...</span>
-        </div>
-      </div>
-    );
+    return <PageShellSkeleton />;
   }
 
   // 2. Unauthenticated: Redirect to login with returnTo

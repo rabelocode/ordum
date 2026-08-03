@@ -1,9 +1,10 @@
 import React, { useState, useEffect } from "react";
-import { ArrowLeft, Lock, Mail, ArrowRight, Activity, ShieldAlert, Loader2 } from "lucide-react";
+import { ArrowLeft, Lock, Mail, ArrowRight, ShieldAlert, Loader2 } from "lucide-react";
 import { Button } from "../../components/ui/Button";
 import { authService } from "../../services/auth";
 import { useAuth } from "../../core/auth/AuthProvider";
 import { captureClientException } from '../../lib/observability';
+import { PageShellSkeleton } from '../../components/ui/LoadingSkeletons';
 
 interface TenantLoginPageProps {
   slug: string;
@@ -76,11 +77,7 @@ export function TenantLoginPage({ slug }: TenantLoginPageProps) {
   };
 
   if (isLoading) {
-    return (
-      <div className="min-h-screen bg-[#F6F5F2] flex items-center justify-center">
-        <Activity className="w-8 h-8 text-[#B66E45] animate-spin" />
-      </div>
-    );
+    return <PageShellSkeleton />;
   }
 
   if (error) {

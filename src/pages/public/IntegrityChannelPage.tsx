@@ -1,10 +1,11 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { supabase } from '../../lib/supabase';
-import { ShieldCheck, ArrowRight, Loader2, FileText, Lock } from 'lucide-react';
+import { ShieldCheck, ArrowRight } from 'lucide-react';
 import { Button } from '../../components/ui/Button';
 import { Input } from '../../components/ui/Input';
 import { captureAnalytics } from '../../lib/analytics';
 import { captureClientException } from '../../lib/observability';
+import { Skeleton } from '../../components/ui/Skeleton';
 
 interface Category {
   category_slug: string;
@@ -71,7 +72,7 @@ export function IntegrityChannelPage({ slug }: { slug: string }) {
   };
 
   if (isLoading) {
-    return <div className="min-h-screen flex items-center justify-center"><Loader2 className="w-8 h-8 animate-spin text-[#3457D5]" /></div>;
+    return <main className="min-h-screen bg-[#F6F5F2] px-4 py-12" aria-busy="true"><div className="mx-auto max-w-2xl space-y-8"><div className="flex flex-col items-center gap-3"><Skeleton className="h-16 w-16 rounded-full" /><Skeleton className="h-8 w-72 max-w-full" /><Skeleton className="h-4 w-48" /></div><div className="space-y-6 rounded-2xl border border-[#DDD8CF] bg-white p-6 sm:p-8"><Skeleton className="h-10 w-full" /><Skeleton className="h-36 w-full" /><Skeleton className="h-10 w-full" /><Skeleton className="h-12 w-full" /></div></div></main>;
   }
 
   if (error) {

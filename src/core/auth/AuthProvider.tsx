@@ -2,6 +2,7 @@ import React, { createContext, useContext, useEffect, useState } from 'react';
 import { supabase } from '../../lib/supabase';
 import type { User, Session } from '@supabase/supabase-js';
 import { resetAnalyticsUser } from '../../lib/analytics';
+import { getPilotE2EFixture } from '../../test/pilotE2EFixtures';
 
 interface AuthContextType {
   user: User | null;
@@ -23,6 +24,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [isLoading, setIsLoading] = useState(true);
 
   useEffect(() => {
+    const fixture = getPilotE2EFixture();
+    if (fixture) {
+      setSession(fixture.session);
+      setUser(fixture.user);
+      setIsLoading(false);
+      return;
+    }
     supabase.auth.getSession().then(({ data: { session } }) => {
       setSession(session);
       setUser(session?.user ?? null);
@@ -39,6 +47,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const signOut = async () => {
+    if (getPilotE2EFixture()) {
+      localStorage.removeItem('ordum_e2e_role');
+      window.location.hash = '#/';
+      return;
+    }
     await supabase.auth.signOut();
     resetAnalyticsUser();
     window.location.hash = '#/';

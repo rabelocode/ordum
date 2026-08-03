@@ -1,8 +1,9 @@
 import React, { useState, useEffect } from "react";
-import { Building2, ArrowRight, LogOut, Loader2 } from "lucide-react";
+import { Building2, ArrowRight, LogOut } from "lucide-react";
 import { Button } from "../../components/ui/Button";
 import { useAuth } from "../../core/auth/AuthProvider";
 import { usePlatform } from "../../core/auth/PlatformAuthProvider";
+import { PageShellSkeleton } from "../../components/ui/LoadingSkeletons";
 
 export function SelectOrganizationPage() {
   const { signOut } = useAuth();
@@ -19,11 +20,7 @@ export function SelectOrganizationPage() {
   };
 
   if (isPlatformLoading) {
-    return (
-      <div className="min-h-screen bg-[#F6F5F2] flex items-center justify-center p-4">
-        <Loader2 className="w-8 h-8 text-[#B66E45] animate-spin" />
-      </div>
-    );
+    return <PageShellSkeleton />;
   }
 
   return (

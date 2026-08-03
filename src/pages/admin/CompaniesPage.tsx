@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { Search, ArrowRight } from 'lucide-react';
 import { Button } from '../../components/ui/Button';
 import { useAuth } from '../../core/auth/AuthProvider';
+import { ListSkeleton } from '../../components/ui/LoadingSkeletons';
 
 export function CompaniesPage() {
   const { session } = useAuth();
@@ -58,7 +59,7 @@ export function CompaniesPage() {
         </div>
         
         {isLoading ? (
-          <div className="p-8 text-center text-gray-500">Carregando...</div>
+          <ListSkeleton rows={6} />
         ) : (
           <div className="overflow-x-auto">
             <table className="w-full text-left border-collapse">

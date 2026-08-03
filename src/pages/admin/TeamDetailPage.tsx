@@ -4,6 +4,7 @@ import { PlatformTeam } from '../../types/platform';
 import { ArrowLeft, Plus, Trash2, Save, Loader2 } from 'lucide-react';
 import { AddTeamMemberModal } from '../../components/admin/AddTeamMemberModal';
 import { usePlatform } from '../../core/auth/PlatformAuthProvider';
+import { DetailSkeleton } from '../../components/ui/LoadingSkeletons';
 
 export function TeamDetailPage({ teamId }: { teamId: string }) {
   const { session } = useAuth();
@@ -85,7 +86,7 @@ export function TeamDetailPage({ teamId }: { teamId: string }) {
     }
   };
 
-  if (isLoading) return <div className="p-8 text-center text-gray-500">Carregando...</div>;
+  if (isLoading) return <DetailSkeleton />;
   if (!team) return <div className="p-8 text-center">Equipe não encontrada</div>;
 
   return (

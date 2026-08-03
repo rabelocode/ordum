@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from "react";
-import { Activity, ShieldAlert } from "lucide-react";
+import { ShieldAlert } from "lucide-react";
 import { useAuth } from "../../core/auth/AuthProvider";
 import { useTenant } from "../../core/auth/TenantProvider";
 import { WorkspaceLayout } from "../../components/workspace/WorkspaceLayout";
@@ -10,6 +10,7 @@ import { TalentModuleView } from "../../components/workspace/TalentModuleView";
 import { TenantInfo, UserProfile, ModuleId } from "../../types";
 import { WorkspaceErrorBoundary } from "../../components/workspace/WorkspaceErrorBoundary";
 import { captureAnalytics, identifyAnalyticsUser } from '../../lib/analytics';
+import { PageShellSkeleton } from '../../components/ui/LoadingSkeletons';
 
 export function WorkspaceApp() {
   const { user, signOut } = useAuth();
@@ -48,11 +49,7 @@ export function WorkspaceApp() {
   }, [activeTenant?.id, currentRoute]);
 
   if (isLoading || !activeTenant || !profile) {
-    return (
-      <div className="min-h-screen bg-[#F6F5F2] flex items-center justify-center">
-        <Activity className="w-8 h-8 text-[#B66E45] animate-spin" />
-      </div>
-    );
+    return <PageShellSkeleton />;
   }
 
   const tenantInfo: TenantInfo = {

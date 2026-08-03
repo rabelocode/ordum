@@ -6,6 +6,7 @@ import {
 import { Button } from '../../components/ui/Button';
 import { useAuth } from '../../core/auth/AuthProvider';
 import { usePlatform } from '../../core/auth/PlatformAuthProvider';
+import { ListSkeleton } from '../../components/ui/LoadingSkeletons';
 
 interface StaffMember {
   id: string;
@@ -345,10 +346,7 @@ export function ConsultantsPage() {
 
         {/* Members List Table */}
         {isLoading ? (
-          <div className="p-12 text-center text-gray-500 flex flex-col items-center gap-2">
-            <Loader2 className="w-6 h-6 text-[#B66E45] animate-spin" />
-            <span className="text-xs">Carregando membros da equipe...</span>
-          </div>
+          <ListSkeleton rows={7} />
         ) : (
           <div className="overflow-x-auto">
             <table className="w-full text-left border-collapse">

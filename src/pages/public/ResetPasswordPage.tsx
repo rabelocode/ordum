@@ -4,6 +4,7 @@ import { Button } from "../../components/ui/Button";
 import { authService } from "../../services/auth";
 import { supabase } from "../../lib/supabase";
 import { captureClientException } from '../../lib/observability';
+import { PageShellSkeleton } from '../../components/ui/LoadingSkeletons';
 
 export function ResetPasswordPage() {
   const [newPassword, setNewPassword] = useState("");
@@ -55,11 +56,7 @@ export function ResetPasswordPage() {
   };
 
   if (hasValidSession === null) {
-    return (
-      <div className="min-h-screen bg-[#F6F5F2] flex items-center justify-center p-4">
-        <Loader2 className="w-8 h-8 text-[#B66E45] animate-spin" />
-      </div>
-    );
+    return <PageShellSkeleton />;
   }
 
   if (hasValidSession === false && !isSuccess) {
