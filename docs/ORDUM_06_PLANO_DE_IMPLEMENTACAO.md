@@ -1,6 +1,6 @@
 # ORDUM 06 — Estado da implementação
 
-> Atualização do piloto: CI, telemetria sanitizada, onboarding derivado de dados e listagens sob RLS foram adicionados. E2E autenticado permanece condicionado a fixtures isoladas, conforme `ORDUM_10_PILOTO_OBSERVABILIDADE.md`.
+> Atualização do piloto: CI, telemetria sanitizada, onboarding derivado de dados e listagens sob RLS foram adicionados. Fixtures locais isoladas cobrem cinco papéis em Playwright, e uma transação com rollback valida RLS no Supabase remoto; E2E autenticado no preview ainda depende de uma branch/conta de teste dedicada.
 
 ## Concluído nesta entrega
 

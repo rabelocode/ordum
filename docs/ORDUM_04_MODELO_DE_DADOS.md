@@ -2,6 +2,8 @@
 
 > Atualização do piloto: os tipos TypeScript foram regenerados do schema remoto. A migration `20260803121747_grant_tenant_admin_module_permissions.sql` é aditiva e idempotente; o timestamp local da foundation foi alinhado ao histórico remoto `20260801222215` sem reaplicar seu conteúdo.
 
+> Hardening adicional: `20260803130703_harden_privileged_function_search_paths.sql` fixa `search_path` determinístico nas funções privilegiadas legadas e adiciona um trigger restrito para que novos papéis `tenant_admin` recebam as permissões modulares tenant-scoped. Nenhum dado ou tabela foi recriado.
+
 ## Núcleo existente e validado
 
 - Identidade/tenant: `profiles`, `tenants`, `memberships`, `roles`, `permissions`, `membership_roles`, `role_permissions`.
