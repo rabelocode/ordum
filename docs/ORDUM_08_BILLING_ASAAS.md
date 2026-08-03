@@ -1,5 +1,7 @@
 # ORDUM 08 — Billing e Asaas
 
+> Atualização do piloto: confirmações idempotentes podem emitir `payment_confirmed` e, apenas na ativação inicial, `contract_activated`. A allowlist não inclui valor, cliente, cobrança, token ou payload do webhook, e a telemetria nunca bloqueia o processamento financeiro.
+
 ## Estado e regras
 
 A integração usa a API v3 do Asaas exclusivamente no Sandbox. `BILLING_ENABLED=false` é o padrão e produção é recusada pelo código. A API usa `access_token`, `Content-Type: application/json` e `User-Agent`. O webhook valida `asaas-access-token` com comparação constante, aplica limite de taxa no banco, persiste antes do negócio, responde `200` imediatamente e delega o processamento ao `waitUntil` da Vercel. A fila durável é retomada pela conciliação caso uma execução assíncrona seja interrompida.

@@ -1,31 +1,45 @@
-<div align="center">
-<img width="1200" height="475" alt="GHBanner" src="https://ai.google.dev/static/site-assets/images/share-ais-513315318.png" />
-</div>
-
 # Ordum
 
-This contains everything you need to run your app locally.
+Plataforma SaaS B2B modular com administração comercial, multi-tenancy e os módulos Ordum Integridade, Pessoas e Talentos.
 
-View your app in AI Studio: https://ai.studio/apps/d61c47b2-1366-4754-8194-9d11ab7b6e71
+## Ambiente local
 
-## Run Locally
+Requisitos: Node.js 22 e npm.
 
-**Prerequisites:**  Node.js
+1. Copie `.env.example` para `.env.local` e preencha somente no arquivo local.
+2. Execute `npm ci`.
+3. Execute `npm run dev` e acesse `http://localhost:3000`.
 
+Validação completa antes de publicar:
 
-1. Use Node.js 22.
-2. Install dependencies with `npm ci`.
-3. Copy `.env.example` to `.env.local` and fill in the Supabase values.
-4. Start the app with `npm run dev` and open `http://localhost:3000`.
+```bash
+npm run check:secrets
+npm run test:migrations
+npm run lint
+npm run typecheck
+npm test
+npm run build
+```
 
-## Deploy with GitHub and Vercel
+Consultas remotas autorizadas podem ser validadas separadamente com `npm run test:live-queries`. Esse comando exige credenciais locais e nunca integra o CI público.
 
-1. Create a Git repository and push this folder to GitHub.
-2. In Vercel, select **Add New > Project** and import the GitHub repository.
-3. Add these Environment Variables in Vercel for Production, Preview, and Development:
-   - `VITE_SUPABASE_URL`
-   - `VITE_SUPABASE_PUBLISHABLE_KEY`
-   - `SUPABASE_SECRET_KEY`
-4. Deploy. Vercel will build every pushed commit automatically. Pushes to the production branch create production deployments; other branches create preview deployments.
+## GitHub e Vercel
 
-Never commit `.env.local` or expose `SUPABASE_SECRET_KEY` through a `VITE_` variable.
+O repositório principal é `rabelocode/ordum`. A Vercel cria produção a partir de `main` e previews a partir das demais branches. Variáveis devem ser configuradas separadamente para Production e Preview; nenhuma credencial é embutida no repositório.
+
+O build público é gerado em `dist/`. O servidor local é gerado em `build/`, fora do diretório publicado. A função da Vercel fica em `api/index.mjs`.
+
+Variáveis mínimas:
+
+- navegador: `VITE_SUPABASE_URL`, `VITE_SUPABASE_PUBLISHABLE_KEY`;
+- servidor: `SUPABASE_URL`, `SUPABASE_SECRET_KEY`;
+- opcionais de observabilidade: `VITE_SENTRY_DSN`, `SENTRY_DSN`, `SENTRY_ORG`, `SENTRY_PROJECT`, `SENTRY_AUTH_TOKEN`;
+- opcionais de produto: `VITE_POSTHOG_KEY`, `VITE_POSTHOG_HOST`, `POSTHOG_PROJECT_KEY`, `POSTHOG_HOST`;
+- billing Sandbox: consultar `docs/ORDUM_08_BILLING_ASAAS.md`.
+
+Nunca exponha chaves de servidor em variáveis `VITE_*`, logs, commits ou documentação.
+
+## Documentação
+
+- `docs/ORDUM_02_ARQUITETURA_GLOBAL.md` a `docs/ORDUM_09_ADMIN_CONTROL_PLANE.md`: arquitetura e operação existentes;
+- `docs/ORDUM_10_PILOTO_OBSERVABILIDADE.md`: preparação do piloto, observabilidade, analytics, CI e pendências verificadas.

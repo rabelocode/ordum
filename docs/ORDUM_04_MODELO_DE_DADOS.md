@@ -1,5 +1,7 @@
 # ORDUM 04 — Modelo de dados
 
+> Atualização do piloto: os tipos TypeScript foram regenerados do schema remoto. A migration `20260803121747_grant_tenant_admin_module_permissions.sql` é aditiva e idempotente; o timestamp local da foundation foi alinhado ao histórico remoto `20260801222215` sem reaplicar seu conteúdo.
+
 ## Núcleo existente e validado
 
 - Identidade/tenant: `profiles`, `tenants`, `memberships`, `roles`, `permissions`, `membership_roles`, `role_permissions`.

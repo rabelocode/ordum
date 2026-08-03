@@ -1,5 +1,7 @@
 # ORDUM 06 — Estado da implementação
 
+> Atualização do piloto: CI, telemetria sanitizada, onboarding derivado de dados e listagens sob RLS foram adicionados. E2E autenticado permanece condicionado a fixtures isoladas, conforme `ORDUM_10_PILOTO_OBSERVABILIDADE.md`.
+
 ## Concluído nesta entrega
 
 - auditoria do repositório, build, Auth, API, deploy e banco real;

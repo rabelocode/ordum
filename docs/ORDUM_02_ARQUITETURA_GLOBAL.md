@@ -1,5 +1,7 @@
 # ORDUM 02 — Arquitetura global
 
+> Atualização do piloto: o servidor local fica em `build/`, fora do artefato público `dist/`. Observabilidade e analytics são adaptadores opcionais, centralizados e sanitizados conforme `ORDUM_10_PILOTO_OBSERVABILIDADE.md`.
+
 ## Estado vigente
 
 A Ordum é uma aplicação React/Vite publicada pela Vercel. A navegação é baseada em hash, incluindo `/#/login`, `/#/workspace` e `/#/admin`. O Supabase de produção (`plnciaxcujnvaermxmby`) é a fonte de verdade para Auth, PostgreSQL, RLS e os domínios dos tenants.

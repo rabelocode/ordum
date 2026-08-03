@@ -1,5 +1,7 @@
 # ORDUM 09 — Admin Control Plane
 
+> Atualização do piloto: CI e observabilidade estão descritos em `ORDUM_10_PILOTO_OBSERVABILIDADE.md`. O admin não mostra Sentry, PostHog ou Linear como integrados sem evidência externa real.
+
 ## Escopo entregue
 
 O `/#/admin` usa PostgreSQL/Supabase como fonte operacional e o Express server-side como boundary de autorização. Esta entrega ampliou o admin existente sem recriar leads, equipes, contratos, billing ou autenticação.
