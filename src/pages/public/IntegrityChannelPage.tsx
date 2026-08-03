@@ -1,8 +1,10 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { supabase } from '../../lib/supabase';
 import { ShieldCheck, ArrowRight, Loader2, FileText, Lock } from 'lucide-react';
 import { Button } from '../../components/ui/Button';
 import { Input } from '../../components/ui/Input';
+import { captureAnalytics } from '../../lib/analytics';
+import { captureClientException } from '../../lib/observability';
 
 interface Category {
   category_slug: string;
@@ -20,6 +22,8 @@ export function IntegrityChannelPage({ slug }: { slug: string }) {
   const [occurredAt, setOccurredAt] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [reportResult, setReportResult] = useState<{ protocol: string; access_secret: string } | null>(null);
+  const [submissionError, setSubmissionError] = useState('');
+  const startedRef = useRef(false);
 
   useEffect(() => {
     async function loadForm() {
@@ -34,7 +38,7 @@ export function IntegrityChannelPage({ slug }: { slug: string }) {
         setCategories(data);
         if (data.length > 0) setSelectedCategory(data[0].category_slug);
       } catch (err) {
-        console.error(err);
+        captureClientException(err, { operation: 'integrity_form_load' });
         setError("Erro ao carregar o canal de integridade.");
       } finally {
         setIsLoading(false);
@@ -46,6 +50,7 @@ export function IntegrityChannelPage({ slug }: { slug: string }) {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setIsSubmitting(true);
+    setSubmissionError('');
     try {
       const { data, error } = await (supabase as any).rpc('submit_integrity_report', {
         p_channel_slug: slug,
@@ -55,10 +60,11 @@ export function IntegrityChannelPage({ slug }: { slug: string }) {
       } as any);
 
       if (error) throw error;
+      captureAnalytics('report_submitted', { module: 'integrity', status: 'submitted', source: 'anonymous_channel' });
       setReportResult(data);
     } catch (err) {
-      console.error(err);
-      alert("Erro ao enviar o relato.");
+      captureClientException(err, { operation: 'integrity_report_submit' });
+      setSubmissionError('Não foi possível enviar o relato agora. Nenhum protocolo foi criado; tente novamente.');
     } finally {
       setIsSubmitting(false);
     }
@@ -111,7 +117,12 @@ export function IntegrityChannelPage({ slug }: { slug: string }) {
         </div>
 
         <div className="bg-white rounded-2xl p-6 sm:p-8 shadow-sm border border-[#DDD8CF]/60">
-          <form onSubmit={handleSubmit} className="space-y-6">
+          <form onSubmit={handleSubmit} className="space-y-6" onFocus={() => {
+            if (startedRef.current) return;
+            startedRef.current = true;
+            captureAnalytics('report_started', { module: 'integrity', source: 'anonymous_channel' });
+          }}>
+            {submissionError && <p role="alert" className="rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700">{submissionError}</p>}
             <div>
               <label className="block text-sm font-bold text-[#202322] mb-2">Categoria do Relato</label>
               <select 

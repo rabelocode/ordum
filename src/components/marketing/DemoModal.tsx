@@ -4,6 +4,8 @@ import { Button } from "../ui/Button";
 import { Input } from "../ui/Input";
 import { marketingService } from "../../services/marketing";
 import { solutionsData } from "../../lib/solutions";
+import { captureAnalytics } from '../../lib/analytics';
+import { captureClientException } from '../../lib/observability';
 
 interface DemoModalProps {
   isOpen: boolean;
@@ -19,6 +21,7 @@ export function DemoModal({ isOpen, onClose, defaultModule = "all" }: DemoModalP
   const [company, setCompany] = useState("");
   const [phone, setPhone] = useState("");
   const [module, setModule] = useState(defaultModule);
+  const [submissionError, setSubmissionError] = useState('');
   
   const modalRef = useRef<HTMLDivElement>(null);
   const initialFocusRef = useRef<HTMLInputElement>(null);
@@ -29,6 +32,7 @@ export function DemoModal({ isOpen, onClose, defaultModule = "all" }: DemoModalP
       setModule(defaultModule);
       setSubmitted(false);
       setIsSubmitting(false);
+      setSubmissionError('');
       setTimeout(() => {
         initialFocusRef.current?.focus();
       }, 10);
@@ -60,13 +64,14 @@ export function DemoModal({ isOpen, onClose, defaultModule = "all" }: DemoModalP
         interests: module === 'all' ? solutionsData.map(s => s.demoInterest) : [module],
         consent: true
       });
+      captureAnalytics('demo_requested', { module, source: 'marketing_modal' });
       setSubmitted(true);
       setTimeout(() => {
         closeButtonRef.current?.focus();
       }, 10);
     } catch (err) {
-      console.error(err);
-      alert("Erro ao enviar solicitação.");
+      captureClientException(err, { operation: 'demo_request' });
+      setSubmissionError('Não foi possível enviar agora. Revise os dados e tente novamente.');
     } finally {
       setIsSubmitting(false);
     }
@@ -105,7 +110,8 @@ export function DemoModal({ isOpen, onClose, defaultModule = "all" }: DemoModalP
               </p>
             </div>
             
-            <form onSubmit={handleSubmit} className="space-y-4">
+          <form onSubmit={handleSubmit} className="space-y-4">
+            {submissionError && <p role="alert" className="rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700">{submissionError}</p>}
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div>
                   <label htmlFor="lead-name" className="block text-[11px] font-bold text-[#202322] mb-1.5 uppercase tracking-wider">

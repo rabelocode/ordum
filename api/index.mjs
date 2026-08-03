@@ -471,6 +471,117 @@ function publicBillingHealth(env = process.env) {
   }
 }
 
+// src/lib/telemetryPrivacy.ts
+var SENSITIVE_KEY = /(?:authorization|cookie|password|passcode|secret|token|document|description|message|content|body|resume|curriculum|cover_letter|denuncia|report_text|candidate|tax_id|cpf|cnpj|email|phone|full_name|name|ip_address|user_agent)/i;
+var ALLOWED_ANALYTICS_PROPERTIES = /* @__PURE__ */ new Set([
+  "environment",
+  "is_first_action",
+  "module",
+  "plan_ref",
+  "role",
+  "source",
+  "status",
+  "step_key",
+  "tenant_ref",
+  "version"
+]);
+function primitive(value) {
+  if (value === null || ["string", "number", "boolean"].includes(typeof value)) return value;
+  return void 0;
+}
+function redactTelemetryValue(value, depth = 0) {
+  if (depth > 5) return "[TRUNCATED]";
+  const simple = primitive(value);
+  if (simple !== void 0) return typeof simple === "string" ? simple.slice(0, 500) : simple;
+  if (Array.isArray(value)) return value.slice(0, 25).map((item) => redactTelemetryValue(item, depth + 1));
+  if (!value || typeof value !== "object") return void 0;
+  return Object.fromEntries(
+    Object.entries(value).slice(0, 50).map(([key, item]) => [key, SENSITIVE_KEY.test(key) ? "[REDACTED]" : redactTelemetryValue(item, depth + 1)])
+  );
+}
+function sanitizeAnalyticsProperties(properties = {}) {
+  return Object.fromEntries(
+    Object.entries(properties).filter(([key]) => ALLOWED_ANALYTICS_PROPERTIES.has(key)).map(([key, value]) => [key, primitive(value)]).filter((entry) => entry[1] !== void 0)
+  );
+}
+function sanitizeSentryEvent(event) {
+  const sanitized = redactTelemetryValue(event);
+  if (event.user?.id) sanitized.user = { id: String(event.user.id).slice(0, 128) };
+  else delete sanitized.user;
+  if (sanitized.request) {
+    delete sanitized.request.data;
+    delete sanitized.request.cookies;
+    delete sanitized.request.headers;
+    delete sanitized.request.query_string;
+  }
+  return sanitized;
+}
+
+// src/server/analytics.ts
+async function captureServerAnalytics(event, distinctId, properties = {}) {
+  const apiKey = process.env.POSTHOG_PROJECT_KEY;
+  if (!apiKey || !distinctId) return false;
+  const host = (process.env.POSTHOG_HOST || "https://us.i.posthog.com").replace(/\/$/, "");
+  try {
+    const response = await fetch(`${host}/capture/`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        api_key: apiKey,
+        event,
+        properties: { distinct_id: distinctId.slice(0, 128), ...sanitizeAnalyticsProperties(properties) }
+      }),
+      signal: AbortSignal.timeout(2500)
+    });
+    return response.ok;
+  } catch {
+    return false;
+  }
+}
+
+// src/server/observability.ts
+import * as Sentry from "@sentry/node";
+var initialized = false;
+function initServerObservability() {
+  const dsn = process.env.SENTRY_DSN;
+  if (!dsn || initialized) return Boolean(dsn);
+  Sentry.init({
+    dsn,
+    environment: process.env.VERCEL_ENV || process.env.NODE_ENV || "development",
+    release: process.env.VERCEL_GIT_COMMIT_SHA,
+    sendDefaultPii: false,
+    tracesSampleRate: 0,
+    beforeSend(event) {
+      return sanitizeSentryEvent(event);
+    }
+  });
+  initialized = true;
+  return true;
+}
+function reportServerError(error, request, operation) {
+  const safeMessage = error instanceof Error ? error.message.replace(/(token|secret|password|authorization)=[^\s&]+/gi, "$1=[REDACTED]").slice(0, 300) : "Unknown error";
+  const requestId = request ? String(request.requestId || "") : "";
+  console.error(JSON.stringify({
+    level: "error",
+    message: safeMessage,
+    method: request?.method,
+    operation,
+    requestId,
+    route: request?.path
+  }));
+  if (!initialized) return;
+  Sentry.withScope((scope) => {
+    if (operation) scope.setTag("operation", operation.slice(0, 128));
+    if (requestId) scope.setTag("request_id", requestId.slice(0, 128));
+    if (request?.method) scope.setTag("http.method", request.method);
+    if (request?.path) scope.setTag("http.route", request.path.slice(0, 256));
+    Sentry.captureException(error);
+  });
+}
+function installServerErrorHandler(app) {
+  if (initialized) Sentry.setupExpressErrorHandler(app);
+}
+
 // src/server/adminOtherRouter.ts
 function createAdminOtherRouter(getSupabaseAdmin, requirePlatformAuth) {
   const router = Router3();
@@ -590,12 +701,13 @@ function createAdminOtherRouter(getSupabaseAdmin, requirePlatformAuth) {
         entity_type: "platform_members",
         entity_id: member.id,
         severity: "info",
-        metadata: { email, role_key, relationship_type: finalRelationshipType }
+        metadata: { role_key, relationship_type: finalRelationshipType }
       });
+      void captureServerAnalytics("user_invited", req.user.id, { role: role_key, source: "platform_admin" });
       res.json({ success: true, member });
     } catch (e) {
-      console.error("Error in POST /api/admin/staff:", e);
-      res.status(500).json({ error: e.message });
+      reportServerError(e, req, "platform_member_invite");
+      res.status(500).json({ error: "N\xE3o foi poss\xEDvel concluir o convite." });
     }
   });
   router.patch("/staff/:id", requirePlatformAuth, async (req, res) => {
@@ -1363,14 +1475,14 @@ var AsaasBillingProvider = class {
     this.config = config;
     if (!config.enabled || !config.apiKey) throw new Error("Integra\xE7\xE3o Asaas Sandbox n\xE3o est\xE1 habilitada.");
   }
-  async request(path2, init) {
+  async request(path2, init2) {
     const response = await fetch(`${this.config.baseUrl}${path2}`, {
-      ...init,
+      ...init2,
       headers: {
         "Content-Type": "application/json",
         "User-Agent": this.config.userAgent,
         access_token: this.config.apiKey,
-        ...init?.headers
+        ...init2?.headers
       }
     });
     const body = await response.json().catch(() => ({}));
@@ -1600,6 +1712,7 @@ async function processPaymentEvent(db, eventRow, payload, provider) {
   const providerStatus = payment.status ? String(payment.status) : void 0;
   let normalizedStatus = needsProviderVerification(payload.event) ? normalizeProviderPaymentStatus(providerStatus) : normalizePaymentStatus(payload.event, providerStatus);
   const { data: existingPayment } = await db.from("billing_payments").select("*").eq("provider_payment_id", payment.id).maybeSingle();
+  const wasSettled = ["confirmed", "received"].includes(existingPayment?.status);
   normalizedStatus = preserveSettledPaymentStatus(existingPayment?.status, normalizedStatus);
   const dueDate = slugDate(payment.dueDate);
   let startsOn = existingPayment?.paid_period_starts_on ?? null;
@@ -1644,6 +1757,10 @@ async function processPaymentEvent(db, eventRow, payload, provider) {
     });
     if (provisionError) throw provisionError;
     await db.from("billing_payments").update({ tenant_id: tenantId }).eq("id", savedPayment.id);
+    if (!wasSettled) {
+      void captureServerAnalytics("payment_confirmed", tenantId, { tenant_ref: tenantId, status: normalizedStatus, source: "asaas_sandbox" });
+      if (contract.status !== "active") void captureServerAnalytics("contract_activated", tenantId, { tenant_ref: tenantId, status: "active", source: "billing_provisioning" });
+    }
   } else if (accessStatus === "grace" && contract.tenant_id) {
     const graceEndsAt = addGracePeriod(dueDate, contract.grace_days);
     await db.from("tenant_billing_state").upsert({
@@ -2122,6 +2239,7 @@ function createBillingRouters(getSupabaseAdmin, requirePlatformAuth) {
     }).select().single();
     if (error) return res.status(400).json({ error: error.message });
     await db.from("platform_audit_logs").insert({ actor_user_id: req.user.id, action: "commercial.proposal.created", entity_type: "commercial_proposals", entity_id: data.id, team_id: data.team_id, severity: "info", ...auditContext(req, { result: "success", after: { amount_cents: data.amount_cents, cycle: data.cycle, status: data.status } }) });
+    void captureServerAnalytics("proposal_created", req.user.id, { plan_ref: input.plan_id, status: data.status, source: "admin_commercial" });
     return res.status(201).json(data);
   });
   adminRouter.post("/commercial/proposals/:id/approve", requirePlatformAuth, async (req, res) => {
@@ -2393,16 +2511,28 @@ import cors from "cors";
 import { randomUUID as randomUUID2 } from "node:crypto";
 dotenv.config({ path: [".env.local", ".env"] });
 async function createApp() {
+  initServerObservability();
   const app = express();
   app.disable("x-powered-by");
-  app.use(express.json({ limit: "512kb" }));
-  app.use(cors());
   app.use((req, res, next) => {
     const requestId = req.header("x-request-id") || randomUUID2();
     req.requestId = requestId;
     res.setHeader("x-request-id", requestId);
+    res.setHeader("x-content-type-options", "nosniff");
+    res.setHeader("x-frame-options", "DENY");
+    res.setHeader("referrer-policy", "strict-origin-when-cross-origin");
+    res.setHeader("permissions-policy", "camera=(), microphone=(), geolocation=()");
+    if (req.path.startsWith("/api/")) res.setHeader("cache-control", "no-store");
     next();
   });
+  app.use(express.json({ limit: "512kb" }));
+  app.use((error, req, res, next) => {
+    if (error instanceof SyntaxError && Object.prototype.hasOwnProperty.call(error, "body")) {
+      return res.status(400).json({ error: "Invalid JSON body", requestId: req.requestId });
+    }
+    next(error);
+  });
+  app.use(cors());
   let _supabaseAdmin = null;
   const getSupabaseAdmin = () => {
     if (!_supabaseAdmin) {
@@ -2452,7 +2582,7 @@ async function createApp() {
       };
       next();
     } catch (e) {
-      console.error("requirePlatformAuth error:", e);
+      reportServerError(e, req, "platform_auth");
       return res.status(500).json({ error: "Configuration error on server" });
     }
   };
@@ -2502,8 +2632,8 @@ async function createApp() {
         tenantMemberships: tenantMemberships || []
       });
     } catch (e) {
-      console.error("Error in /api/admin/me:", e);
-      return res.status(500).json({ error: e.message });
+      reportServerError(e, req, "admin_session_resolve");
+      return res.status(500).json({ error: "N\xE3o foi poss\xEDvel resolver a sess\xE3o administrativa." });
     }
   });
   app.get("/api/admin/tenants", requirePlatformAuth, async (req, res) => {
@@ -2592,8 +2722,8 @@ async function createApp() {
       });
       res.json({ success: true, tenant: { ...tenant, status: "trial" }, expiresAt });
     } catch (e) {
-      console.error(e);
-      res.status(500).json({ error: e.message });
+      reportServerError(e, req, "demo_release");
+      res.status(500).json({ error: "N\xE3o foi poss\xEDvel liberar a demonstra\xE7\xE3o." });
     }
   });
   app.post("/api/admin/tenants/revoke-demo", requirePlatformAuth, async (req, res) => {
@@ -2615,8 +2745,8 @@ async function createApp() {
       await db.from("platform_audit_logs").insert({ actor_user_id: req.user.id, action: "demo.revoked", entity_type: "commercial_demos", entity_id: tenantId, team_id: assignment?.team_id || null, severity: "warning" });
       res.json({ success: true });
     } catch (e) {
-      console.error(e);
-      res.status(500).json({ error: e.message });
+      reportServerError(e, req, "demo_revoke");
+      res.status(500).json({ error: "N\xE3o foi poss\xEDvel revogar a demonstra\xE7\xE3o." });
     }
   });
   app.get("/api/admin/consultants", requirePlatformAuth, async (_req, res) => {
@@ -2731,6 +2861,12 @@ async function createApp() {
     } catch (e) {
       res.status(500).json({ error: e.message });
     }
+  });
+  installServerErrorHandler(app);
+  app.use((error, req, res, _next) => {
+    reportServerError(error, req, "unhandled_request");
+    if (res.headersSent) return;
+    res.status(500).json({ error: "Unexpected server error", requestId: req.requestId });
   });
   if (process.env.NODE_ENV !== "production") {
     const { createServer: createViteServer } = await import("vite");

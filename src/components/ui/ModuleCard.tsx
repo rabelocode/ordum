@@ -67,7 +67,7 @@ export function ModuleCard({
                 {pendingCount} {pendingCount === 1 ? "pendência" : "pendências"}
               </Badge>
             )}
-            <Badge variant={badgeVariant as any}>Disponível na demonstração</Badge>
+            <Badge variant={badgeVariant as any}>Solução ativa</Badge>
           </div>
         </div>
 

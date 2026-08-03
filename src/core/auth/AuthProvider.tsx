@@ -1,6 +1,7 @@
 import React, { createContext, useContext, useEffect, useState } from 'react';
 import { supabase } from '../../lib/supabase';
 import type { User, Session } from '@supabase/supabase-js';
+import { resetAnalyticsUser } from '../../lib/analytics';
 
 interface AuthContextType {
   user: User | null;
@@ -28,9 +29,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       setIsLoading(false);
     });
 
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
       setSession(session);
       setUser(session?.user ?? null);
+      if (event === 'SIGNED_OUT') resetAnalyticsUser();
     });
 
     return () => subscription.unsubscribe();
@@ -38,6 +40,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const signOut = async () => {
     await supabase.auth.signOut();
+    resetAnalyticsUser();
     window.location.hash = '#/';
   };
 

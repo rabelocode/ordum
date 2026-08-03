@@ -3,6 +3,7 @@ import { Lock, Mail, ArrowRight, Shield, AlertCircle, CheckCircle2, ArrowLeft, L
 import { Button } from "../../components/ui/Button";
 import { authService } from "../../services/auth";
 import { useAuth } from "../../core/auth/AuthProvider";
+import { captureClientException } from '../../lib/observability';
 
 export function LoginPage() {
   const { user, signOut } = useAuth();
@@ -72,7 +73,7 @@ export function LoginPage() {
         return;
       }
     } catch (e) {
-      console.error("Error resolving user destination:", e);
+      captureClientException(e, { operation: 'login_destination' });
     }
 
     // Default fallback
@@ -110,7 +111,7 @@ export function LoginPage() {
         await resolveUserDestination(data.session.access_token);
       }
     } catch (err: any) {
-      console.error("Login error:", err);
+      captureClientException(err, { operation: 'login' });
       const msg = err.message || "";
       if (msg.includes("Invalid login credentials")) {
         setErrorMessage("E-mail ou senha incorretos.");
@@ -140,7 +141,7 @@ export function LoginPage() {
       await authService.resetPasswordForEmail(recoveryEmail.trim());
       setRecoverySuccess(true);
     } catch (err: any) {
-      console.error("Recovery error:", err);
+      captureClientException(err, { operation: 'password_recovery' });
       // Neutral error for security
       setRecoverySuccess(true);
     } finally {

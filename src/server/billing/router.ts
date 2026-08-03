@@ -6,6 +6,7 @@ import type { BillingProvider } from './provider';
 import { canReadAssignedResource } from '../authorization';
 import { auditContext, pageResult, parsePagination, withinManagerApprovalLimit } from '../operational';
 import { getBillingConfig, publicBillingHealth } from './config';
+import { captureServerAnalytics } from '../analytics';
 import {
   SUPPORTED_ASAAS_EVENTS,
   accessTransitionForPaymentStatus,
@@ -100,6 +101,7 @@ async function processPaymentEvent(db: any, eventRow: any, payload: any, provide
     .select('*')
     .eq('provider_payment_id', payment.id)
     .maybeSingle();
+  const wasSettled = ['confirmed', 'received'].includes(existingPayment?.status);
 
   normalizedStatus = preserveSettledPaymentStatus(existingPayment?.status, normalizedStatus);
 
@@ -156,6 +158,10 @@ async function processPaymentEvent(db: any, eventRow: any, payload: any, provide
     });
     if (provisionError) throw provisionError;
     await db.from('billing_payments').update({ tenant_id: tenantId }).eq('id', savedPayment.id);
+    if (!wasSettled) {
+      void captureServerAnalytics('payment_confirmed', tenantId, { tenant_ref: tenantId, status: normalizedStatus, source: 'asaas_sandbox' });
+      if (contract.status !== 'active') void captureServerAnalytics('contract_activated', tenantId, { tenant_ref: tenantId, status: 'active', source: 'billing_provisioning' });
+    }
   } else if (accessStatus === 'grace' && contract.tenant_id) {
     const graceEndsAt = addGracePeriod(dueDate, contract.grace_days);
     await db.from('tenant_billing_state').upsert({
@@ -642,6 +648,7 @@ export function createBillingRouters(getSupabaseAdmin: () => any, requirePlatfor
     }).select().single();
     if (error) return res.status(400).json({ error: error.message });
     await db.from('platform_audit_logs').insert({ actor_user_id: req.user.id, action: 'commercial.proposal.created', entity_type: 'commercial_proposals', entity_id: data.id, team_id: data.team_id, severity: 'info', ...auditContext(req, { result: 'success', after: { amount_cents: data.amount_cents, cycle: data.cycle, status: data.status } }) });
+    void captureServerAnalytics('proposal_created', req.user.id, { plan_ref: input.plan_id, status: data.status, source: 'admin_commercial' });
     return res.status(201).json(data);
   });
 

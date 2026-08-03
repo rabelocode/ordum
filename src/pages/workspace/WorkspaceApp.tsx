@@ -9,10 +9,11 @@ import { PeopleModuleView } from "../../components/workspace/PeopleModuleView";
 import { TalentModuleView } from "../../components/workspace/TalentModuleView";
 import { TenantInfo, UserProfile, ModuleId } from "../../types";
 import { WorkspaceErrorBoundary } from "../../components/workspace/WorkspaceErrorBoundary";
+import { captureAnalytics, identifyAnalyticsUser } from '../../lib/analytics';
 
 export function WorkspaceApp() {
   const { user, signOut } = useAuth();
-  const { profile, activeTenant, roles, solutions, hasSolution, hasPermission, isLoading } = useTenant();
+  const { profile, activeTenant, roles, permissions, hasSolution, hasPermission, isLoading } = useTenant();
 
   const [currentRoute, setCurrentRoute] = useState("");
 
@@ -32,6 +33,19 @@ export function WorkspaceApp() {
       window.location.hash = "#/entrar";
     }
   }, [isLoading, user]);
+
+  useEffect(() => {
+    if (!user || !activeTenant || roles.length === 0) return;
+    identifyAnalyticsUser(user.id, activeTenant.id, roles[0].key);
+  }, [user?.id, activeTenant?.id, roles.map((role) => role.key).join('|')]);
+
+  useEffect(() => {
+    if (!activeTenant || !currentRoute || !['integridade', 'pessoas', 'talentos'].includes(currentRoute)) return;
+    captureAnalytics('module_opened', {
+      tenant_ref: activeTenant.id,
+      module: currentRoute === 'integridade' ? 'integrity' : currentRoute === 'pessoas' ? 'people' : 'talent',
+    });
+  }, [activeTenant?.id, currentRoute]);
 
   if (isLoading || !activeTenant || !profile) {
     return (
@@ -59,8 +73,8 @@ export function WorkspaceApp() {
     tenantId: activeTenant.id,
     name: profile.full_name || user!.email || "Usuário",
     email: user!.email || "",
-    role: roles.length > 0 ? roles[0].key : "employee",
-    permissions: [],
+    role: (roles[0]?.key || 'employee') as UserProfile['role'],
+    permissions,
     avatarUrl: profile.avatar_path || undefined
   };
 
@@ -72,20 +86,15 @@ export function WorkspaceApp() {
     window.location.hash = path;
   };
 
-  const roleKeys = roles.map(r => r.key);
-  const canAccessIntegrity = hasPermission('integrity.indicator.view') || hasPermission('integrity.case.triage') || roleKeys.includes('tenant_admin');
-  const canAccessPeople = hasPermission('people.communication.view') || hasPermission('people.payslip.view_own') || roleKeys.includes('tenant_admin');
-  const canAccessTalent = hasPermission('talent.job.publish') || hasPermission('talent.application.view') || roleKeys.includes('tenant_admin');
-  const canAccessAdmin = roleKeys.includes('tenant_admin');
-  const canAccessExecutive = hasPermission('integrity.indicator.view') || roleKeys.includes('tenant_admin');
-
-  const canAccessHome = canAccessAdmin || canAccessExecutive || true; // let them see home, if not we show what they have
+  const canAccessIntegrity = hasPermission('integrity.cases.read') || hasPermission('integrity.cases.manage');
+  const canAccessPeople = hasPermission('people.portal.read') || hasPermission('people.requests.create') || hasPermission('people.requests.manage');
+  const canAccessTalent = hasPermission('talents.jobs.manage') || hasPermission('talents.candidates.manage') || hasPermission('talents.interviews.manage');
 
   const getAuthorizedModules = () => {
     const modules: ModuleId[] = [];
-    if (hasSolution('integrity') && (canAccessIntegrity || canAccessAdmin)) modules.push('integrity');
-    if (hasSolution('people') && (canAccessPeople || canAccessAdmin)) modules.push('people');
-    if (hasSolution('talent') && (canAccessTalent || canAccessAdmin)) modules.push('talent');
+    if (hasSolution('integrity') && canAccessIntegrity) modules.push('integrity');
+    if (hasSolution('people') && canAccessPeople) modules.push('people');
+    if (hasSolution('talent') && canAccessTalent) modules.push('talent');
     return modules;
   };
 
@@ -108,19 +117,18 @@ export function WorkspaceApp() {
 
   const renderModuleContent = () => {
     if (currentRoute === "pessoas") {
-      if (!canAccessPeople && !canAccessAdmin) return renderUnauthorized();
+      if (!canAccessPeople) return renderUnauthorized();
       return <PeopleModuleView tenant={tenantInfo} user={userProfile} onBack={() => handleNavigate("")} />;
     }
     if (currentRoute === "integridade") {
-      if (!canAccessIntegrity && !canAccessAdmin) return renderUnauthorized();
+      if (!canAccessIntegrity) return renderUnauthorized();
       return <IntegrityModuleView tenant={tenantInfo} user={userProfile} onBack={() => handleNavigate("")} />;
     }
     if (currentRoute === "talentos") {
-      if (!canAccessTalent && !canAccessAdmin) return renderUnauthorized();
+      if (!canAccessTalent) return renderUnauthorized();
       return <TalentModuleView tenant={tenantInfo} user={userProfile} onBack={() => handleNavigate("")} />;
     }
     if (currentRoute === "") {
-       if (!canAccessHome) return renderUnauthorized();
        return <WorkspaceHome
               user={userProfile}
               tenant={tenantInfo}

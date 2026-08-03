@@ -1,5 +1,7 @@
 # ORDUM 03 — Acesso, papéis e escopo
 
+> Atualização do piloto: `tenant_admin` recebe permissões tenant-scoped por `role_permissions`; não cria `platform_member`, não ignora RLS e não amplia privilégios globais. O frontend usa as chaves reais do catálogo remoto.
+
 ## Autorização efetiva
 
 ```text
