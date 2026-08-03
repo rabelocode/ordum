@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useAuth } from '../../core/auth/AuthProvider';
 import { Search } from 'lucide-react';
+import { ListSkeleton } from '../../components/ui/LoadingSkeletons';
 
 export function AuditPage() {
   const { session } = useAuth();
@@ -51,7 +52,7 @@ export function AuditPage() {
 
       <div className="bg-white border border-[#DDD8CF]/40 rounded-2xl shadow-sm overflow-hidden">
         {isLoading ? (
-          <div className="p-8 text-center text-gray-500">Carregando logs de auditoria...</div>
+          <ListSkeleton rows={7} />
         ) : logs.length === 0 ? (
           <div className="p-8 text-center text-gray-500">Nenhum evento encontrado no seu escopo.</div>
         ) : (

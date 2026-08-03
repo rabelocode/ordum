@@ -286,7 +286,7 @@ function eventForRemotePayment(payment: any) {
   return 'PAYMENT_UPDATED';
 }
 
-async function runBillingReconciliation(db: any, triggeredByUserId?: string | null) {
+export async function runBillingReconciliation(db: any, triggeredByUserId?: string | null) {
   const run = await db.from('billing_reconciliation_runs').insert({
     provider: 'asaas', status: 'running', triggered_by_user_id: triggeredByUserId || null,
   }).select().single();

@@ -7,6 +7,8 @@ import { LoginPage } from "./pages/public/LoginPage";
 import { ResetPasswordPage } from "./pages/public/ResetPasswordPage";
 import { AcceptInvitePage } from "./pages/public/AcceptInvitePage";
 import { SelectOrganizationPage } from "./pages/public/SelectOrganizationPage";
+import { CareerSitePage } from "./pages/public/CareerSitePage";
+import { PageShellSkeleton } from "./components/ui/LoadingSkeletons";
 
 // Lazy load heavy internal applications
 const WorkspaceApp = lazy(() => import("./pages/workspace/WorkspaceApp").then(m => ({ default: m.WorkspaceApp })));
@@ -29,11 +31,7 @@ const ProposalsPage = lazy(() => import("./pages/admin/ProposalsPage").then(m =>
 const ControlPlaneModulePage = lazy(() => import("./pages/admin/ControlPlaneModulePage").then(m => ({ default: m.ControlPlaneModulePage })));
 const AccessControlPage = lazy(() => import("./pages/admin/AccessControlPage").then(m => ({ default: m.AccessControlPage })));
 
-const SuspenseFallback = () => (
-  <div className="min-h-screen flex items-center justify-center bg-[#F6F5F2]">
-    <div className="h-8 w-8 animate-spin rounded-full border-4 border-[#DDD8CF] border-t-[#B66E45]" />
-  </div>
-);
+const SuspenseFallback = () => <PageShellSkeleton />;
 
 export default function App() {
   const [currentRoute, setCurrentRoute] = useState("/");
@@ -108,6 +106,10 @@ export default function App() {
     if (route.startsWith("/canal/")) {
       const slug = route.split("/")[2];
       return <IntegrityChannelPage slug={slug} />;
+    }
+    if (route.startsWith("/carreiras/")) {
+      const slug = route.split("/")[2];
+      return <CareerSitePage slug={slug} />;
     }
     if (route.startsWith("/acesso/")) {
       const slug = route.split("/")[2];

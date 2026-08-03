@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { SUPPORTED_ASAAS_EVENTS, accessTransitionForEvent, accessTransitionForPaymentStatus, addGracePeriod, centsFromProvider, normalizePaymentStatus, paidPeriod, preserveSettledPaymentStatus, safeProviderMetadata } from '../src/server/billing/domain';
 import { getBillingConfig } from '../src/server/billing/config';
-import { processPendingWebhookEvents, processStoredEvent, webhookTokenMatches } from '../src/server/billing/router';
+import { processPendingWebhookEvents, processStoredEvent, runBillingReconciliation, webhookTokenMatches } from '../src/server/billing/router';
 import { AsaasBillingProvider } from '../src/server/billing/asaas';
 
 test('billing stays disabled and Sandbox-only by default', () => {
@@ -90,4 +90,50 @@ test('Asaas adapter uses authenticated DELETE for period-end cancellation and pa
     assert.equal(calls[0].init.method, 'DELETE'); assert.equal(calls[0].init.headers.access_token, '$aact_hml_test');
     assert.match(calls[1].url, /subscription=sub_123/); assert.match(calls[1].url, /offset=100/);
   } finally { globalThis.fetch = originalFetch; }
+});
+
+test('Asaas Sandbox adapter covers customer, subscription, charge lookup and cancellation without real network calls', async () => {
+  const originalFetch = globalThis.fetch;
+  const calls: Array<{ url: string; init: RequestInit }> = [];
+  globalThis.fetch = (async (url: string, init: RequestInit = {}) => {
+    calls.push({ url, init });
+    if (url.endsWith('/customers')) return new Response(JSON.stringify({ id: 'cus_sandbox' }), { status: 200 });
+    if (url.endsWith('/subscriptions') && init.method === 'POST') return new Response(JSON.stringify({ id: 'sub_sandbox' }), { status: 200 });
+    if (url.endsWith('/payments/pay_sandbox')) return new Response(JSON.stringify({ id: 'pay_sandbox', status: 'CONFIRMED' }), { status: 200 });
+    if (url.endsWith('/subscriptions/sub_sandbox') && init.method === 'DELETE') return new Response(JSON.stringify({ deleted: true }), { status: 200 });
+    return new Response('{}', { status: 404 });
+  }) as any;
+  try {
+    const provider = new AsaasBillingProvider({ enabled: true, provider: 'asaas', environment: 'sandbox', apiKey: '$aact_hml_fixture', webhookToken: 'fixture', baseUrl: 'https://api-sandbox.asaas.com/v3', userAgent: 'Ordum-Test' });
+    assert.equal((await provider.createCustomer({ name: 'Pilot Fixture', email: 'fixture@example.invalid', cpfCnpj: '00000000000', externalReference: 'contract-fixture' })).id, 'cus_sandbox');
+    assert.equal((await provider.createSubscription({ customerId: 'cus_sandbox', billingType: 'PIX', cycle: 'monthly', amountCents: 19990, nextDueDate: '2026-08-10', externalReference: 'contract-fixture', description: 'Plano fixture' })).id, 'sub_sandbox');
+    assert.equal((await provider.getPayment('pay_sandbox')).status, 'CONFIRMED');
+    assert.equal((await provider.cancelSubscription('sub_sandbox')).deleted, true);
+    const subscriptionPayload = JSON.parse(String(calls[1].init.body));
+    assert.equal(subscriptionPayload.value, 199.9);
+    assert.equal(subscriptionPayload.cycle, 'MONTHLY');
+    assert.ok(calls.every((call) => (call.init.headers as any).access_token === '$aact_hml_fixture'));
+  } finally { globalThis.fetch = originalFetch; }
+});
+
+test('reconciliation records a safe skipped run while billing credentials are disabled', async () => {
+  const updates: any[] = [];
+  const db = {
+    from(table: string) {
+      return {
+        insert: () => ({ select: () => ({ single: async () => ({ data: { id: 'run-fixture' }, error: null }) }) }),
+        update: (value: any) => ({ eq: async () => { updates.push({ table, value }); return { error: null }; } }),
+      };
+    },
+  };
+  const previous = process.env.BILLING_ENABLED;
+  delete process.env.BILLING_ENABLED;
+  try {
+    assert.deepEqual(await runBillingReconciliation(db), { skipped: true, reason: 'billing_disabled' });
+    assert.equal(updates[0].value.status, 'completed');
+    assert.deepEqual(updates[0].value.summary, { skipped: 'billing_disabled', queueProcessed: 0 });
+  } finally {
+    if (previous === undefined) delete process.env.BILLING_ENABLED;
+    else process.env.BILLING_ENABLED = previous;
+  }
 });

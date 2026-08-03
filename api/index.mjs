@@ -489,10 +489,13 @@ function primitive(value) {
   if (value === null || ["string", "number", "boolean"].includes(typeof value)) return value;
   return void 0;
 }
+function redactString(value) {
+  return value.replace(/Bearer\s+[A-Za-z0-9._~-]+/gi, "Bearer [REDACTED]").replace(/\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/gi, "[EMAIL_REDACTED]").replace(/((?:token|secret|password|authorization|access_secret)=)[^\s&]+/gi, "$1[REDACTED]").slice(0, 500);
+}
 function redactTelemetryValue(value, depth = 0) {
   if (depth > 5) return "[TRUNCATED]";
   const simple = primitive(value);
-  if (simple !== void 0) return typeof simple === "string" ? simple.slice(0, 500) : simple;
+  if (simple !== void 0) return typeof simple === "string" ? redactString(simple) : simple;
   if (Array.isArray(value)) return value.slice(0, 25).map((item) => redactTelemetryValue(item, depth + 1));
   if (!value || typeof value !== "object") return void 0;
   return Object.fromEntries(
@@ -514,13 +517,22 @@ function sanitizeSentryEvent(event) {
     delete sanitized.request.headers;
     delete sanitized.request.query_string;
   }
+  delete sanitized.contexts?.response;
+  delete sanitized.extra?.response;
   return sanitized;
+}
+function buildAnalyticsEventProperties(properties = {}) {
+  return {
+    ...sanitizeAnalyticsProperties(properties),
+    // Event-level defense in depth. Project-level IP discard remains mandatory.
+    $geoip_disable: true
+  };
 }
 
 // src/server/analytics.ts
 async function captureServerAnalytics(event, distinctId, properties = {}) {
   const apiKey = process.env.POSTHOG_PROJECT_KEY;
-  if (!apiKey || !distinctId) return false;
+  if (process.env.ANALYTICS_SERVER_ENABLED !== "true" || !apiKey || !distinctId) return false;
   const host = (process.env.POSTHOG_HOST || "https://us.i.posthog.com").replace(/\/$/, "");
   try {
     const response = await fetch(`${host}/capture/`, {
@@ -529,7 +541,7 @@ async function captureServerAnalytics(event, distinctId, properties = {}) {
       body: JSON.stringify({
         api_key: apiKey,
         event,
-        properties: { distinct_id: distinctId.slice(0, 128), ...sanitizeAnalyticsProperties(properties) }
+        properties: { distinct_id: distinctId.slice(0, 128), ...buildAnalyticsEventProperties(properties) }
       }),
       signal: AbortSignal.timeout(2500)
     });
@@ -551,8 +563,12 @@ function initServerObservability() {
     release: process.env.VERCEL_GIT_COMMIT_SHA,
     sendDefaultPii: false,
     tracesSampleRate: 0,
+    maxBreadcrumbs: 20,
     beforeSend(event) {
       return sanitizeSentryEvent(event);
+    },
+    beforeBreadcrumb(breadcrumb) {
+      return sanitizeSentryEvent({ breadcrumb }).breadcrumb;
     }
   });
   initialized = true;

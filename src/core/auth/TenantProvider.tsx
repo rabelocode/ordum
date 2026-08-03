@@ -2,6 +2,7 @@ import React, { createContext, useContext, useEffect, useState } from 'react';
 import { useAuth } from './AuthProvider';
 import { supabase } from '../../lib/supabase';
 import { captureClientException } from '../../lib/observability';
+import { getPilotE2EFixture } from '../../test/pilotE2EFixtures';
 
 export interface Profile {
   id: string;
@@ -80,6 +81,20 @@ export function TenantProvider({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     if (authLoading) return;
+
+    const fixture = getPilotE2EFixture();
+    if (fixture) {
+      setProfile(fixture.profile);
+      setMemberships([fixture.membership]);
+      setActiveMembership(fixture.membership);
+      setTenants([fixture.tenant]);
+      setActiveTenant(fixture.tenant);
+      setRoles([{ id: `fixture-role-${fixture.role}`, key: fixture.role }]);
+      setPermissions(fixture.permissions);
+      setSolutions(fixture.solutions);
+      setIsLoading(false);
+      return;
+    }
     
     if (!user) {
       setProfile(null);

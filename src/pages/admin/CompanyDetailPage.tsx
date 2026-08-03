@@ -3,6 +3,7 @@ import { ArrowLeft, Loader2, Save } from 'lucide-react';
 import { useAuth } from '../../core/auth/AuthProvider';
 import { AssignLeadModal } from '../../components/admin/AssignLeadModal'; // We can reuse it for client assignment
 import { usePlatform } from '../../core/auth/PlatformAuthProvider';
+import { DetailSkeleton } from '../../components/ui/LoadingSkeletons';
 
 export function CompanyDetailPage({ tenantId }: { tenantId: string }) {
   const { session } = useAuth();
@@ -70,7 +71,7 @@ export function CompanyDetailPage({ tenantId }: { tenantId: string }) {
     }
   };
 
-  if (!tenant) return <div className="p-8 text-center">Carregando...</div>;
+  if (!tenant) return <DetailSkeleton />;
   const contracts = Array.isArray(tenant.commercial_contracts) ? tenant.commercial_contracts : tenant.commercial_contracts ? [tenant.commercial_contracts] : [];
 
   return (

@@ -13,8 +13,12 @@ export function initServerObservability() {
     release: process.env.VERCEL_GIT_COMMIT_SHA,
     sendDefaultPii: false,
     tracesSampleRate: 0,
+    maxBreadcrumbs: 20,
     beforeSend(event) {
       return sanitizeSentryEvent(event as Record<string, any>) as any;
+    },
+    beforeBreadcrumb(breadcrumb) {
+      return sanitizeSentryEvent({ breadcrumb }).breadcrumb as any;
     },
   });
   initialized = true;

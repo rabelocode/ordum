@@ -18,10 +18,18 @@ function primitive(value: unknown): string | number | boolean | null | undefined
   return undefined;
 }
 
+function redactString(value: string) {
+  return value
+    .replace(/Bearer\s+[A-Za-z0-9._~-]+/gi, 'Bearer [REDACTED]')
+    .replace(/\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/gi, '[EMAIL_REDACTED]')
+    .replace(/((?:token|secret|password|authorization|access_secret)=)[^\s&]+/gi, '$1[REDACTED]')
+    .slice(0, 500);
+}
+
 export function redactTelemetryValue(value: unknown, depth = 0): unknown {
   if (depth > 5) return '[TRUNCATED]';
   const simple = primitive(value);
-  if (simple !== undefined) return typeof simple === 'string' ? simple.slice(0, 500) : simple;
+  if (simple !== undefined) return typeof simple === 'string' ? redactString(simple) : simple;
   if (Array.isArray(value)) return value.slice(0, 25).map((item) => redactTelemetryValue(item, depth + 1));
   if (!value || typeof value !== 'object') return undefined;
 
@@ -51,5 +59,15 @@ export function sanitizeSentryEvent(event: Record<string, any>) {
     delete sanitized.request.headers;
     delete sanitized.request.query_string;
   }
+  delete sanitized.contexts?.response;
+  delete sanitized.extra?.response;
   return sanitized;
+}
+
+export function buildAnalyticsEventProperties(properties: Record<string, unknown> = {}) {
+  return {
+    ...sanitizeAnalyticsProperties(properties),
+    // Event-level defense in depth. Project-level IP discard remains mandatory.
+    $geoip_disable: true,
+  };
 }

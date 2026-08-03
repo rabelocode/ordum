@@ -1,9 +1,9 @@
 import type { AnalyticsEventName } from '../lib/analytics';
-import { sanitizeAnalyticsProperties } from '../lib/telemetryPrivacy';
+import { buildAnalyticsEventProperties } from '../lib/telemetryPrivacy';
 
 export async function captureServerAnalytics(event: AnalyticsEventName, distinctId: string, properties: Record<string, unknown> = {}) {
   const apiKey = process.env.POSTHOG_PROJECT_KEY;
-  if (!apiKey || !distinctId) return false;
+  if (process.env.ANALYTICS_SERVER_ENABLED !== 'true' || !apiKey || !distinctId) return false;
   const host = (process.env.POSTHOG_HOST || 'https://us.i.posthog.com').replace(/\/$/, '');
   try {
     const response = await fetch(`${host}/capture/`, {
@@ -12,7 +12,7 @@ export async function captureServerAnalytics(event: AnalyticsEventName, distinct
       body: JSON.stringify({
         api_key: apiKey,
         event,
-        properties: { distinct_id: distinctId.slice(0, 128), ...sanitizeAnalyticsProperties(properties) },
+        properties: { distinct_id: distinctId.slice(0, 128), ...buildAnalyticsEventProperties(properties) },
       }),
       signal: AbortSignal.timeout(2500),
     });

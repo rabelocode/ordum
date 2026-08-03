@@ -3,6 +3,7 @@ import { useAuth } from '../../core/auth/AuthProvider';
 import { Plus, ChevronRight } from 'lucide-react';
 import { PlatformTeam } from '../../types/platform';
 import { CreateTeamModal } from '../../components/admin/CreateTeamModal';
+import { ListSkeleton } from '../../components/ui/LoadingSkeletons';
 
 export function TeamsPage() {
   const { session } = useAuth();
@@ -51,7 +52,7 @@ export function TeamsPage() {
 
       <div className="bg-white border border-[#DDD8CF]/40 rounded-2xl shadow-sm overflow-hidden">
         {isLoading ? (
-          <div className="p-8 text-center text-gray-500">Carregando equipes...</div>
+          <ListSkeleton rows={6} />
         ) : teams.length === 0 ? (
           <div className="p-8 text-center text-gray-500">Nenhuma equipe encontrada.</div>
         ) : (

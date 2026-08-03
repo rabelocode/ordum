@@ -1,4 +1,4 @@
-import { sanitizeAnalyticsProperties } from './telemetryPrivacy';
+import { buildAnalyticsEventProperties, sanitizeAnalyticsProperties } from './telemetryPrivacy';
 
 export type AnalyticsEventName =
   | 'account_created'
@@ -46,6 +46,13 @@ export function initAnalytics() {
       capture_pageview: false,
       capture_pageleave: false,
       disable_session_recording: true,
+      disableDeviceModel: true,
+      disable_surveys: true,
+      disable_web_experiments: true,
+      advanced_disable_feature_flags: true,
+      opt_out_capturing_by_default: true,
+      opt_out_persistence_by_default: true,
+      respect_dnt: true,
       person_profiles: 'identified_only',
       persistence: 'localStorage',
     });
@@ -75,5 +82,5 @@ export function resetAnalyticsUser() {
 
 export function captureAnalytics(event: AnalyticsEventName, properties: Record<string, unknown> = {}) {
   if (!initialized || getAnalyticsConsent() !== 'granted') return;
-  void clientPromise?.then((posthog) => posthog.capture(event, sanitizeAnalyticsProperties(properties)));
+  void clientPromise?.then((posthog) => posthog.capture(event, buildAnalyticsEventProperties(properties)));
 }

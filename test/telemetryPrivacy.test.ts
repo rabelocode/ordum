@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { redactTelemetryValue, sanitizeAnalyticsProperties, sanitizeSentryEvent } from '../src/lib/telemetryPrivacy';
+import { buildAnalyticsEventProperties, redactTelemetryValue, sanitizeAnalyticsProperties, sanitizeSentryEvent } from '../src/lib/telemetryPrivacy';
 
 test('analytics accepts only documented non-sensitive dimensions', () => {
   assert.deepEqual(sanitizeAnalyticsProperties({
@@ -13,6 +13,13 @@ test('analytics accepts only documented non-sensitive dimensions', () => {
     tenant_ref: 'tenant-safe-ref',
     module: 'integrity',
     status: 'submitted',
+  });
+});
+
+test('analytics disables GeoIP enrichment and still rejects arbitrary properties', () => {
+  assert.deepEqual(buildAnalyticsEventProperties({ module: 'people', current_url: '/private', email: 'private@example.com' }), {
+    module: 'people',
+    $geoip_disable: true,
   });
 });
 
@@ -30,4 +37,13 @@ test('Sentry events keep only the user identifier and remove request payloads', 
   assert.equal(result.request.url, '/api/test');
   assert.equal(result.request.data, undefined);
   assert.equal(result.request.headers, undefined);
+});
+
+test('controlled Sentry errors redact credentials and direct identifiers', () => {
+  const result = sanitizeSentryEvent({
+    exception: { values: [{ type: 'PilotControlledError', value: 'authorization=private user@example.com' }] },
+    breadcrumbs: [{ message: 'Bearer abc.def.ghi' }],
+  });
+  assert.equal(result.exception.values[0].value, 'authorization=[REDACTED] [EMAIL_REDACTED]');
+  assert.equal(result.breadcrumbs[0].message, '[REDACTED]');
 });

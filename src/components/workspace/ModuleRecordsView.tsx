@@ -1,9 +1,10 @@
 import { useEffect, useState } from 'react';
-import { ArrowLeft, Briefcase, Loader2, ShieldCheck, Users } from 'lucide-react';
+import { ArrowLeft, Briefcase, ShieldCheck, Users } from 'lucide-react';
 import { supabase } from '../../lib/supabase';
 import { captureClientException } from '../../lib/observability';
 import type { ModuleId } from '../../types';
 import { Button } from '../ui/Button';
+import { ListSkeleton } from '../ui/LoadingSkeletons';
 
 const CONFIG: Record<ModuleId, { name: string; color: string; light: string; table: string; select: string; empty: string }> = {
   integrity: { name: 'Ordum Integridade', color: '#3457D5', light: '#E9EDFF', table: 'integrity_reports', select: 'id,protocol,status,risk_level,created_at', empty: 'Nenhum relato está visível para o seu escopo.' },
@@ -59,7 +60,7 @@ export function ModuleRecordsView({ module, tenantId, onBack }: { module: Module
       </section>
       <section className="rounded-2xl border border-[#DDD8CF] bg-white p-5 shadow-sm">
         <div className="mb-4 flex items-center justify-between"><h2 className="text-sm font-extrabold uppercase tracking-wider text-[#353938]">Atividade operacional</h2><span className="text-xs text-[#626866]">{records.length} registro(s)</span></div>
-        {loading ? <div className="flex items-center justify-center gap-2 p-10 text-sm text-[#626866]"><Loader2 className="h-4 w-4 animate-spin" /> Carregando</div> : error ? <p role="alert" className="rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-700">{error}</p> : records.length === 0 ? <p className="rounded-xl border border-dashed border-[#DDD8CF] bg-[#FAF8F3] p-8 text-center text-sm text-[#626866]">{config.empty}</p> : <div className="divide-y divide-[#E8E3DB]">{records.map((record) => <article key={record.id} className="flex flex-col justify-between gap-2 py-3 sm:flex-row sm:items-center"><div><p className="text-sm font-bold text-[#202322]">{recordLabel(module, record)}</p><p className="text-xs text-[#626866]">Criado em {new Date(record.created_at).toLocaleString('pt-BR')}</p></div><span className="w-fit rounded-full bg-[#FAF8F3] px-2.5 py-1 text-[10px] font-bold uppercase tracking-wider text-[#626866]">{record.status}</span></article>)}</div>}
+        {loading ? <ListSkeleton rows={5} /> : error ? <p role="alert" className="rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-700">{error}</p> : records.length === 0 ? <p className="rounded-xl border border-dashed border-[#DDD8CF] bg-[#FAF8F3] p-8 text-center text-sm text-[#626866]">{config.empty}</p> : <div className="divide-y divide-[#E8E3DB]">{records.map((record) => <article key={record.id} className="flex flex-col justify-between gap-2 py-3 sm:flex-row sm:items-center"><div><p className="text-sm font-bold text-[#202322]">{recordLabel(module, record)}</p><p className="text-xs text-[#626866]">Criado em {new Date(record.created_at).toLocaleString('pt-BR')}</p></div><span className="w-fit rounded-full bg-[#FAF8F3] px-2.5 py-1 text-[10px] font-bold uppercase tracking-wider text-[#626866]">{record.status}</span></article>)}</div>}
         <div className="mt-5 border-t border-[#E8E3DB] pt-4"><Button variant="outline" onClick={onBack}>Voltar ao início</Button></div>
       </section>
     </div>

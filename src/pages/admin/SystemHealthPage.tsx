@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useAuth } from '../../core/auth/AuthProvider';
 import { Server, Database, ShieldCheck, WalletCards } from 'lucide-react';
+import { MetricGridSkeleton } from '../../components/ui/LoadingSkeletons';
 
 export function SystemHealthPage() {
   const { session } = useAuth();
@@ -45,9 +46,7 @@ export function SystemHealthPage() {
       </div>
 
       {isLoading ? (
-        <div className="bg-white border border-[#DDD8CF]/40 rounded-2xl p-8 text-center text-gray-500 shadow-sm">
-          Carregando informações do sistema...
-        </div>
+        <MetricGridSkeleton count={4} />
       ) : !health ? (
         <div className="bg-white border border-[#DDD8CF]/40 rounded-2xl p-8 text-center text-red-500 shadow-sm">
           Falha ao carregar informações do sistema.
