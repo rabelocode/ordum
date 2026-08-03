@@ -1,6 +1,7 @@
 import React, { createContext, useContext, useEffect, useState } from 'react';
 import { useAuth } from './AuthProvider';
 import { supabase } from '../../lib/supabase';
+import { captureClientException } from '../../lib/observability';
 
 export interface Profile {
   id: string;
@@ -124,7 +125,7 @@ export function TenantProvider({ children }: { children: React.ReactNode }) {
           .from('tenants')
           .select('*')
           .in('id', tenantIds)
-          .eq('status', 'active');
+          .in('status', ['active', 'trial']);
           
         if (!tenantsData || tenantsData.length === 0) {
           setIsLoading(false);
@@ -142,7 +143,7 @@ export function TenantProvider({ children }: { children: React.ReactNode }) {
         
         await setActiveTenantData(selectedTenant, (membershipsData as any[]).find(m => m.tenant_id === selectedTenant.id)!);
       } catch (err) {
-        console.error("Error loading workspace", err);
+        captureClientException(err, { operation: 'workspace_load' });
       } finally {
         setIsLoading(false);
       }
@@ -214,7 +215,7 @@ export function TenantProvider({ children }: { children: React.ReactNode }) {
       setSolutions(solKeys);
       
     } catch (err) {
-      console.error("Error setting active tenant data", err);
+      captureClientException(err, { operation: 'workspace_tenant_switch' });
     }
   };
 

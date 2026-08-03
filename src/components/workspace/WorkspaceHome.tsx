@@ -1,359 +1,97 @@
-import { useTenant } from "../../core/auth/TenantProvider";
-import React, { useState } from "react";
-import {
-  ShieldCheck,
-  Users,
-  Briefcase,
-  Activity,
-  CheckCircle,
-  Clock,
-  Sparkles,
-  ArrowRight,
-  PlusCircle,
-  AlertCircle,
-  Megaphone,
-  Check,
-} from "lucide-react";
-import { UserProfile, TenantInfo, ModuleId, ModuleManifest } from "../../types";
-import { ModuleRegistry, ORDUM_MODULES } from "../../core/modules/registry";
-import { ModuleCard } from "../ui/ModuleCard";
-import { MetricCard } from "../ui/MetricCard";
-import { Button } from "../ui/Button";
+import { AlertCircle, Check, Circle, Clock3, Sparkles } from 'lucide-react';
+import { useTenant } from '../../core/auth/TenantProvider';
+import { ModuleRegistry } from '../../core/modules/registry';
+import type { ModuleId, TenantInfo, UserProfile } from '../../types';
+import { ModuleCard } from '../ui/ModuleCard';
+import { usePilotOverview } from './usePilotOverview';
 
 interface WorkspaceHomeProps {
-
   user: UserProfile;
   tenant: TenantInfo;
   enabledModules: ModuleId[];
   onNavigate: (path: string) => void;
-  onOpenDemoRequest?: (moduleName: string) => void;
 }
 
-export function WorkspaceHome({
-  user,
-  tenant,
-  enabledModules,
+const COUNT_LABEL: Record<ModuleId, string> = {
+  integrity: 'relatos em acompanhamento',
+  people: 'solicitações em andamento',
+  talent: 'candidaturas ativas',
+};
 
-  onNavigate,
-  onOpenDemoRequest,
-}: WorkspaceHomeProps) {
-  const [successToast, setSuccessToast] = useState<string | null>(null);
-  const { permissions, hasPermission, roles } = useTenant();
-  const roleKeys = roles.map((r: any) => r.key);
-  
-  const canViewIntegrity = hasPermission('integrity.indicator.view') || hasPermission('integrity.case.triage') || hasPermission('integrity.case.view_assigned') || hasPermission('integrity.report.submit_public') || roleKeys.includes('TENANT_ADMIN');
-  const canViewPeople = hasPermission('people.communication.view') || hasPermission('people.document.view_own') || hasPermission('people.payslip.view_own') || roleKeys.includes('TENANT_ADMIN');
-  const canViewTalent = hasPermission('talent.job.publish') || hasPermission('talent.application.view') || hasPermission('talent.interview.manage') || roleKeys.includes('TENANT_ADMIN');
-  
-  const canManageIntegrity = hasPermission('integrity.case.triage') || hasPermission('integrity.case.assign') || roleKeys.includes('TENANT_ADMIN');
-  const canManagePeople = hasPermission('people.communication.manage') || hasPermission('people.document.manage') || roleKeys.includes('TENANT_ADMIN');
-  const canManageTalent = hasPermission('talent.job.create') || hasPermission('talent.assessment.manage') || roleKeys.includes('TENANT_ADMIN');
-  
-  const isExecutive = hasPermission('integrity.indicator.view') || roleKeys.includes('TENANT_ADMIN');
-
-  const activeModules = ModuleRegistry.getEnabledModules(enabledModules);
-
-  // Uncontracted modules for "Conheça outras soluções" section
-  const allModulesList = ModuleRegistry.getAllModules();
-  const uncontractedModules = allModulesList.filter(
-    (m) => !enabledModules.includes(m.id)
-  );
-
-  const pendingCounts: Record<ModuleId, number> = {
-    integrity: 2,
-    people: 1,
-    talent: 4,
-  };
-
-  const handleActivationRequest = (moduleName: string) => {
-    if (onOpenDemoRequest) {
-      onOpenDemoRequest(moduleName);
-    } else {
-      setSuccessToast(`Solicitação de ativação da solução ${moduleName} enviada com sucesso!`);
-      setTimeout(() => setSuccessToast(null), 4000);
-    }
-  };
+export function WorkspaceHome({ user, tenant, enabledModules, onNavigate }: WorkspaceHomeProps) {
+  const { permissions, roles } = useTenant();
+  const modules = ModuleRegistry.getEnabledModules(enabledModules);
+  const overview = usePilotOverview({ tenant, activeModules: enabledModules, permissions, roleCount: roles.length });
 
   return (
     <div className="space-y-6 animate-in fade-in duration-200">
-      {/* Dynamic Success Notification */}
-      {successToast && (
-        <div className="fixed bottom-5 right-5 z-50 bg-[#202322] text-white text-xs px-4.5 py-3 rounded-xl shadow-lg border border-white/10 flex items-center gap-2 animate-in slide-in-from-bottom duration-300">
-          <Check className="w-4 h-4 text-[#1F8A63]" />
-          <span>{successToast}</span>
-        </div>
-      )}
-
-      {/* User Greeting Section */}
-      <div className="rounded-2xl border border-[#DDD8CF]/80 bg-white p-6 sm:p-7 shadow-[0_1px_2px_rgba(0,0,0,0.01)] relative overflow-hidden">
-        <div className="absolute top-0 right-0 w-64 h-64 bg-gradient-to-bl from-[#B66E45]/5 via-[#FAF8F3] to-transparent rounded-full blur-2xl pointer-events-none" />
-
-        <div className="relative flex flex-col md:flex-row md:items-center justify-between gap-6">
-          <div className="space-y-1.5">
-            <div className="inline-flex items-center gap-1.5 rounded-md border border-[#DDD8CF]/80 bg-[#FAF8F3] px-2.5 py-1 text-[10px] font-bold text-[#B66E45] uppercase tracking-wider">
-              <Sparkles className="w-3 h-3 text-[#B66E45]" />
-              <span>{tenant.branding.companyName}</span>
+      <section className="relative overflow-hidden rounded-2xl border border-[#DDD8CF]/80 bg-white p-6 shadow-sm sm:p-7">
+        <div className="pointer-events-none absolute right-0 top-0 h-64 w-64 rounded-full bg-gradient-to-bl from-[#B66E45]/10 to-transparent blur-2xl" />
+        <div className="relative flex flex-col justify-between gap-6 md:flex-row md:items-center">
+          <div>
+            <div className="mb-2 inline-flex items-center gap-1.5 rounded-md border border-[#DDD8CF] bg-[#FAF8F3] px-2.5 py-1 text-[10px] font-bold uppercase tracking-wider text-[#B66E45]">
+              <Sparkles className="h-3 w-3" /> {tenant.branding.companyName}
             </div>
-
-            <h1 className="text-xl sm:text-2xl font-black text-[#202322] tracking-tight">
-              Olá, {user.name}. O que você precisa gerenciar hoje?
-            </h1>
-
-            <p className="text-xs text-[#626866] font-medium">
-              Todas as soluções e atividades da sua empresa unificados em um mesmo ecossistema seguro.
-            </p>
+            <h1 className="text-xl font-black tracking-tight text-[#202322] sm:text-2xl">Olá, {user.name}.</h1>
+            <p className="mt-1 max-w-2xl text-sm text-[#626866]">Configure o essencial e faça a primeira ação relevante. O progresso abaixo usa somente dados reais deste tenant.</p>
           </div>
-
-          <div className="flex flex-wrap items-center gap-2.5">
-            <div className="p-3.5 rounded-xl bg-[#FAF8F3] border border-[#DDD8CF]/80 text-center min-w-[110px] shadow-2xs">
-              <div className="text-[10px] text-[#626866] font-bold uppercase tracking-wider">Soluções da sua empresa</div>
-              <div className="text-xl font-black text-[#202322] mt-0.5">{activeModules.length} de 3</div>
+          <div className="min-w-44 rounded-xl border border-[#DDD8CF] bg-[#FAF8F3] p-4">
+            <div className="flex items-end justify-between gap-3">
+              <span className="text-[10px] font-bold uppercase tracking-wider text-[#626866]">Ativação inicial</span>
+              <strong className="text-xl text-[#202322]">{overview.progress}%</strong>
             </div>
-
-            <div className="p-3.5 rounded-xl bg-[#FAF8F3] border border-[#DDD8CF]/80 text-center min-w-[110px] shadow-2xs">
-              <div className="text-[10px] text-[#626866] font-bold uppercase tracking-wider">Pendências</div>
-              <div className="text-xl font-black text-[#C98224] mt-0.5">7 itens</div>
+            <div className="mt-2 h-2 overflow-hidden rounded-full bg-[#E5E0D7]" aria-label={`Progresso de ativação: ${overview.progress}%`}>
+              <div className="h-full rounded-full bg-[#B66E45] transition-all" style={{ width: `${overview.progress}%` }} />
             </div>
           </div>
         </div>
-      </div>
+      </section>
 
-      {/* Contracted Modules Adaptive Grid */}
-      <div className="space-y-3">
-        <div className="flex items-center justify-between">
-          <h2 className="text-sm font-extrabold text-[#202322] uppercase tracking-wider text-[#626866]">
-            Soluções da sua empresa
-          </h2>
-          <span className="text-xs text-[#626866] font-semibold">
-            Dados ilustrativos da interface • Exibindo {activeModules.length} {activeModules.length === 1 ? "solução" : "soluções"}
-          </span>
-        </div>
-
-        {/* Adaptive Layout Grid */}
-        {activeModules.length === 3 && (
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
-            {activeModules.map((mod) => (
-              <ModuleCard
-                key={mod.id}
-                module={mod}
-                pendingCount={pendingCounts[mod.id]}
-                onNavigate={onNavigate}
-              />
-            ))}
-          </div>
-        )}
-
-        {activeModules.length === 2 && (
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
-            {activeModules.map((mod) => (
-              <ModuleCard
-                key={mod.id}
-                module={mod}
-                pendingCount={pendingCounts[mod.id]}
-                onNavigate={onNavigate}
-              />
-            ))}
-          </div>
-        )}
-
-        {activeModules.length === 1 && (
-          <div className="space-y-5">
-            <ModuleCard
-              module={activeModules[0]}
-              pendingCount={pendingCounts[activeModules[0].id]}
-              onNavigate={onNavigate}
-              isSpotlight={true}
-            />
-          </div>
-        )}
-      </div>
-
-      
-      {/* Metrics Summary Row */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-        {(canViewIntegrity) && enabledModules.includes("integrity") && (
-          <MetricCard
-            title="Relatos do Canal"
-            value="8 Registros"
-            change="Em acompanhamento"
-            changeType="positive"
-            subtitle="2 sob análise ativa"
-            accentColor="#3457D5"
-            icon={<ShieldCheck className="w-4 h-4" />}
-          />
-        )}
-        
-        {(canViewPeople) && enabledModules.includes("people") && (
-          <MetricCard
-            title="Colaboradores"
-            value="Base Cadastral"
-            change="Adesão registrada"
-            changeType="positive"
-            subtitle="Comunicações em curso"
-            accentColor="#16897A"
-            icon={<Users className="w-4 h-4" />}
-          />
-        )}
-        
-        {(canViewTalent) && enabledModules.includes("talent") && (
-          <MetricCard
-            title="Vagas Abertas"
-            value="4 Vagas"
-            change="38 Candidatos"
-            changeType="neutral"
-            subtitle="Processos em andamento"
-            accentColor="#D98C32"
-            icon={<Briefcase className="w-4 h-4" />}
-          />
-        )}
-        
-        {(isExecutive) && (
-          <MetricCard
-            title="Conformidade LGPD"
-            value="Estruturado"
-            change="Adequado"
-            changeType="positive"
-            subtitle="Trilha registrada"
-            accentColor="#B66E45"
-            icon={<CheckCircle className="w-4 h-4" />}
-          />
-        )}
-      </div>
-
-      {/* Recent Activities & Quick Tasks Panel */}
-      <div className="rounded-2xl border border-[#DDD8CF]/80 bg-white p-5 shadow-2xs space-y-4">
-        <div className="flex items-center justify-between pb-2.5 border-b border-[#DDD8CF]/30">
-          <div className="flex items-center gap-2">
-            <Activity className="w-4.5 h-4.5 text-[#B66E45]" />
-            <h3 className="text-xs font-bold text-[#202322] uppercase tracking-wider text-[#353938]">
-              Atividades Recentes & Prazos
-            </h3>
-          </div>
-          <span className="text-[10px] text-[#626866] font-bold">Dados ilustrativos da interface</span>
-        </div>
-        
-        <div className="space-y-2.5">
-          {(canManageIntegrity) && enabledModules.includes("integrity") && (
-            <div className="flex items-center justify-between p-3 rounded-xl bg-[#FAF8F3]/60 border border-[#DDD8CF]/40 text-xs gap-4 hover:bg-[#FAF8F3] transition-colors">
-              <div className="flex items-center gap-2.5 min-w-0">
-                <div className="w-2 h-2 rounded-full bg-[#3457D5] flex-shrink-0" />
-                <div className="truncate">
-                  <span className="font-bold text-[#202322]">
-                    [Integridade] Relato #PROT-2026-89 recebido
-                  </span>
-                  <p className="text-[10px] text-[#626866] mt-0.5 truncate">
-                    Aguardando atribuição de comitê. Prazo legal de resposta em 14 dias.
-                  </p>
-                </div>
-              </div>
-              <Button
-                variant="outline"
-                size="sm"
-                className="text-[10px] h-8 rounded-lg cursor-pointer"
-                onClick={() => onNavigate("/workspace/integridade")}
-              >
-                Analisar
-              </Button>
-            </div>
-          )}
-          
-          {(canManagePeople) && enabledModules.includes("people") && (
-            <div className="flex items-center justify-between p-3 rounded-xl bg-[#FAF8F3]/60 border border-[#DDD8CF]/40 text-xs gap-4 hover:bg-[#FAF8F3] transition-colors">
-              <div className="flex items-center gap-2.5 min-w-0">
-                <div className="w-2 h-2 rounded-full bg-[#16897A] flex-shrink-0" />
-                <div className="truncate">
-                  <span className="font-bold text-[#202322]">
-                    [Pessoas] Comunicado "Código de Ética 2026"
-                  </span>
-                  <p className="text-[10px] text-[#626866] mt-0.5 truncate">
-                    218 de 242 colaboradores já confirmaram leitura eletrônica.
-                  </p>
-                </div>
-              </div>
-              <Button
-                variant="outline"
-                size="sm"
-                className="text-[10px] h-8 rounded-lg cursor-pointer"
-                onClick={() => onNavigate("/workspace/pessoas")}
-              >
-                Auditar
-              </Button>
-            </div>
-          )}
-          
-          {(canManageTalent) && enabledModules.includes("talent") && (
-            <div className="flex items-center justify-between p-3 rounded-xl bg-[#FAF8F3]/60 border border-[#DDD8CF]/40 text-xs gap-4 hover:bg-[#FAF8F3] transition-colors">
-              <div className="flex items-center gap-2.5 min-w-0">
-                <div className="w-2 h-2 rounded-full bg-[#D98C32] flex-shrink-0" />
-                <div className="truncate">
-                  <span className="font-bold text-[#202322]">
-                    [Talentos] Vaga Analista de Compliance Sênior
-                  </span>
-                  <p className="text-[10px] text-[#626866] mt-0.5 truncate">
-                    3 novos candidatos cadastrados na etapa de triagem de currículo.
-                  </p>
-                </div>
-              </div>
-              <Button
-                variant="outline"
-                size="sm"
-                className="text-[10px] h-8 rounded-lg cursor-pointer"
-                onClick={() => onNavigate("/workspace/talentos")}
-              >
-                Pipeline
-              </Button>
-            </div>
-          )}
-          
-          {/* Fallback empty state if no activities are allowed */}
-          {(!canViewIntegrity && !canViewPeople && !canViewTalent) && (
-             <div className="p-4 text-center text-gray-500 text-xs">
-               Nenhuma atividade pendente no momento.
-             </div>
-          )}
-        </div>
-      </div>
-      
-      {/* Uncontracted Modules Area */}
-      {(isExecutive) && (
-
-        <div className="pt-5 border-t border-[#DDD8CF]/50 space-y-3">
-          <div className="flex items-center justify-between">
+      <section className="grid gap-5 lg:grid-cols-[minmax(0,1.4fr)_minmax(280px,.6fr)]">
+        <div className="rounded-2xl border border-[#DDD8CF]/80 bg-white p-5 shadow-sm sm:p-6">
+          <div className="mb-5 flex items-start justify-between gap-4">
             <div>
-              <h3 className="text-xs font-bold text-[#202322] uppercase tracking-wider text-[#626866]">
-                Conheça Outras Soluções Integradas
-              </h3>
-              <p className="text-[11px] text-[#626866]">
-                Expanda as capacidades organizacionais da sua empresa habilitando novas soluções nativas.
-              </p>
+              <h2 className="text-sm font-extrabold uppercase tracking-wider text-[#353938]">Checklist do piloto</h2>
+              <p className="mt-1 text-xs text-[#626866]">Retome quando quiser; nenhuma etapa fictícia é marcada como concluída.</p>
             </div>
-            <span className="text-[9px] font-bold text-[#B66E45] bg-[#B66E45]/5 border border-[#D2926D]/30 px-2 py-0.5 rounded-md uppercase tracking-wider">
-              Ativação On-Demand
-            </span>
+            {overview.loading && <Clock3 className="h-4 w-4 animate-pulse text-[#B66E45]" aria-label="Atualizando" />}
           </div>
-
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            {uncontractedModules.map((m) => (
-              <div
-                key={m.id}
-                className="p-4 rounded-xl border border-dashed border-[#DDD8CF] bg-white flex items-center justify-between gap-4"
-              >
-                <div>
-                  <div className="text-xs font-bold text-[#202322] mb-0.5">{m.name}</div>
-                  <p className="text-[11px] text-[#626866] leading-relaxed max-w-md">{m.description}</p>
-                </div>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => handleActivationRequest(m.name)}
-                  className="flex-shrink-0 text-[10px] h-8 border-[#B66E45] text-[#B66E45] hover:bg-[#B66E45] hover:text-white rounded-lg cursor-pointer font-bold"
-                >
-                  Falar com consultor
-                </Button>
-              </div>
+          {overview.error && <div className="mb-4 flex gap-2 rounded-xl border border-[#E8C1B9] bg-[#FFF4F1] p-3 text-xs text-[#8B3425]"><AlertCircle className="h-4 w-4 shrink-0" /> {overview.error}</div>}
+          <ol className="space-y-3">
+            {overview.checklist.map((item) => (
+              <li key={item.key} className="flex gap-3 rounded-xl border border-[#E8E3DB] bg-[#FAF8F3]/60 p-3">
+                {item.complete ? <Check className="mt-0.5 h-4 w-4 shrink-0 text-[#16897A]" /> : <Circle className="mt-0.5 h-4 w-4 shrink-0 text-[#9B7B68]" />}
+                <div><p className="text-xs font-bold text-[#202322]">{item.label}</p><p className="mt-0.5 text-[11px] text-[#626866]">{item.detail}</p></div>
+              </li>
             ))}
+          </ol>
+        </div>
+
+        <div className="rounded-2xl border border-[#DDD8CF]/80 bg-white p-5 shadow-sm sm:p-6">
+          <h2 className="text-sm font-extrabold uppercase tracking-wider text-[#353938]">Visão operacional</h2>
+          <p className="mt-1 text-xs text-[#626866]">{overview.updatedAt ? `Atualizada às ${new Date(overview.updatedAt).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}.` : 'Aguardando atualização.'}</p>
+          <div className="mt-5 space-y-3">
+            {enabledModules.map((moduleId) => {
+              const count = overview.counts[moduleId];
+              return (
+                <div key={moduleId} className="rounded-xl border border-[#E8E3DB] p-3">
+                  <p className="text-[10px] font-bold uppercase tracking-wider text-[#626866]">{ModuleRegistry.getModule(moduleId)?.name}</p>
+                  {count === null ? <p className="mt-1 text-xs text-[#626866]">Indicador indisponível para o seu escopo.</p> : count === 0 ? <p className="mt-1 text-xs text-[#626866]">Ainda não há {COUNT_LABEL[moduleId]}.</p> : <p className="mt-1 text-lg font-black text-[#202322]">{count} <span className="text-xs font-medium text-[#626866]">{COUNT_LABEL[moduleId]}</span></p>}
+                </div>
+              );
+            })}
+            {enabledModules.length === 0 && <p className="rounded-xl border border-dashed border-[#DDD8CF] bg-[#FAF8F3] p-4 text-xs text-[#626866]">Nenhum módulo está liberado para a combinação atual de contrato e permissões.</p>}
           </div>
         </div>
+      </section>
+
+      {modules.length > 0 && (
+        <section className="space-y-3">
+          <div><h2 className="text-sm font-extrabold uppercase tracking-wider text-[#353938]">Soluções ativas</h2><p className="mt-1 text-xs text-[#626866]">Acesse somente os módulos contratados e autorizados para sua função.</p></div>
+          <div className={`grid grid-cols-1 gap-5 ${modules.length > 1 ? 'md:grid-cols-2' : ''} ${modules.length > 2 ? 'xl:grid-cols-3' : ''}`}>
+            {modules.map((module) => <ModuleCard key={module.id} module={module} pendingCount={overview.counts[module.id] ?? 0} onNavigate={onNavigate} isSpotlight={modules.length === 1} />)}
+          </div>
+        </section>
       )}
     </div>
   );

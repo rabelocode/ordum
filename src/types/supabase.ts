@@ -141,6 +141,120 @@ export type Database = {
           },
         ]
       }
+      billing_dunning_events: {
+        Row: {
+          created_at: string
+          due_at: string | null
+          event_type: string
+          id: string
+          metadata: Json
+          payment_id: string | null
+          policy_id: string | null
+          status: string
+          tenant_id: string
+        }
+        Insert: {
+          created_at?: string
+          due_at?: string | null
+          event_type: string
+          id?: string
+          metadata?: Json
+          payment_id?: string | null
+          policy_id?: string | null
+          status?: string
+          tenant_id: string
+        }
+        Update: {
+          created_at?: string
+          due_at?: string | null
+          event_type?: string
+          id?: string
+          metadata?: Json
+          payment_id?: string | null
+          policy_id?: string | null
+          status?: string
+          tenant_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "billing_dunning_events_payment_id_fkey"
+            columns: ["payment_id"]
+            isOneToOne: false
+            referencedRelation: "billing_payments"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "billing_dunning_events_policy_id_fkey"
+            columns: ["policy_id"]
+            isOneToOne: false
+            referencedRelation: "billing_dunning_policies"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "billing_dunning_events_tenant_id_fkey"
+            columns: ["tenant_id"]
+            isOneToOne: false
+            referencedRelation: "tenants"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      billing_dunning_policies: {
+        Row: {
+          active: boolean
+          close_after_days: number | null
+          create_internal_tasks: boolean
+          created_at: string
+          created_by_user_id: string
+          grace_days: number
+          id: string
+          name: string
+          notice_before_days: number[]
+          notice_on_due_date: boolean
+          plan_id: string | null
+          suspend_after_days: number | null
+          updated_at: string
+        }
+        Insert: {
+          active?: boolean
+          close_after_days?: number | null
+          create_internal_tasks?: boolean
+          created_at?: string
+          created_by_user_id: string
+          grace_days?: number
+          id?: string
+          name: string
+          notice_before_days?: number[]
+          notice_on_due_date?: boolean
+          plan_id?: string | null
+          suspend_after_days?: number | null
+          updated_at?: string
+        }
+        Update: {
+          active?: boolean
+          close_after_days?: number | null
+          create_internal_tasks?: boolean
+          created_at?: string
+          created_by_user_id?: string
+          grace_days?: number
+          id?: string
+          name?: string
+          notice_before_days?: number[]
+          notice_on_due_date?: boolean
+          plan_id?: string | null
+          suspend_after_days?: number | null
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "billing_dunning_policies_plan_id_fkey"
+            columns: ["plan_id"]
+            isOneToOne: false
+            referencedRelation: "billing_plans"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       billing_payments: {
         Row: {
           amount_cents: number
@@ -836,6 +950,7 @@ export type Database = {
           approved_by_user_id: string | null
           billing_type: string
           cancellation_at_period_end: boolean
+          cancellation_reason: string | null
           cancelled_at: string | null
           contract_number: number
           created_at: string
@@ -851,16 +966,19 @@ export type Database = {
           grace_days: number
           id: string
           lead_id: string
+          lock_version: number
           metadata: Json
           owner_email: string
           owner_name: string | null
           owner_platform_member_id: string | null
           plan_id: string | null
           proposal_id: string | null
+          renewal_at: string | null
           starts_on: string | null
           status: string
           team_id: string | null
           tenant_id: string | null
+          transition_reason: string | null
           updated_at: string
         }
         Insert: {
@@ -869,6 +987,7 @@ export type Database = {
           approved_by_user_id?: string | null
           billing_type?: string
           cancellation_at_period_end?: boolean
+          cancellation_reason?: string | null
           cancelled_at?: string | null
           contract_number?: never
           created_at?: string
@@ -884,16 +1003,19 @@ export type Database = {
           grace_days?: number
           id?: string
           lead_id: string
+          lock_version?: number
           metadata?: Json
           owner_email: string
           owner_name?: string | null
           owner_platform_member_id?: string | null
           plan_id?: string | null
           proposal_id?: string | null
+          renewal_at?: string | null
           starts_on?: string | null
           status?: string
           team_id?: string | null
           tenant_id?: string | null
+          transition_reason?: string | null
           updated_at?: string
         }
         Update: {
@@ -902,6 +1024,7 @@ export type Database = {
           approved_by_user_id?: string | null
           billing_type?: string
           cancellation_at_period_end?: boolean
+          cancellation_reason?: string | null
           cancelled_at?: string | null
           contract_number?: never
           created_at?: string
@@ -917,16 +1040,19 @@ export type Database = {
           grace_days?: number
           id?: string
           lead_id?: string
+          lock_version?: number
           metadata?: Json
           owner_email?: string
           owner_name?: string | null
           owner_platform_member_id?: string | null
           plan_id?: string | null
           proposal_id?: string | null
+          renewal_at?: string | null
           starts_on?: string | null
           status?: string
           team_id?: string | null
           tenant_id?: string | null
+          transition_reason?: string | null
           updated_at?: string
         }
         Relationships: [
@@ -982,11 +1108,17 @@ export type Database = {
           expires_at: string | null
           id: string
           lead_id: string
+          lock_version: number
           next_action: string | null
           next_action_at: string | null
+          no_show_reason: string | null
           notes: string | null
+          objections: string[]
           owner_platform_member_id: string | null
+          participants: Json
+          rescheduled_from_id: string | null
           result: string | null
+          solution_ids: string[]
           starts_at: string | null
           status: string
           team_id: string | null
@@ -1000,11 +1132,17 @@ export type Database = {
           expires_at?: string | null
           id?: string
           lead_id: string
+          lock_version?: number
           next_action?: string | null
           next_action_at?: string | null
+          no_show_reason?: string | null
           notes?: string | null
+          objections?: string[]
           owner_platform_member_id?: string | null
+          participants?: Json
+          rescheduled_from_id?: string | null
           result?: string | null
+          solution_ids?: string[]
           starts_at?: string | null
           status?: string
           team_id?: string | null
@@ -1018,11 +1156,17 @@ export type Database = {
           expires_at?: string | null
           id?: string
           lead_id?: string
+          lock_version?: number
           next_action?: string | null
           next_action_at?: string | null
+          no_show_reason?: string | null
           notes?: string | null
+          objections?: string[]
           owner_platform_member_id?: string | null
+          participants?: Json
+          rescheduled_from_id?: string | null
           result?: string | null
+          solution_ids?: string[]
           starts_at?: string | null
           status?: string
           team_id?: string | null
@@ -1045,6 +1189,13 @@ export type Database = {
             referencedColumns: ["id"]
           },
           {
+            foreignKeyName: "commercial_demos_rescheduled_from_id_fkey"
+            columns: ["rescheduled_from_id"]
+            isOneToOne: false
+            referencedRelation: "commercial_demos"
+            referencedColumns: ["id"]
+          },
+          {
             foreignKeyName: "commercial_demos_team_id_fkey"
             columns: ["team_id"]
             isOneToOne: false
@@ -1060,8 +1211,161 @@ export type Database = {
           },
         ]
       }
+      commercial_lead_assignment_history: {
+        Row: {
+          actor_user_id: string
+          created_at: string
+          from_owner_platform_member_id: string | null
+          from_team_id: string | null
+          id: number
+          lead_id: string
+          reason: string
+          to_owner_platform_member_id: string | null
+          to_team_id: string | null
+        }
+        Insert: {
+          actor_user_id: string
+          created_at?: string
+          from_owner_platform_member_id?: string | null
+          from_team_id?: string | null
+          id?: never
+          lead_id: string
+          reason: string
+          to_owner_platform_member_id?: string | null
+          to_team_id?: string | null
+        }
+        Update: {
+          actor_user_id?: string
+          created_at?: string
+          from_owner_platform_member_id?: string | null
+          from_team_id?: string | null
+          id?: never
+          lead_id?: string
+          reason?: string
+          to_owner_platform_member_id?: string | null
+          to_team_id?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "commercial_lead_assignment_hi_from_owner_platform_member_i_fkey"
+            columns: ["from_owner_platform_member_id"]
+            isOneToOne: false
+            referencedRelation: "platform_members"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "commercial_lead_assignment_his_to_owner_platform_member_id_fkey"
+            columns: ["to_owner_platform_member_id"]
+            isOneToOne: false
+            referencedRelation: "platform_members"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "commercial_lead_assignment_history_from_team_id_fkey"
+            columns: ["from_team_id"]
+            isOneToOne: false
+            referencedRelation: "platform_teams"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "commercial_lead_assignment_history_lead_id_fkey"
+            columns: ["lead_id"]
+            isOneToOne: false
+            referencedRelation: "marketing_leads"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "commercial_lead_assignment_history_to_team_id_fkey"
+            columns: ["to_team_id"]
+            isOneToOne: false
+            referencedRelation: "platform_teams"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      commercial_lead_identity_keys: {
+        Row: {
+          created_at: string
+          id: number
+          key_hash: string
+          key_type: string
+          lead_id: string
+        }
+        Insert: {
+          created_at?: string
+          id?: never
+          key_hash: string
+          key_type: string
+          lead_id: string
+        }
+        Update: {
+          created_at?: string
+          id?: never
+          key_hash?: string
+          key_type?: string
+          lead_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "commercial_lead_identity_keys_lead_id_fkey"
+            columns: ["lead_id"]
+            isOneToOne: false
+            referencedRelation: "marketing_leads"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      commercial_proposal_items: {
+        Row: {
+          created_at: string
+          description: string
+          id: string
+          limits: Json
+          proposal_id: string
+          quantity: number
+          solution_id: string | null
+          unit_amount_cents: number
+        }
+        Insert: {
+          created_at?: string
+          description: string
+          id?: string
+          limits?: Json
+          proposal_id: string
+          quantity?: number
+          solution_id?: string | null
+          unit_amount_cents: number
+        }
+        Update: {
+          created_at?: string
+          description?: string
+          id?: string
+          limits?: Json
+          proposal_id?: string
+          quantity?: number
+          solution_id?: string | null
+          unit_amount_cents?: number
+        }
+        Relationships: [
+          {
+            foreignKeyName: "commercial_proposal_items_proposal_id_fkey"
+            columns: ["proposal_id"]
+            isOneToOne: false
+            referencedRelation: "commercial_proposals"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "commercial_proposal_items_solution_id_fkey"
+            columns: ["solution_id"]
+            isOneToOne: false
+            referencedRelation: "solutions"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       commercial_proposals: {
         Row: {
+          accepted_at: string | null
           amount_cents: number
           approval_notes: string | null
           approved_at: string | null
@@ -1074,16 +1378,26 @@ export type Database = {
           discount_cents: number
           id: string
           lead_id: string
+          limits_snapshot: Json
+          lock_version: number
           notes: string | null
           owner_platform_member_id: string | null
           plan_id: string | null
           proposal_number: number
+          rejected_at: string | null
+          rejection_reason: string | null
+          root_proposal_id: string | null
           status: string
+          supersedes_proposal_id: string | null
           team_id: string | null
           updated_at: string
           valid_until: string | null
+          version: number
+          vigency_ends_on: string | null
+          vigency_starts_on: string | null
         }
         Insert: {
+          accepted_at?: string | null
           amount_cents?: number
           approval_notes?: string | null
           approved_at?: string | null
@@ -1096,16 +1410,26 @@ export type Database = {
           discount_cents?: number
           id?: string
           lead_id: string
+          limits_snapshot?: Json
+          lock_version?: number
           notes?: string | null
           owner_platform_member_id?: string | null
           plan_id?: string | null
           proposal_number?: never
+          rejected_at?: string | null
+          rejection_reason?: string | null
+          root_proposal_id?: string | null
           status?: string
+          supersedes_proposal_id?: string | null
           team_id?: string | null
           updated_at?: string
           valid_until?: string | null
+          version?: number
+          vigency_ends_on?: string | null
+          vigency_starts_on?: string | null
         }
         Update: {
+          accepted_at?: string | null
           amount_cents?: number
           approval_notes?: string | null
           approved_at?: string | null
@@ -1118,14 +1442,23 @@ export type Database = {
           discount_cents?: number
           id?: string
           lead_id?: string
+          limits_snapshot?: Json
+          lock_version?: number
           notes?: string | null
           owner_platform_member_id?: string | null
           plan_id?: string | null
           proposal_number?: never
+          rejected_at?: string | null
+          rejection_reason?: string | null
+          root_proposal_id?: string | null
           status?: string
+          supersedes_proposal_id?: string | null
           team_id?: string | null
           updated_at?: string
           valid_until?: string | null
+          version?: number
+          vigency_ends_on?: string | null
+          vigency_starts_on?: string | null
         }
         Relationships: [
           {
@@ -1150,10 +1483,195 @@ export type Database = {
             referencedColumns: ["id"]
           },
           {
+            foreignKeyName: "commercial_proposals_root_proposal_id_fkey"
+            columns: ["root_proposal_id"]
+            isOneToOne: false
+            referencedRelation: "commercial_proposals"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "commercial_proposals_supersedes_proposal_id_fkey"
+            columns: ["supersedes_proposal_id"]
+            isOneToOne: false
+            referencedRelation: "commercial_proposals"
+            referencedColumns: ["id"]
+          },
+          {
             foreignKeyName: "commercial_proposals_team_id_fkey"
             columns: ["team_id"]
             isOneToOne: false
             referencedRelation: "platform_teams"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      commercial_scoring_rules: {
+        Row: {
+          active: boolean
+          comparison_value: Json
+          created_at: string
+          created_by_user_id: string
+          field: string
+          id: string
+          name: string
+          operator: string
+          points: number
+          priority: number
+          updated_at: string
+        }
+        Insert: {
+          active?: boolean
+          comparison_value?: Json
+          created_at?: string
+          created_by_user_id: string
+          field: string
+          id?: string
+          name: string
+          operator: string
+          points: number
+          priority?: number
+          updated_at?: string
+        }
+        Update: {
+          active?: boolean
+          comparison_value?: Json
+          created_at?: string
+          created_by_user_id?: string
+          field?: string
+          id?: string
+          name?: string
+          operator?: string
+          points?: number
+          priority?: number
+          updated_at?: string
+        }
+        Relationships: []
+      }
+      customer_success_accounts: {
+        Row: {
+          churn_reason: string | null
+          created_at: string
+          health_factors: Json
+          health_score: number | null
+          health_weights: Json
+          manager_platform_member_id: string | null
+          next_review_at: string | null
+          renewal_at: string | null
+          status: string
+          success_plan: Json
+          tenant_id: string
+          updated_at: string
+          updated_by_user_id: string | null
+        }
+        Insert: {
+          churn_reason?: string | null
+          created_at?: string
+          health_factors?: Json
+          health_score?: number | null
+          health_weights?: Json
+          manager_platform_member_id?: string | null
+          next_review_at?: string | null
+          renewal_at?: string | null
+          status?: string
+          success_plan?: Json
+          tenant_id: string
+          updated_at?: string
+          updated_by_user_id?: string | null
+        }
+        Update: {
+          churn_reason?: string | null
+          created_at?: string
+          health_factors?: Json
+          health_score?: number | null
+          health_weights?: Json
+          manager_platform_member_id?: string | null
+          next_review_at?: string | null
+          renewal_at?: string | null
+          status?: string
+          success_plan?: Json
+          tenant_id?: string
+          updated_at?: string
+          updated_by_user_id?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "customer_success_accounts_manager_platform_member_id_fkey"
+            columns: ["manager_platform_member_id"]
+            isOneToOne: false
+            referencedRelation: "platform_members"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "customer_success_accounts_tenant_id_fkey"
+            columns: ["tenant_id"]
+            isOneToOne: true
+            referencedRelation: "tenants"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      customer_success_events: {
+        Row: {
+          amount_cents: number | null
+          created_at: string
+          created_by_user_id: string
+          description: string | null
+          due_at: string | null
+          event_type: string
+          id: string
+          metadata: Json
+          occurred_at: string
+          owner_platform_member_id: string | null
+          score: number | null
+          status: string
+          tenant_id: string
+          title: string
+        }
+        Insert: {
+          amount_cents?: number | null
+          created_at?: string
+          created_by_user_id: string
+          description?: string | null
+          due_at?: string | null
+          event_type: string
+          id?: string
+          metadata?: Json
+          occurred_at?: string
+          owner_platform_member_id?: string | null
+          score?: number | null
+          status?: string
+          tenant_id: string
+          title: string
+        }
+        Update: {
+          amount_cents?: number | null
+          created_at?: string
+          created_by_user_id?: string
+          description?: string | null
+          due_at?: string | null
+          event_type?: string
+          id?: string
+          metadata?: Json
+          occurred_at?: string
+          owner_platform_member_id?: string | null
+          score?: number | null
+          status?: string
+          tenant_id?: string
+          title?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "customer_success_events_owner_platform_member_id_fkey"
+            columns: ["owner_platform_member_id"]
+            isOneToOne: false
+            referencedRelation: "platform_members"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "customer_success_events_tenant_id_fkey"
+            columns: ["tenant_id"]
+            isOneToOne: false
+            referencedRelation: "tenants"
             referencedColumns: ["id"]
           },
         ]
@@ -1694,6 +2212,128 @@ export type Database = {
           },
         ]
       }
+      lgpd_request_events: {
+        Row: {
+          actor_user_id: string
+          created_at: string
+          description: string
+          event_type: string
+          id: number
+          metadata: Json
+          request_id: string
+        }
+        Insert: {
+          actor_user_id: string
+          created_at?: string
+          description: string
+          event_type: string
+          id?: never
+          metadata?: Json
+          request_id: string
+        }
+        Update: {
+          actor_user_id?: string
+          created_at?: string
+          description?: string
+          event_type?: string
+          id?: never
+          metadata?: Json
+          request_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "lgpd_request_events_request_id_fkey"
+            columns: ["request_id"]
+            isOneToOne: false
+            referencedRelation: "lgpd_requests"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      lgpd_requests: {
+        Row: {
+          completed_at: string | null
+          consent_source: string | null
+          consent_version: string | null
+          created_at: string
+          created_by_user_id: string
+          data_subject_reference: string
+          due_at: string
+          excludes_integrity_data: boolean
+          id: string
+          legal_hold: boolean
+          lock_version: number
+          owner_platform_member_id: string | null
+          reason: string | null
+          request_number: number
+          request_type: string
+          result_summary: string | null
+          retention_until: string | null
+          status: string
+          tenant_id: string | null
+          updated_at: string
+        }
+        Insert: {
+          completed_at?: string | null
+          consent_source?: string | null
+          consent_version?: string | null
+          created_at?: string
+          created_by_user_id: string
+          data_subject_reference: string
+          due_at: string
+          excludes_integrity_data?: boolean
+          id?: string
+          legal_hold?: boolean
+          lock_version?: number
+          owner_platform_member_id?: string | null
+          reason?: string | null
+          request_number?: never
+          request_type: string
+          result_summary?: string | null
+          retention_until?: string | null
+          status?: string
+          tenant_id?: string | null
+          updated_at?: string
+        }
+        Update: {
+          completed_at?: string | null
+          consent_source?: string | null
+          consent_version?: string | null
+          created_at?: string
+          created_by_user_id?: string
+          data_subject_reference?: string
+          due_at?: string
+          excludes_integrity_data?: boolean
+          id?: string
+          legal_hold?: boolean
+          lock_version?: number
+          owner_platform_member_id?: string | null
+          reason?: string | null
+          request_number?: never
+          request_type?: string
+          result_summary?: string | null
+          retention_until?: string | null
+          status?: string
+          tenant_id?: string | null
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "lgpd_requests_owner_platform_member_id_fkey"
+            columns: ["owner_platform_member_id"]
+            isOneToOne: false
+            referencedRelation: "platform_members"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "lgpd_requests_tenant_id_fkey"
+            columns: ["tenant_id"]
+            isOneToOne: false
+            referencedRelation: "tenants"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       marketing_lead_events: {
         Row: {
           created_at: string
@@ -1733,17 +2373,29 @@ export type Database = {
           consent_at: string | null
           created_at: string
           email: string
+          first_contact_at: string | null
+          first_contact_due_at: string | null
           id: string
           interests: string[]
+          lock_version: number
+          lost_reason: string | null
           message: string | null
           name: string
+          organization_domain: string | null
           phone: string | null
           priority: string
+          qualification_state: string
+          reopened_at: string | null
+          reopened_by_user_id: string | null
           role_title: string | null
+          score: number
+          score_explanation: Json
           source: string
           status: string
+          tax_id_normalized: string | null
           updated_at: string
           utm: Json
+          won_reason: string | null
         }
         Insert: {
           company: string
@@ -1751,17 +2403,29 @@ export type Database = {
           consent_at?: string | null
           created_at?: string
           email: string
+          first_contact_at?: string | null
+          first_contact_due_at?: string | null
           id?: string
           interests?: string[]
+          lock_version?: number
+          lost_reason?: string | null
           message?: string | null
           name: string
+          organization_domain?: string | null
           phone?: string | null
           priority?: string
+          qualification_state?: string
+          reopened_at?: string | null
+          reopened_by_user_id?: string | null
           role_title?: string | null
+          score?: number
+          score_explanation?: Json
           source?: string
           status?: string
+          tax_id_normalized?: string | null
           updated_at?: string
           utm?: Json
+          won_reason?: string | null
         }
         Update: {
           company?: string
@@ -1769,17 +2433,29 @@ export type Database = {
           consent_at?: string | null
           created_at?: string
           email?: string
+          first_contact_at?: string | null
+          first_contact_due_at?: string | null
           id?: string
           interests?: string[]
+          lock_version?: number
+          lost_reason?: string | null
           message?: string | null
           name?: string
+          organization_domain?: string | null
           phone?: string | null
           priority?: string
+          qualification_state?: string
+          reopened_at?: string | null
+          reopened_by_user_id?: string | null
           role_title?: string | null
+          score?: number
+          score_explanation?: Json
           source?: string
           status?: string
+          tax_id_normalized?: string | null
           updated_at?: string
           utm?: Json
+          won_reason?: string | null
         }
         Relationships: []
       }
@@ -1937,6 +2613,244 @@ export type Database = {
             columns: ["tenant_id"]
             isOneToOne: false
             referencedRelation: "tenants"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      onboarding_items: {
+        Row: {
+          completed_at: string | null
+          created_at: string
+          dependencies: string[]
+          due_at: string | null
+          evidence: Json
+          id: string
+          lock_version: number
+          observation: string | null
+          owner_platform_member_id: string | null
+          run_id: string
+          status: string
+          step_key: string
+          template_step_id: string | null
+          title: string
+          updated_at: string
+        }
+        Insert: {
+          completed_at?: string | null
+          created_at?: string
+          dependencies?: string[]
+          due_at?: string | null
+          evidence?: Json
+          id?: string
+          lock_version?: number
+          observation?: string | null
+          owner_platform_member_id?: string | null
+          run_id: string
+          status?: string
+          step_key: string
+          template_step_id?: string | null
+          title: string
+          updated_at?: string
+        }
+        Update: {
+          completed_at?: string | null
+          created_at?: string
+          dependencies?: string[]
+          due_at?: string | null
+          evidence?: Json
+          id?: string
+          lock_version?: number
+          observation?: string | null
+          owner_platform_member_id?: string | null
+          run_id?: string
+          status?: string
+          step_key?: string
+          template_step_id?: string | null
+          title?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "onboarding_items_owner_platform_member_id_fkey"
+            columns: ["owner_platform_member_id"]
+            isOneToOne: false
+            referencedRelation: "platform_members"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "onboarding_items_run_id_fkey"
+            columns: ["run_id"]
+            isOneToOne: false
+            referencedRelation: "onboarding_runs"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "onboarding_items_template_step_id_fkey"
+            columns: ["template_step_id"]
+            isOneToOne: false
+            referencedRelation: "onboarding_template_steps"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      onboarding_runs: {
+        Row: {
+          completed_at: string | null
+          created_at: string
+          created_by_user_id: string
+          due_at: string | null
+          id: string
+          owner_platform_member_id: string | null
+          progress_percent: number
+          starts_at: string | null
+          status: string
+          template_id: string | null
+          tenant_id: string
+          updated_at: string
+        }
+        Insert: {
+          completed_at?: string | null
+          created_at?: string
+          created_by_user_id: string
+          due_at?: string | null
+          id?: string
+          owner_platform_member_id?: string | null
+          progress_percent?: number
+          starts_at?: string | null
+          status?: string
+          template_id?: string | null
+          tenant_id: string
+          updated_at?: string
+        }
+        Update: {
+          completed_at?: string | null
+          created_at?: string
+          created_by_user_id?: string
+          due_at?: string | null
+          id?: string
+          owner_platform_member_id?: string | null
+          progress_percent?: number
+          starts_at?: string | null
+          status?: string
+          template_id?: string | null
+          tenant_id?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "onboarding_runs_owner_platform_member_id_fkey"
+            columns: ["owner_platform_member_id"]
+            isOneToOne: false
+            referencedRelation: "platform_members"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "onboarding_runs_template_id_fkey"
+            columns: ["template_id"]
+            isOneToOne: false
+            referencedRelation: "onboarding_templates"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "onboarding_runs_tenant_id_fkey"
+            columns: ["tenant_id"]
+            isOneToOne: false
+            referencedRelation: "tenants"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      onboarding_template_steps: {
+        Row: {
+          default_due_days: number | null
+          dependency_step_keys: string[]
+          description: string | null
+          id: string
+          position: number
+          requires_evidence: boolean
+          step_key: string
+          template_id: string
+          title: string
+        }
+        Insert: {
+          default_due_days?: number | null
+          dependency_step_keys?: string[]
+          description?: string | null
+          id?: string
+          position: number
+          requires_evidence?: boolean
+          step_key: string
+          template_id: string
+          title: string
+        }
+        Update: {
+          default_due_days?: number | null
+          dependency_step_keys?: string[]
+          description?: string | null
+          id?: string
+          position?: number
+          requires_evidence?: boolean
+          step_key?: string
+          template_id?: string
+          title?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "onboarding_template_steps_template_id_fkey"
+            columns: ["template_id"]
+            isOneToOne: false
+            referencedRelation: "onboarding_templates"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      onboarding_templates: {
+        Row: {
+          active: boolean
+          created_at: string
+          created_by_user_id: string
+          id: string
+          name: string
+          plan_id: string | null
+          solution_id: string | null
+          updated_at: string
+          version: number
+        }
+        Insert: {
+          active?: boolean
+          created_at?: string
+          created_by_user_id: string
+          id?: string
+          name: string
+          plan_id?: string | null
+          solution_id?: string | null
+          updated_at?: string
+          version?: number
+        }
+        Update: {
+          active?: boolean
+          created_at?: string
+          created_by_user_id?: string
+          id?: string
+          name?: string
+          plan_id?: string | null
+          solution_id?: string | null
+          updated_at?: string
+          version?: number
+        }
+        Relationships: [
+          {
+            foreignKeyName: "onboarding_templates_plan_id_fkey"
+            columns: ["plan_id"]
+            isOneToOne: false
+            referencedRelation: "billing_plans"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "onboarding_templates_solution_id_fkey"
+            columns: ["solution_id"]
+            isOneToOne: false
+            referencedRelation: "solutions"
             referencedColumns: ["id"]
           },
         ]
@@ -2701,6 +3615,51 @@ export type Database = {
           },
         ]
       }
+      platform_operational_events: {
+        Row: {
+          attempts: number
+          completed_at: string | null
+          correlation_id: string
+          created_at: string
+          event_type: string
+          id: string
+          last_error: string | null
+          next_attempt_at: string | null
+          payload_summary: Json
+          source: string
+          started_at: string | null
+          status: string
+        }
+        Insert: {
+          attempts?: number
+          completed_at?: string | null
+          correlation_id?: string
+          created_at?: string
+          event_type: string
+          id?: string
+          last_error?: string | null
+          next_attempt_at?: string | null
+          payload_summary?: Json
+          source: string
+          started_at?: string | null
+          status: string
+        }
+        Update: {
+          attempts?: number
+          completed_at?: string | null
+          correlation_id?: string
+          created_at?: string
+          event_type?: string
+          id?: string
+          last_error?: string | null
+          next_attempt_at?: string | null
+          payload_summary?: Json
+          source?: string
+          started_at?: string | null
+          status?: string
+        }
+        Relationships: []
+      }
       platform_permissions: {
         Row: {
           category: string
@@ -2790,6 +3749,110 @@ export type Database = {
           updated_at?: string
         }
         Relationships: []
+      }
+      platform_saved_views: {
+        Row: {
+          created_at: string
+          filters: Json
+          id: string
+          is_default: boolean
+          name: string
+          platform_member_id: string
+          resource: string
+          sort: Json
+          updated_at: string
+        }
+        Insert: {
+          created_at?: string
+          filters?: Json
+          id?: string
+          is_default?: boolean
+          name: string
+          platform_member_id: string
+          resource: string
+          sort?: Json
+          updated_at?: string
+        }
+        Update: {
+          created_at?: string
+          filters?: Json
+          id?: string
+          is_default?: boolean
+          name?: string
+          platform_member_id?: string
+          resource?: string
+          sort?: Json
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "platform_saved_views_platform_member_id_fkey"
+            columns: ["platform_member_id"]
+            isOneToOne: false
+            referencedRelation: "platform_members"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      platform_state_transitions: {
+        Row: {
+          actor_user_id: string
+          created_at: string
+          entity_id: string
+          entity_type: string
+          from_status: string | null
+          id: number
+          metadata: Json
+          reason: string
+          request_id: string | null
+          team_id: string | null
+          tenant_id: string | null
+          to_status: string
+        }
+        Insert: {
+          actor_user_id: string
+          created_at?: string
+          entity_id: string
+          entity_type: string
+          from_status?: string | null
+          id?: never
+          metadata?: Json
+          reason: string
+          request_id?: string | null
+          team_id?: string | null
+          tenant_id?: string | null
+          to_status: string
+        }
+        Update: {
+          actor_user_id?: string
+          created_at?: string
+          entity_id?: string
+          entity_type?: string
+          from_status?: string | null
+          id?: never
+          metadata?: Json
+          reason?: string
+          request_id?: string | null
+          team_id?: string | null
+          tenant_id?: string | null
+          to_status?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "platform_state_transitions_team_id_fkey"
+            columns: ["team_id"]
+            isOneToOne: false
+            referencedRelation: "platform_teams"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "platform_state_transitions_tenant_id_fkey"
+            columns: ["tenant_id"]
+            isOneToOne: false
+            referencedRelation: "tenants"
+            referencedColumns: ["id"]
+          },
+        ]
       }
       platform_team_members: {
         Row: {
@@ -3042,6 +4105,146 @@ export type Database = {
           },
         ]
       }
+      sales_commissions: {
+        Row: {
+          approved_at: string | null
+          approved_by_user_id: string | null
+          base_amount_cents: number
+          commission_amount_cents: number
+          contract_id: string
+          created_at: string
+          id: string
+          kind: string
+          payment_id: string | null
+          platform_member_id: string
+          reversal_reason: string | null
+          rule_snapshot: Json
+          status: string
+          team_id: string | null
+          updated_at: string
+        }
+        Insert: {
+          approved_at?: string | null
+          approved_by_user_id?: string | null
+          base_amount_cents: number
+          commission_amount_cents: number
+          contract_id: string
+          created_at?: string
+          id?: string
+          kind: string
+          payment_id?: string | null
+          platform_member_id: string
+          reversal_reason?: string | null
+          rule_snapshot: Json
+          status?: string
+          team_id?: string | null
+          updated_at?: string
+        }
+        Update: {
+          approved_at?: string | null
+          approved_by_user_id?: string | null
+          base_amount_cents?: number
+          commission_amount_cents?: number
+          contract_id?: string
+          created_at?: string
+          id?: string
+          kind?: string
+          payment_id?: string | null
+          platform_member_id?: string
+          reversal_reason?: string | null
+          rule_snapshot?: Json
+          status?: string
+          team_id?: string | null
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "sales_commissions_contract_id_fkey"
+            columns: ["contract_id"]
+            isOneToOne: false
+            referencedRelation: "commercial_contracts"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "sales_commissions_payment_id_fkey"
+            columns: ["payment_id"]
+            isOneToOne: false
+            referencedRelation: "billing_payments"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "sales_commissions_platform_member_id_fkey"
+            columns: ["platform_member_id"]
+            isOneToOne: false
+            referencedRelation: "platform_members"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "sales_commissions_team_id_fkey"
+            columns: ["team_id"]
+            isOneToOne: false
+            referencedRelation: "platform_teams"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      sales_targets: {
+        Row: {
+          created_at: string
+          created_by_user_id: string
+          id: string
+          metric: string
+          period_end: string
+          period_start: string
+          platform_member_id: string | null
+          target_cents: number | null
+          target_count: number | null
+          team_id: string | null
+          updated_at: string
+        }
+        Insert: {
+          created_at?: string
+          created_by_user_id: string
+          id?: string
+          metric: string
+          period_end: string
+          period_start: string
+          platform_member_id?: string | null
+          target_cents?: number | null
+          target_count?: number | null
+          team_id?: string | null
+          updated_at?: string
+        }
+        Update: {
+          created_at?: string
+          created_by_user_id?: string
+          id?: string
+          metric?: string
+          period_end?: string
+          period_start?: string
+          platform_member_id?: string | null
+          target_cents?: number | null
+          target_count?: number | null
+          team_id?: string | null
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "sales_targets_platform_member_id_fkey"
+            columns: ["platform_member_id"]
+            isOneToOne: false
+            referencedRelation: "platform_members"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "sales_targets_team_id_fkey"
+            columns: ["team_id"]
+            isOneToOne: false
+            referencedRelation: "platform_teams"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       solutions: {
         Row: {
           created_at: string
@@ -3062,6 +4265,145 @@ export type Database = {
           name?: string
         }
         Relationships: []
+      }
+      support_ticket_events: {
+        Row: {
+          actor_user_id: string
+          body: string | null
+          created_at: string
+          event_type: string
+          id: number
+          metadata: Json
+          private: boolean
+          ticket_id: string
+        }
+        Insert: {
+          actor_user_id: string
+          body?: string | null
+          created_at?: string
+          event_type: string
+          id?: never
+          metadata?: Json
+          private?: boolean
+          ticket_id: string
+        }
+        Update: {
+          actor_user_id?: string
+          body?: string | null
+          created_at?: string
+          event_type?: string
+          id?: never
+          metadata?: Json
+          private?: boolean
+          ticket_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "support_ticket_events_ticket_id_fkey"
+            columns: ["ticket_id"]
+            isOneToOne: false
+            referencedRelation: "support_tickets"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      support_tickets: {
+        Row: {
+          category: string
+          closed_at: string | null
+          created_at: string
+          created_by_user_id: string
+          description: string
+          id: string
+          lock_version: number
+          owner_platform_member_id: string | null
+          priority: string
+          resolved_at: string | null
+          satisfaction_score: number | null
+          severity: string
+          sla_due_at: string | null
+          solution_id: string | null
+          status: string
+          subject: string
+          team_id: string | null
+          tenant_id: string
+          ticket_number: number
+          updated_at: string
+        }
+        Insert: {
+          category: string
+          closed_at?: string | null
+          created_at?: string
+          created_by_user_id: string
+          description: string
+          id?: string
+          lock_version?: number
+          owner_platform_member_id?: string | null
+          priority?: string
+          resolved_at?: string | null
+          satisfaction_score?: number | null
+          severity?: string
+          sla_due_at?: string | null
+          solution_id?: string | null
+          status?: string
+          subject: string
+          team_id?: string | null
+          tenant_id: string
+          ticket_number?: never
+          updated_at?: string
+        }
+        Update: {
+          category?: string
+          closed_at?: string | null
+          created_at?: string
+          created_by_user_id?: string
+          description?: string
+          id?: string
+          lock_version?: number
+          owner_platform_member_id?: string | null
+          priority?: string
+          resolved_at?: string | null
+          satisfaction_score?: number | null
+          severity?: string
+          sla_due_at?: string | null
+          solution_id?: string | null
+          status?: string
+          subject?: string
+          team_id?: string | null
+          tenant_id?: string
+          ticket_number?: never
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "support_tickets_owner_platform_member_id_fkey"
+            columns: ["owner_platform_member_id"]
+            isOneToOne: false
+            referencedRelation: "platform_members"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "support_tickets_solution_id_fkey"
+            columns: ["solution_id"]
+            isOneToOne: false
+            referencedRelation: "solutions"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "support_tickets_team_id_fkey"
+            columns: ["team_id"]
+            isOneToOne: false
+            referencedRelation: "platform_teams"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "support_tickets_tenant_id_fkey"
+            columns: ["tenant_id"]
+            isOneToOne: false
+            referencedRelation: "tenants"
+            referencedColumns: ["id"]
+          },
+        ]
       }
       talent_application_stage_history: {
         Row: {
@@ -3824,6 +5166,69 @@ export type Database = {
           },
         ]
       }
+      tenant_entitlement_overrides: {
+        Row: {
+          created_at: string
+          created_by_user_id: string
+          expires_at: string
+          id: string
+          limits: Json
+          override_type: string
+          reason: string
+          revoked_at: string | null
+          revoked_by_user_id: string | null
+          solution_id: string | null
+          starts_at: string
+          status: string
+          tenant_id: string
+        }
+        Insert: {
+          created_at?: string
+          created_by_user_id: string
+          expires_at: string
+          id?: string
+          limits?: Json
+          override_type: string
+          reason: string
+          revoked_at?: string | null
+          revoked_by_user_id?: string | null
+          solution_id?: string | null
+          starts_at?: string
+          status?: string
+          tenant_id: string
+        }
+        Update: {
+          created_at?: string
+          created_by_user_id?: string
+          expires_at?: string
+          id?: string
+          limits?: Json
+          override_type?: string
+          reason?: string
+          revoked_at?: string | null
+          revoked_by_user_id?: string | null
+          solution_id?: string | null
+          starts_at?: string
+          status?: string
+          tenant_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "tenant_entitlement_overrides_solution_id_fkey"
+            columns: ["solution_id"]
+            isOneToOne: false
+            referencedRelation: "solutions"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "tenant_entitlement_overrides_tenant_id_fkey"
+            columns: ["tenant_id"]
+            isOneToOne: false
+            referencedRelation: "tenants"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       tenant_solutions: {
         Row: {
           config: Json
@@ -3868,45 +5273,86 @@ export type Database = {
       }
       tenants: {
         Row: {
+          cancellation_reason: string | null
+          contacts: Json
           created_at: string
           created_by: string | null
           id: string
+          legal_name: string | null
+          lifecycle_status: string
+          lock_version: number
           name: string
           onboarding_completed_at: string | null
           onboarding_started_at: string | null
           onboarding_status: string
+          risk_level: string
           settings: Json
           slug: string
+          stakeholders: Json
           status: string
+          success_manager_platform_member_id: string | null
+          tax_id_normalized: string | null
+          trade_name: string | null
+          trial_ends_at: string | null
           updated_at: string
         }
         Insert: {
+          cancellation_reason?: string | null
+          contacts?: Json
           created_at?: string
           created_by?: string | null
           id?: string
+          legal_name?: string | null
+          lifecycle_status?: string
+          lock_version?: number
           name: string
           onboarding_completed_at?: string | null
           onboarding_started_at?: string | null
           onboarding_status?: string
+          risk_level?: string
           settings?: Json
           slug: string
+          stakeholders?: Json
           status?: string
+          success_manager_platform_member_id?: string | null
+          tax_id_normalized?: string | null
+          trade_name?: string | null
+          trial_ends_at?: string | null
           updated_at?: string
         }
         Update: {
+          cancellation_reason?: string | null
+          contacts?: Json
           created_at?: string
           created_by?: string | null
           id?: string
+          legal_name?: string | null
+          lifecycle_status?: string
+          lock_version?: number
           name?: string
           onboarding_completed_at?: string | null
           onboarding_started_at?: string | null
           onboarding_status?: string
+          risk_level?: string
           settings?: Json
           slug?: string
+          stakeholders?: Json
           status?: string
+          success_manager_platform_member_id?: string | null
+          tax_id_normalized?: string | null
+          trade_name?: string | null
+          trial_ends_at?: string | null
           updated_at?: string
         }
-        Relationships: []
+        Relationships: [
+          {
+            foreignKeyName: "tenants_success_manager_platform_member_id_fkey"
+            columns: ["success_manager_platform_member_id"]
+            isOneToOne: false
+            referencedRelation: "platform_members"
+            referencedColumns: ["id"]
+          },
+        ]
       }
     }
     Views: {
@@ -3922,6 +5368,27 @@ export type Database = {
           p_user_id: string
         }
         Returns: string
+      }
+      admin_auto_assign_lead: {
+        Args: {
+          p_actor_user_id: string
+          p_lead_id: string
+          p_reason?: string
+          p_team_id: string
+        }
+        Returns: string
+      }
+      admin_control_plane_metrics: {
+        Args: {
+          p_from: string
+          p_is_admin?: boolean
+          p_owner_ids?: string[]
+          p_plan_ids?: string[]
+          p_team_ids?: string[]
+          p_tenant_ids?: string[]
+          p_to: string
+        }
+        Returns: Json
       }
       admin_create_billing_plan_version: {
         Args: {
@@ -3940,13 +5407,52 @@ export type Database = {
         }
         Returns: string
       }
+      admin_create_proposal_version: {
+        Args: {
+          p_actor_user_id: string
+          p_changes?: Json
+          p_proposal_id: string
+        }
+        Returns: string
+      }
+      admin_effective_entitlements: {
+        Args: { p_tenant_id: string }
+        Returns: Json
+      }
+      admin_refresh_onboarding_progress: {
+        Args: { p_actor_user_id: string; p_run_id: string }
+        Returns: number
+      }
       admin_replace_tenant_solutions: {
         Args: { p_solution_keys: string[]; p_tenant_id: string }
         Returns: undefined
       }
+      admin_start_onboarding: {
+        Args: {
+          p_actor_user_id: string
+          p_owner_platform_member_id?: string
+          p_template_id: string
+          p_tenant_id: string
+        }
+        Returns: string
+      }
       admin_terminate_user_sessions: {
         Args: { p_user_id: string }
         Returns: number
+      }
+      admin_transition_control_plane: {
+        Args: {
+          p_actor_user_id: string
+          p_entity_id: string
+          p_entity_type: string
+          p_metadata?: Json
+          p_reason: string
+          p_request_id?: string
+          p_team_id?: string
+          p_tenant_id?: string
+          p_to_status: string
+        }
+        Returns: string
       }
       can_read_file: { Args: { p_file_id: string }; Returns: boolean }
       can_read_membership: {

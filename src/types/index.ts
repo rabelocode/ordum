@@ -83,7 +83,7 @@ export interface UserProfile {
   name: string;
   email: string;
   avatarUrl?: string;
-  role: "admin" | "manager" | "employee" | "compliance_officer" | "recruiter";
+  role: 'committee' | 'compliance' | 'employee' | 'executive' | 'hr' | 'legal' | 'manager' | 'recruiter' | 'tenant_admin';
   permissions: string[];
 }
 
