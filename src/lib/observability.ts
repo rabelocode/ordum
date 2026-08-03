@@ -16,9 +16,13 @@ export function initClientObservability() {
       release: typeof __ORDUM_RELEASE__ === 'string' ? __ORDUM_RELEASE__ : undefined,
       sendDefaultPii: false,
       tracesSampleRate: 0,
+      maxBreadcrumbs: 20,
       ignoreErrors: [/Invalid login credentials/i, /Email rate limit exceeded/i, /JWT expired/i],
       beforeSend(event) {
         return sanitizeSentryEvent(event as Record<string, any>) as any;
+      },
+      beforeBreadcrumb(breadcrumb) {
+        return sanitizeSentryEvent({ breadcrumb }).breadcrumb as any;
       },
     });
     return Sentry;

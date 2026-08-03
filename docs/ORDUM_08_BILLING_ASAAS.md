@@ -6,6 +6,8 @@
 
 A integração usa a API v3 do Asaas exclusivamente no Sandbox. `BILLING_ENABLED=false` é o padrão e produção é recusada pelo código. A API usa `access_token`, `Content-Type: application/json` e `User-Agent`. O webhook valida `asaas-access-token` com comparação constante, aplica limite de taxa no banco, persiste antes do negócio, responde `200` imediatamente e delega o processamento ao `waitUntil` da Vercel. A fila durável é retomada pela conciliação caso uma execução assíncrona seja interrompida.
 
+No ciclo do piloto, o adapter foi exercitado com transporte isolado para criação de cliente, assinatura, consulta de cobrança e cancelamento. Confirmação, evento duplicado, fora de ordem e conciliação permanecem cobertos por testes de domínio/SQL. A homologação contra a API Sandbox real continua bloqueada enquanto `ASAAS_API_KEY` e `ASAAS_WEBHOOK_TOKEN` não estiverem cadastradas.
+
 Referências vigentes: [autenticação](https://docs.asaas.com/docs/autentica%C3%A7%C3%A3o-1), [assinaturas](https://docs.asaas.com/docs/assinaturas), [webhooks](https://docs.asaas.com/docs/sobre-os-webhooks), [eventos de cobrança](https://docs.asaas.com/docs/webhook-para-cobrancas) e [eventos de assinatura](https://docs.asaas.com/docs/eventos-para-assinaturas).
 
 ## Variáveis server-side
