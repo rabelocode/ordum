@@ -1,26 +1,21 @@
 # Estado Atual (CURRENT STATE)
 
-- **Commit de referência:** 9a6df8f7311ce2c3d526e06b3a0cc1d044238712
+- **Commit de referência:** aed8d4f138bceee9aebba40d633416ae6f9a2635
 
-## Módulos operacionais (Funcionais e já existentes)
-- O build estático (Vite) de SPA
-- O roteamento via Hash global /workspace
-- Middlewares base observáveis 
+## Módulos operacionais
+- NÃO CONFIRMADO (Embora a pipeline SPA front-end compile, os E2E não atestam fluxos integrais operacionais em todas as pontas). A base de React/Vite com Auth load inicial existe e funciona.
 
 ## Módulos parciais
-- Integridade: Visualmente prototipada, não se conecta inteiramente às tabelas. Sem RLS/Backend apropriado atuando.
-- Core Auth/Multi-Tenancy: Requer robustez do server-side (Express) a ser estendida via migrations ainda não consolidadas em views limpas.
+- Admin Global (Parcialmente mapeado visualmente, faltam validações back-end robustas para gerenciar Permissões das tenants).
+- Integridade (Possui RPCs server-side base, e front-end protótipo. Falta alinhamento BD <-> Views, evidenciado pelas tabelas ausentes nas dependências, como assignee).
+- Auth/Multi-Tenancy (Possui profiles e memberships, mas requer fortalecimento do isolation per-tenant pelo middleware).
 
 ## Módulos simulados
-- Nenhum provado (Embora Admin Leads exija validação detalhada se usa mocks).
+- Billing/Asaas (Simulado em telas visuais de Planos sem webhooks reais implementados).
+- Dashboard Metrics (Com dados hardcoded em alguns painéis visuais herdados).
 
 ## Módulos quebrados
-- Nenhum explicitamente falhando crash-loops senão retornos normais de roteador local (ex: /legacy endpoints faltantes).
-
-## Módulos não confirmados
-- Payment Webhooks (Asaas) e Jobs de Cron Vercel isolados
+- NÃO CONFIRMADO (Não há "500" isolados evidentes no repouso atual testado mas a navegação Integridade sem o banco vai engasgar).
 
 ## Próximo Passo
 - Iniciar a Fase 2 (Core, autenticação, multi-tenancy e autorização).
-
-**Riscos reais:** Secrets publicáveis (VITE_*) precisam de garantias de presença na Vercel (Produção). Os anexos de denúncias requerem validadores de scanner não construídos ainda na árvore local de testes. Handoff não sincronizado na baseline originária gerou divergências curadas agora com a introdução destes DOCS.
