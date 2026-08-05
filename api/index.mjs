@@ -658,23 +658,25 @@ async function processPaymentEvent(db, eventRow, payload, provider) {
       void captureServerAnalytics("payment_confirmed", tenantId, { tenant_ref: tenantId, status: normalizedStatus, source: "asaas_sandbox" });
       if (contract.status !== "active") void captureServerAnalytics("contract_activated", tenantId, { tenant_ref: tenantId, status: "active", source: "billing_provisioning" });
     }
-    const { data: templates } = await db.from("onboarding_templates").select("id, plan_id, solution_id").eq("active", true).order("created_at", { ascending: false });
+    const { data: templates } = await db.from("onboarding_templates").select("id, plan_id, solution_id, version, created_at").eq("active", true).order("version", { ascending: false }).order("created_at", { ascending: false });
     if (templates && templates.length > 0) {
-      let selectedTemplate = templates.find((t) => t.plan_id === contract.plan_id && t.solution_id);
+      const { data: cItems } = await db.from("commercial_contract_items").select("solution_id").eq("contract_id", contract.id);
+      const sIds = cItems?.map((c) => c.solution_id) || [];
+      let selectedTemplate = templates.find((t) => t.plan_id === contract.plan_id && t.solution_id && sIds.includes(t.solution_id));
       if (!selectedTemplate) selectedTemplate = templates.find((t) => t.plan_id === contract.plan_id && !t.solution_id);
-      if (!selectedTemplate) {
-        const { data: cItems } = await db.from("commercial_contract_items").select("solution_id").eq("contract_id", contract.id);
-        const sIds = cItems?.map((c) => c.solution_id) || [];
-        selectedTemplate = templates.find((t) => sIds.includes(t.solution_id));
-      }
+      if (!selectedTemplate) selectedTemplate = templates.find((t) => !t.plan_id && t.solution_id && sIds.includes(t.solution_id));
       if (!selectedTemplate) selectedTemplate = templates.find((t) => !t.plan_id && !t.solution_id);
       if (selectedTemplate) {
-        await db.rpc("admin_start_onboarding", {
+        const { error: runErr } = await db.rpc("admin_start_onboarding", {
           p_tenant_id: tenantId,
           p_template_id: selectedTemplate.id,
-          p_owner_member_id: contract.owner_platform_member_id,
+          p_owner_platform_member_id: contract.owner_platform_member_id,
           p_actor_user_id: owner.id
         });
+        if (runErr) {
+          await db.from("platform_audit_logs").insert({ actor_user_id: owner.id, action: "onboarding.run.failed", entity_type: "tenants", entity_id: tenantId, severity: "error", metadata: { error: runErr.message, template_id: selectedTemplate.id } });
+          throw new Error("Falha cr\xEDtica ao iniciar o onboarding autom\xE1tio ap\xF3s pagamento: " + runErr.message);
+        }
       }
     }
   } else if (accessStatus === "grace" && contract.tenant_id) {
@@ -1178,7 +1180,11 @@ function createBillingRouters(getSupabaseAdmin2) {
         limits: item.limits,
         description: item.solutions?.name || "M\xF3dulo do plano"
       }));
-      await db.from("commercial_proposal_items").insert(itemsToInsert);
+      const { error: itemsError } = await db.from("commercial_proposal_items").insert(itemsToInsert);
+      if (itemsError) {
+        await db.from("commercial_proposals").delete().eq("id", data.id);
+        return res.status(500).json({ error: "Falha ao gravar m\xF3dulos da proposta. Transa\xE7\xE3o revertida." });
+      }
     }
     await db.from("platform_audit_logs").insert({ actor_user_id: req.user.id, action: "commercial.proposal.created", entity_type: "commercial_proposals", entity_id: data.id, team_id: data.team_id, severity: "info", ...auditContext(req, { result: "success", after: { amount_cents: data.amount_cents, subtotal, discount, solution_count: requestedSolutions.length } }) });
     void captureServerAnalytics("proposal_created", req.user.id, { plan_ref: input.plan_id, status: data.status, source: "admin_commercial" });
@@ -1228,6 +1234,22 @@ function createBillingRouters(getSupabaseAdmin2) {
     const saved = await db.from("commercial_proposals").select("*,commercial_proposal_items(*)").eq("id", created.data).single();
     return res.status(201).json(saved.data);
   });
+  adminRouter.post("/commercial/proposals/:id/accept", authenticateRequest, resolvePlatformContext, requirePlatformPermission("platform.commercial.manage"), async (req, res) => {
+    const db = getSupabaseAdmin2();
+    const existing = await db.from("commercial_proposals").select("*").eq("id", req.params.id).maybeSingle();
+    if (existing.error || !existing.data) return res.status(404).json({ error: "Proposta n\xE3o encontrada." });
+    if (!canReadAssignedResource(req.platformContext, existing.data, "member_lead_visibility")) return res.status(403).json({ error: "Proposta fora do seu escopo." });
+    if (existing.data.status === "accepted") return res.json({ success: true, message: "Proposta j\xE1 aceita." });
+    if (existing.data.status === "rejected" || existing.data.status === "superseded") return res.status(400).json({ error: "Status atual n\xE3o permite aceite." });
+    if (existing.data.status !== "approved") return res.status(400).json({ error: "A proposta precisa ser aprovada antes do aceite." });
+    if (existing.data.valid_until && new Date(existing.data.valid_until) < /* @__PURE__ */ new Date()) {
+      return res.status(400).json({ error: "Proposta expirada." });
+    }
+    const { error: updateErr } = await db.from("commercial_proposals").update({ status: "accepted" }).eq("id", existing.data.id);
+    if (updateErr) return res.status(500).json({ error: updateErr.message });
+    await db.from("platform_audit_logs").insert({ actor_user_id: req.user.id, action: "commercial.proposal.accepted", entity_type: "commercial_proposals", entity_id: existing.data.id, team_id: existing.data.team_id, severity: "info", ...auditContext(req, { result: "success" }) });
+    return res.json({ success: true, status: "accepted" });
+  });
   adminRouter.post("/commercial/proposals/:id/create-contract", authenticateRequest, resolvePlatformContext, requirePlatformPermission("platform.commercial.manage"), async (req, res) => {
     const db = getSupabaseAdmin2();
     const { data: proposal, error } = await db.from("commercial_proposals").select("*, marketing_leads(*), billing_plans(*)").eq("id", req.params.id).single();
@@ -1259,8 +1281,13 @@ function createBillingRouters(getSupabaseAdmin2) {
     }).select().single();
     if (contractError) return res.status(contractError.code === "23505" ? 409 : 400).json({ error: contractError.code === "23505" ? "Esta proposta j\xE1 possui contrato." : contractError.message });
     const { data: proposalItems } = await db.from("commercial_proposal_items").select("solution_id,limits").eq("proposal_id", proposal.id);
-    if (proposalItems?.length) await db.from("commercial_contract_items").insert(proposalItems.map((item) => ({ contract_id: contract.id, solution_id: item.solution_id, limits: item.limits })));
-    await db.from("commercial_proposals").update({ status: "accepted" }).eq("id", proposal.id);
+    if (proposalItems?.length) {
+      const { error: cntItemsErr } = await db.from("commercial_contract_items").insert(proposalItems.map((item) => ({ contract_id: contract.id, solution_id: item.solution_id, limits: item.limits })));
+      if (cntItemsErr) {
+        await db.from("commercial_contracts").delete().eq("id", contract.id);
+        return res.status(500).json({ error: "Erro ao gravar itens do contrato. Transa\xE7\xE3o revertida." });
+      }
+    }
     await db.from("platform_audit_logs").insert({ actor_user_id: req.user.id, action: "commercial.contract.created_from_proposal", entity_type: "commercial_contracts", entity_id: contract.id, team_id: proposal.team_id, severity: "info", metadata: { proposal_id: proposal.id } });
     return res.status(201).json(contract);
   });
@@ -1329,27 +1356,57 @@ function createBillingRouters(getSupabaseAdmin2) {
     const db = getSupabaseAdmin2();
     const { data: contract } = await db.from("commercial_contracts").select("*").eq("id", req.params.id).single();
     if (!contract || contract.status !== "pending_payment") return res.status(400).json({ error: "Contrato invalido ou nao aguarda pagamento." });
+    if (req.platformContext.role.key !== "admin" && !canReadAssignedResource(req.platformContext, contract, "member_client_visibility")) {
+      return res.status(403).json({ error: "Contrato fora do escopo." });
+    }
     const { data: subscription } = await db.from("billing_subscriptions").select("*").eq("contract_id", contract.id).maybeSingle();
     if (!subscription) return res.status(400).json({ error: "Assinatura nao encontrada." });
-    const { data: payment } = await db.from("billing_payments").insert({
-      subscription_id: subscription.id,
-      contract_id: contract.id,
-      customer_id: subscription.customer_id,
-      provider_payment_id: `MOCK_PAY_${Date.now()}`,
-      status: "confirmed",
-      provider_status: "RECEIVED",
-      amount_cents: contract.amount_cents,
-      original_due_date: (/* @__PURE__ */ new Date()).toISOString(),
-      paid_at: (/* @__PURE__ */ new Date()).toISOString(),
-      paid_period_starts_on: (/* @__PURE__ */ new Date()).toISOString(),
-      paid_period_ends_on: new Date(Date.now() + 30 * 864e5).toISOString()
-    }).select().single();
-    const { processStoredEvent: processStoredEvent2 } = await Promise.resolve().then(() => (init_router(), router_exports));
-    try {
-      await processStoredEvent2(db, { event_type: "PAYMENT_CONFIRMED", payload: {} }, void 0, payment);
-    } catch (e) {
+    const fakePaymentId = `mock:payment:${contract.id}`;
+    const fakeEventId = `mock:event:payment_confirmed:${contract.id}`;
+    const { data: existingEvent } = await db.from("billing_webhook_events").select("*").eq("provider_event_id", fakeEventId).maybeSingle();
+    let webhookEvent = existingEvent;
+    if (!webhookEvent) {
+      const fakePayload = {
+        event: "PAYMENT_CONFIRMED",
+        payment: {
+          id: fakePaymentId,
+          customer: subscription.provider_customer_id || "cus_mock",
+          subscription: subscription.provider_subscription_id,
+          value: contract.amount_cents / 100,
+          netValue: contract.amount_cents / 100,
+          status: "CONFIRMED",
+          externalReference: contract.external_reference,
+          confirmedDate: (/* @__PURE__ */ new Date()).toISOString().split("T")[0]
+        }
+      };
+      const { data: newWebhook, error: whErr } = await db.from("billing_webhook_events").insert({
+        event_type: "PAYMENT_CONFIRMED",
+        provider: "asaas",
+        provider_event_id: fakeEventId,
+        payload: fakePayload,
+        status: "pending"
+      }).select().single();
+      if (whErr) return res.status(500).json({ error: "Falha ao injetar evento sandbox: " + whErr.message });
+      webhookEvent = newWebhook;
     }
-    return res.json({ success: true, message: "Pago com sucesso no ambiente mock Sandbox" });
+    if (webhookEvent && webhookEvent.status === "pending") {
+      const { processStoredEvent: processStoredEvent2 } = await Promise.resolve().then(() => (init_router(), router_exports));
+      try {
+        const processResult = await processStoredEvent2(db, webhookEvent);
+        await db.from("billing_webhook_events").update({
+          status: processResult,
+          processed_at: (/* @__PURE__ */ new Date()).toISOString(),
+          last_error: null
+        }).eq("id", webhookEvent.id);
+      } catch (err) {
+        await db.from("billing_webhook_events").update({
+          status: "failed",
+          last_error: err.message
+        }).eq("id", webhookEvent.id);
+        return res.status(500).json({ error: err.message });
+      }
+    }
+    return res.json({ success: true, message: "Pago mock processado (idempotente) com sucesso." });
   });
   adminRouter.post("/commercial/contracts/:id/start-billing", authenticateRequest, resolvePlatformContext, requirePlatformPermission("platform.billing.manage"), async (req, res) => {
     try {
