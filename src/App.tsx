@@ -9,6 +9,7 @@ import { AcceptInvitePage } from "./pages/public/AcceptInvitePage";
 import { SelectOrganizationPage } from "./pages/public/SelectOrganizationPage";
 import { CareerSitePage } from "./pages/public/CareerSitePage";
 import { PageShellSkeleton } from "./components/ui/LoadingSkeletons";
+import { RequireAuth, RequireTenant, RequirePlatformPermission } from "./core/auth/Guards";
 
 // Lazy load heavy internal applications
 const WorkspaceApp = lazy(() => import("./pages/workspace/WorkspaceApp").then(m => ({ default: m.WorkspaceApp })));
@@ -117,9 +118,13 @@ export default function App() {
     }
     if (route.startsWith("/workspace")) {
       return (
-        <Suspense fallback={<SuspenseFallback />}>
-          <WorkspaceApp />
-        </Suspense>
+        <RequireAuth>
+          <RequireTenant>
+            <Suspense fallback={<SuspenseFallback />}>
+              <WorkspaceApp />
+            </Suspense>
+          </RequireTenant>
+        </RequireAuth>
       );
     }
     if (route.startsWith("/admin")) {
@@ -180,11 +185,15 @@ export default function App() {
       }
 
       return (
-        <Suspense fallback={<SuspenseFallback />}>
-          <OrdumAdminLayout currentPath={"#" + route}>
-            {adminContent}
-          </OrdumAdminLayout>
-        </Suspense>
+        <RequireAuth>
+          <RequirePlatformPermission permission="platform.access">
+            <Suspense fallback={<SuspenseFallback />}>
+              <OrdumAdminLayout currentPath={"#" + route}>
+                {adminContent}
+              </OrdumAdminLayout>
+            </Suspense>
+          </RequirePlatformPermission>
+        </RequireAuth>
       );
     }
     return <PublicSite />;

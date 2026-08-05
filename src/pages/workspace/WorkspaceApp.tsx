@@ -1,7 +1,6 @@
 import React, { useState, useEffect } from "react";
 import { ShieldAlert } from "lucide-react";
-import { useAuth } from "../../core/auth/AuthProvider";
-import { useTenant } from "../../core/auth/TenantProvider";
+import { useAccess } from "../../core/auth/AccessContext";
 import { WorkspaceLayout } from "../../components/workspace/WorkspaceLayout";
 import { WorkspaceHome } from "../../components/workspace/WorkspaceHome";
 import { IntegrityModuleView } from "../../components/workspace/IntegrityModuleView";
@@ -13,8 +12,7 @@ import { captureAnalytics, identifyAnalyticsUser } from '../../lib/analytics';
 import { PageShellSkeleton } from '../../components/ui/LoadingSkeletons';
 
 export function WorkspaceApp() {
-  const { user, signOut } = useAuth();
-  const { profile, activeTenant, roles, permissions, hasSolution, hasPermission, isLoading } = useTenant();
+  const { user, signOut, profile, activeTenant, roles, permissions, hasSolution, hasPermission, isLoading } = useAccess();
 
   const [currentRoute, setCurrentRoute] = useState("");
 
