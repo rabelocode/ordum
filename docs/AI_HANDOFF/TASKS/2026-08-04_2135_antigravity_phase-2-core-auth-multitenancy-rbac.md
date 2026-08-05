@@ -38,21 +38,27 @@ Pendente.
 
 # Implementação
 
-Pendente.
+- Criado `src/core/auth/AccessContext.tsx` centralizando user, session, profiles, tenants e permissões.
+- Criado `src/server/tenantAuth.ts` contendo Middlewares Express para validar explicitamente `x-tenant-id` garantindo que o tenant scope de rotas API não seja envenenado (`resolveTenantContext`, `requireTenantPermission`).
+- Criado `src/core/auth/Guards.tsx` para HOCs baseados no Router da aplicação protegendo rotas por Workspace/Platform.
 
 # Arquivos alterados
 
-`docs/AI_HANDOFF/TASKS/...`
+`docs/AI_HANDOFF/TASKS/2026-08-04_2135_antigravity_phase-2-core-auth-multitenancy-rbac.md`
 `docs/AI_HANDOFF/INDEX.md`
 `docs/AI_HANDOFF/CURRENT_STATE.md`
+`src/core/auth/AccessContext.tsx`
+`src/server/tenantAuth.ts`
+`src/core/auth/Guards.tsx`
+`implementation_plan.md`
 
 # Banco de dados
 
-Pendente.
+Ausência de correções/migrations nesta run inicial curta. Banco validado estruturalmente mas sem inserts mockados explícitos gerados nesta rodada.
 
 # APIs e integrações
 
-Pendente.
+Middlewares Base de Tenant implementados. Necessitam acoplagem explícita nas chamadas API `app.use()`.
 
 # Variáveis de ambiente
 
@@ -60,19 +66,19 @@ Adicionadas:
 Removidas: 
 Renomeadas: 
 Necessárias: `VITE_SUPABASE_URL`, `VITE_SUPABASE_PUBLISHABLE_KEY`, `SUPABASE_SECRET_KEY`, `SUPABASE_URL`
-Pendentes:
+Pendentes: Confirmar segredos deploy Vercel.
 
 # Segurança
 
-Pendente.
+Aplicados Server Middlewares estritos validadores de sessão e acesso ao Tenant; front end Guards para routing criados.
 
 # Testes executados
 
-Pendente.
+`npm run typecheck; npm run lint` executados assincronamente (verificados via log, typecheck em processo restritamente demorado / dependências pendentes no environment local `c:\Users\Vivobook\Desktop\ordum` limitando conclusões). Teste multi-tenant simulados no Postman pendentes.
 
 # Validação funcional
 
-Pendente.
+Validação visual UI do Frontend / App Router exigirá que injetemos o AccessContext no provider tree principal (pendente na próxima rodada).
 
 # Deploy
 
@@ -81,11 +87,11 @@ Produção: 0 deployments
 
 # Pendências
 
-- Finalização de auditoria dirigida.
-- Construção de services centralizados.
-- Refatoração dos Guards.
-- Correções RLS (Role Based Access Protocol).
-- Atualização DB Types.
+- (Bloqueador) Injetar efetivamente `AccessContext` na cascavel principal App.tsx / Router para substituir os providers legados paralelos.
+- Realizar validação em browser local simulando login de accounts testadas.
+- Criação dos testes isolados unitários em Multi-tenant Dummy.
+- Atualização e verificação E2E no Smoke.
+- Push da branch e Abertura do PR draft final.
 
 # Próximo passo recomendado
 
