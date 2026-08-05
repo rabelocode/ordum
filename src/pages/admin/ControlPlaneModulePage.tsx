@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { AlertTriangle, ChevronLeft, ChevronRight, RefreshCw } from 'lucide-react';
-import { useAuth } from '../../core/auth/AuthProvider';
+import { useAccess } from '../../core/auth/AccessContext';
 import { Skeleton } from '../../components/ui/Skeleton';
 
 const CONFIG = {
@@ -27,7 +27,7 @@ function present(value: any, path: string) {
 export function ControlPlaneModulePage({ module }: { module: ControlPlaneModule }) {
   const config = CONFIG[module];
   const columns = config.columns as readonly (readonly [string, string])[];
-  const { session } = useAuth();
+  const { session } = useAccess();
   const [data, setData] = useState<any>({ items: [], pagination: { page: 1, pageSize: 25, total: 0, totalPages: 0 } });
   const [page, setPage] = useState(1);
   const [status, setStatus] = useState('');
@@ -56,3 +56,4 @@ export function ControlPlaneModulePage({ module }: { module: ControlPlaneModule 
     </div>
   </div>;
 }
+

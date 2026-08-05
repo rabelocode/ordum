@@ -1,11 +1,11 @@
 import React, { useState, useEffect } from 'react';
 import { Search, ArrowRight } from 'lucide-react';
 import { Button } from '../../components/ui/Button';
-import { useAuth } from '../../core/auth/AuthProvider';
+import { useAccess } from '../../core/auth/AccessContext';
 import { ListSkeleton } from '../../components/ui/LoadingSkeletons';
 
 export function CompaniesPage() {
-  const { session } = useAuth();
+  const { session } = useAccess();
   const [tenants, setTenants] = useState<any[]>([]);
   const [searchTerm, setSearchTerm] = useState('');
   const [isLoading, setIsLoading] = useState(true);
@@ -131,3 +131,4 @@ export function CompaniesPage() {
     </div>
   );
 }
+

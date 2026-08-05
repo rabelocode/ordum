@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { useAuth } from '../../core/auth/AuthProvider';
+import { useAccess } from '../../core/auth/AccessContext';
 import { PlatformTeam } from '../../types/platform';
 import { ArrowLeft, Plus, Trash2, Save, Loader2 } from 'lucide-react';
 import { AddTeamMemberModal } from '../../components/admin/AddTeamMemberModal';
@@ -7,7 +7,7 @@ import { usePlatform } from '../../core/auth/PlatformAuthProvider';
 import { DetailSkeleton } from '../../components/ui/LoadingSkeletons';
 
 export function TeamDetailPage({ teamId }: { teamId: string }) {
-  const { session } = useAuth();
+  const { session } = useAccess();
   const { platformRole } = usePlatform();
   const [team, setTeam] = useState<PlatformTeam | null>(null);
   const [members, setMembers] = useState<any[]>([]);
@@ -338,3 +338,4 @@ export function TeamDetailPage({ teamId }: { teamId: string }) {
     </div>
   );
 }
+

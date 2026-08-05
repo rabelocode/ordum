@@ -1,12 +1,12 @@
 import React, { useState, useEffect } from 'react';
 import { ArrowLeft, Loader2, Save } from 'lucide-react';
-import { useAuth } from '../../core/auth/AuthProvider';
+import { useAccess } from '../../core/auth/AccessContext';
 import { AssignLeadModal } from '../../components/admin/AssignLeadModal'; // We can reuse it for client assignment
 import { usePlatform } from '../../core/auth/PlatformAuthProvider';
 import { DetailSkeleton } from '../../components/ui/LoadingSkeletons';
 
 export function CompanyDetailPage({ tenantId }: { tenantId: string }) {
-  const { session } = useAuth();
+  const { session } = useAccess();
   const { platformRole } = usePlatform();
   const [tenant, setTenant] = useState<any>(null);
   const [activeTab, setActiveTab] = useState("visoogeral");
@@ -228,3 +228,4 @@ export function CompanyDetailPage({ tenantId }: { tenantId: string }) {
     </div>
   );
 }
+

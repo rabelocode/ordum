@@ -1,12 +1,14 @@
 import { Router } from 'express';
+import { z } from 'zod';
 import { canReadAssignedResource } from './authorization';
 import { auditContext, pageResult, parsePagination } from './operational';
+import { authenticateRequest, resolvePlatformContext, requirePlatformPermission } from './tenantAuth';
 
-export function createAdminLeadsRouter(getSupabaseAdmin: any, requirePlatformAuth: any) {
+export function createAdminLeadsRouter(getSupabaseAdmin: any, _old_requirePlatformAuth: any) {
   const router = Router();
 
   // GET /api/admin/leads
-  router.get('/', requirePlatformAuth, async (req: any, res: any) => {
+  router.get('/', authenticateRequest, resolvePlatformContext, requirePlatformPermission('platform.leads.read'), async (req: any, res: any) => {
     try {
       const { platformContext } = req;
       
@@ -61,14 +63,20 @@ export function createAdminLeadsRouter(getSupabaseAdmin: any, requirePlatformAut
   });
 
   // POST /api/admin/leads/:id/assign
-  router.post('/:id/assign', requirePlatformAuth, async (req: any, res: any) => {
+  const assignLeadSchema = z.object({
+    team_id: z.string().uuid(),
+    owner_platform_member_id: z.string().uuid().optional().nullable(),
+    reason: z.string().min(1)
+  });
+
+  router.post('/:id/assign', authenticateRequest, resolvePlatformContext, requirePlatformPermission('platform.leads.manage'), async (req: any, res: any) => {
     try {
       const { platformContext } = req;
       const leadId = req.params.id;
-      const { team_id, owner_platform_member_id } = req.body;
-      if (!team_id || typeof req.body?.reason !== 'string' || !req.body.reason.trim()) {
-        return res.status(400).json({ error: 'Equipe e motivo da transferência são obrigatórios.' });
-      }
+      const input = assignLeadSchema.safeParse(req.body);
+      if (!input.success) return res.status(400).json({ error: 'Equipe e motivo da transferência são obrigatórios.' });
+      const { team_id, owner_platform_member_id, reason } = input.data;
+
       const current = await getSupabaseAdmin().from('platform_lead_assignments').select('*').eq('lead_id', leadId).maybeSingle();
       if (current.error) throw current.error;
       
@@ -107,7 +115,7 @@ export function createAdminLeadsRouter(getSupabaseAdmin: any, requirePlatformAut
         to_team_id: team_id,
         from_owner_platform_member_id: current.data?.owner_platform_member_id || null,
         to_owner_platform_member_id: owner_platform_member_id || null,
-        reason: req.body.reason.trim(),
+        reason: reason.trim(),
         actor_user_id: req.user.id,
       });
       
@@ -127,7 +135,7 @@ export function createAdminLeadsRouter(getSupabaseAdmin: any, requirePlatformAut
     }
   });
 
-  router.patch('/:id', requirePlatformAuth, async (req: any, res: any) => {
+  router.patch('/:id', authenticateRequest, resolvePlatformContext, requirePlatformPermission('platform.leads.manage'), async (req: any, res: any) => {
     try {
       const db = getSupabaseAdmin();
       const { data: lead, error: leadError } = await db.from('marketing_leads')
@@ -156,7 +164,7 @@ export function createAdminLeadsRouter(getSupabaseAdmin: any, requirePlatformAut
     }
   });
 
-  router.get('/:id/duplicates', requirePlatformAuth, async (req: any, res: any) => {
+  router.get('/:id/duplicates', authenticateRequest, resolvePlatformContext, requirePlatformPermission('platform.leads.read'), async (req: any, res: any) => {
     try {
       const db = getSupabaseAdmin();
       const leadResult = await db.from('marketing_leads').select('id,platform_lead_assignments(*)').eq('id', req.params.id).maybeSingle();
@@ -180,7 +188,7 @@ export function createAdminLeadsRouter(getSupabaseAdmin: any, requirePlatformAut
     }
   });
 
-  router.post('/:id/auto-assign', requirePlatformAuth, async (req: any, res: any) => {
+  router.post('/:id/auto-assign', authenticateRequest, resolvePlatformContext, requirePlatformPermission('platform.leads.manage'), async (req: any, res: any) => {
     try {
       const teamId = req.body?.teamId;
       const reason = typeof req.body?.reason === 'string' ? req.body.reason.trim() : '';
@@ -194,7 +202,7 @@ export function createAdminLeadsRouter(getSupabaseAdmin: any, requirePlatformAut
     }
   });
 
-  router.post('/:id/recalculate-score', requirePlatformAuth, async (req: any, res: any) => {
+  router.post('/:id/recalculate-score', authenticateRequest, resolvePlatformContext, requirePlatformPermission('platform.leads.manage'), async (req: any, res: any) => {
     try {
       const db = getSupabaseAdmin();
       const lead = await db.from('marketing_leads').select('*').eq('id', req.params.id).maybeSingle();
@@ -227,7 +235,7 @@ export function createAdminLeadsRouter(getSupabaseAdmin: any, requirePlatformAut
   });
 
   // POST /api/admin/leads/:id/claim
-  router.post('/:id/claim', requirePlatformAuth, async (req: any, res: any) => {
+  router.post('/:id/claim', authenticateRequest, resolvePlatformContext, requirePlatformPermission('platform.leads.manage'), async (req: any, res: any) => {
     try {
       const { platformContext } = req;
       const leadId = req.params.id;

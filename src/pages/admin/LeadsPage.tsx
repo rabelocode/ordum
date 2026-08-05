@@ -1,11 +1,11 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { Search } from 'lucide-react';
-import { useAuth } from '../../core/auth/AuthProvider';
+import { useAccess } from '../../core/auth/AccessContext';
 import { AssignLeadModal } from '../../components/admin/AssignLeadModal';
 import { ListSkeleton } from '../../components/ui/LoadingSkeletons';
 
 export function LeadsPage() {
-  const { session } = useAuth();
+  const { session } = useAccess();
   const [leads, setLeads] = useState<any[]>([]);
   const [pagination, setPagination] = useState({ page: 1, totalPages: 1, total: 0 });
   const [search, setSearch] = useState(''); const [status, setStatus] = useState(''); const [priority, setPriority] = useState('');

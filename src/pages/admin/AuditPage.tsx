@@ -1,10 +1,10 @@
 import React, { useState, useEffect } from 'react';
-import { useAuth } from '../../core/auth/AuthProvider';
+import { useAccess } from '../../core/auth/AccessContext';
 import { Search } from 'lucide-react';
 import { ListSkeleton } from '../../components/ui/LoadingSkeletons';
 
 export function AuditPage() {
-  const { session } = useAuth();
+  const { session } = useAccess();
   const [logs, setLogs] = useState<any[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [page, setPage] = useState(1); const [totalPages,setTotalPages]=useState(1); const [action,setAction]=useState(''); const [severity,setSeverity]=useState('');
@@ -102,3 +102,4 @@ export function AuditPage() {
     </div>
   );
 }
+

@@ -1,12 +1,12 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { CheckCircle2, FileText, Plus } from 'lucide-react';
-import { useAuth } from '../../core/auth/AuthProvider';
+import { useAccess } from '../../core/auth/AccessContext';
 import { usePlatform } from '../../core/auth/PlatformAuthProvider';
 
 const money = new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' });
 
 export function ProposalsPage() {
-  const { session } = useAuth();
+  const { session } = useAccess();
   const { platformCan } = usePlatform();
   const [items, setItems] = useState<any[]>([]);
   const [leads, setLeads] = useState<any[]>([]);
@@ -72,3 +72,4 @@ export function ProposalsPage() {
     {items.length === 0 ? <div className="bg-white border rounded-2xl p-12 text-center"><FileText className="w-10 h-10 mx-auto text-[#B66E45]" /><p className="font-semibold mt-3">Nenhuma proposta</p></div> : <div className="bg-white border rounded-2xl overflow-x-auto"><table className="w-full text-sm"><thead className="bg-[#F6F5F2] text-left"><tr><th className="p-4">Proposta</th><th className="p-4">Lead</th><th className="p-4">Plano</th><th className="p-4">Valor</th><th className="p-4">Status</th><th className="p-4"></th></tr></thead><tbody>{items.map((item) => <tr key={item.id} className="border-t"><td className="p-4 font-semibold">#{item.proposal_number}</td><td className="p-4">{item.marketing_leads?.company}</td><td className="p-4">{item.billing_plans?.name}</td><td className="p-4">{money.format(item.amount_cents / 100)}</td><td className="p-4">{item.status}</td><td className="p-4 text-right">{item.status === 'pending_approval' && platformCan('platform.commercial.approve') && <button onClick={() => approve(item.id)} className="inline-flex gap-1 items-center text-emerald-700 font-semibold"><CheckCircle2 className="w-4 h-4" />Aprovar</button>}{item.status === 'approved' && platformCan('platform.commercial.manage') && <button onClick={() => createContract(item.id)} className="text-[#B66E45] font-semibold">Gerar contrato</button>}</td></tr>)}</tbody></table></div>}
   </div>;
 }
+

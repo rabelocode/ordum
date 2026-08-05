@@ -4,27 +4,31 @@ import {
   Search, Activity, ShieldCheck, Box, Server, GitMerge, AlertOctagon, WalletCards, Layers3,
   ClipboardList, HeartHandshake, Headphones, Scale, Target, Waypoints, KeyRound
 } from "lucide-react";
-import { PlatformAuthProvider, usePlatform } from "../../core/auth/PlatformAuthProvider";
-import { useAuth } from "../../core/auth/AuthProvider";
+import { useAccess } from "../../core/auth/AccessContext";
 import { PageShellSkeleton } from "../../components/ui/LoadingSkeletons";
 
 function AdminLayoutInner({ children, currentPath }: { children: React.ReactNode, currentPath: string }) {
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const [globalSearch, setGlobalSearch] = useState('');
   const [searchResults, setSearchResults] = useState<any[]>([]);
-  const { user, session, signOut, isLoading: isAuthLoading } = useAuth();
   const { 
-    isPlatformLoading, 
+    user, 
+    session, 
+    signOut, 
+    isLoading: isAuthLoading,
     isPlatformMember, 
     isPlatformSuspended, 
     platformMember, 
     platformRole, 
-    platformCan, 
+    hasPlatformPermission: platformCan, 
     memberTeams, 
-    tenantMemberships,
-    platformError,
-    reloadPlatformContext
-  } = usePlatform();
+    memberships: tenantMemberships, // tenantMemberships are in AccessContext
+    error: platformError,
+    refreshAccessContext: reloadPlatformContext
+  } = useAccess();
+  
+  // Note: tenantMemberships needs to be mapped differently or just from useAccess().memberships
+  const allMemberships = useAccess().memberships || [];
 
   useEffect(() => {
     setIsMobileMenuOpen(false);
@@ -56,7 +60,7 @@ function AdminLayoutInner({ children, currentPath }: { children: React.ReactNode
   };
 
   const handleGoToOrganization = () => {
-    if (tenantMemberships.length > 1) {
+    if (allMemberships.length > 1) {
       window.location.hash = "#/select-organization";
     } else {
       window.location.hash = "#/workspace";
@@ -64,7 +68,7 @@ function AdminLayoutInner({ children, currentPath }: { children: React.ReactNode
   };
 
   // 1. Loading State: show skeleton spinner without flicker of "Acesso Negado"
-  if (isAuthLoading || isPlatformLoading) {
+  if (isAuthLoading) {
     return <PageShellSkeleton />;
   }
 
@@ -137,7 +141,7 @@ function AdminLayoutInner({ children, currentPath }: { children: React.ReactNode
             Você não possui permissão para acessar o painel administrativo global da ORDUM.
           </p>
           <div className="space-y-2">
-            {tenantMemberships.length > 0 && (
+            {allMemberships.length > 0 && (
               <button 
                 onClick={handleGoToOrganization} 
                 className="w-full py-2.5 bg-[#B66E45] text-white rounded-xl text-xs font-bold hover:bg-[#A05C35] transition-colors"
@@ -303,9 +307,5 @@ function AdminLayoutInner({ children, currentPath }: { children: React.ReactNode
 }
 
 export function OrdumAdminLayout(props: { children: React.ReactNode, currentPath: string }) {
-  return (
-    <PlatformAuthProvider>
-      <AdminLayoutInner {...props} />
-    </PlatformAuthProvider>
-  );
+  return <AdminLayoutInner {...props} />;
 }

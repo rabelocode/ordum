@@ -1,10 +1,10 @@
 import React, { useState, useEffect } from 'react';
-import { useAuth } from '../../core/auth/AuthProvider';
+import { useAccess } from '../../core/auth/AccessContext';
 import { Server, Database, ShieldCheck, WalletCards } from 'lucide-react';
 import { MetricGridSkeleton } from '../../components/ui/LoadingSkeletons';
 
 export function SystemHealthPage() {
-  const { session } = useAuth();
+  const { session } = useAccess();
   const [health, setHealth] = useState<any>(null);
   const [isLoading, setIsLoading] = useState(true);
 
@@ -134,3 +134,4 @@ export function SystemHealthPage() {
     </div>
   );
 }
+

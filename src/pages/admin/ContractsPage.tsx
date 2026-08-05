@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { CheckCircle2, FileSignature, Plus, RefreshCw, Search, WalletCards, X } from 'lucide-react';
-import { useAuth } from '../../core/auth/AuthProvider';
+import { useAccess } from '../../core/auth/AccessContext';
 import { usePlatform } from '../../core/auth/PlatformAuthProvider';
 import { ListSkeleton } from '../../components/ui/LoadingSkeletons';
 
@@ -13,7 +13,7 @@ const STATUS_LABEL: Record<string, string> = {
 const money = new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' });
 
 export function ContractsPage() {
-  const { session } = useAuth();
+  const { session } = useAccess();
   const { platformCan } = usePlatform();
   const [contracts, setContracts] = useState<any[]>([]);
   const [leads, setLeads] = useState<any[]>([]);
@@ -148,3 +148,4 @@ export function ContractsPage() {
     </div>
   );
 }
+

@@ -1,12 +1,11 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { AlertTriangle, CreditCard, RefreshCw, Webhook } from 'lucide-react';
-import { useAuth } from '../../core/auth/AuthProvider';
-import { usePlatform } from '../../core/auth/PlatformAuthProvider';
+import { useAccess } from '../../core/auth/AccessContext';
 import { PageShellSkeleton } from '../../components/ui/LoadingSkeletons';
 
 const money=(value:number)=>new Intl.NumberFormat('pt-BR',{style:'currency',currency:'BRL'}).format((value||0)/100);
 export function BillingPage() {
-  const { session }=useAuth(); const { platformCan,platformRole }=usePlatform();
+  const { session, hasPlatformPermission: platformCan, platformRole } = useAccess();
   const [overview,setOverview]=useState<any>(null); const [events,setEvents]=useState<any[]>([]); const [records,setRecords]=useState<any>({subscriptions:{items:[]},payments:{items:[]}}); const [loading,setLoading]=useState(true); const [error,setError]=useState<string|null>(null); const [success,setSuccess]=useState<string|null>(null);
   const request=useCallback(async(path:string,init?:RequestInit)=>{const response=await fetch(path,{...init,headers:{'Content-Type':'application/json',Authorization:`Bearer ${session?.access_token}`,...init?.headers}});const data=await response.json().catch(()=>({}));if(!response.ok)throw new Error(data.error||'Falha na requisição.');return data;},[session]);
   const load=useCallback(async()=>{if(!session)return;setLoading(true);setError(null);try{const [o,r]=await Promise.all([request('/api/admin/billing/overview'),request('/api/admin/billing/records?page=1&pageSize=25')]);setOverview(o);setRecords(r);if(platformCan('platform.billing.webhooks.manage')){const queue=await request('/api/admin/billing/webhooks?page=1&pageSize=25');setEvents(queue.items);}}catch(e){setError(e instanceof Error?e.message:'Falha ao carregar financeiro.');}finally{setLoading(false);}},[platformCan,request,session]); useEffect(()=>{load();},[load]);
@@ -19,3 +18,4 @@ export function BillingPage() {
     {platformCan('platform.billing.webhooks.manage')&&<section className="bg-white rounded-2xl border overflow-hidden"><div className="p-5 border-b"><h2 className="font-bold">Fila de webhooks</h2><p className="text-xs text-gray-500">O payload bruto permanece somente no backend.</p></div>{!events.length?<div className="p-8 text-center text-sm text-gray-500">Nenhum evento recebido.</div>:<div className="overflow-x-auto"><table className="w-full text-sm"><thead className="bg-[#F6F5F2] text-left"><tr><th className="p-3">Evento</th><th className="p-3">Status</th><th className="p-3">Recebido</th><th className="p-3">Tentativas</th><th className="p-3"></th></tr></thead><tbody>{events.map((event:any)=><tr key={event.id} className="border-t"><td className="p-3 font-medium">{event.event_type}</td><td className="p-3">{event.status}</td><td className="p-3">{new Date(event.received_at).toLocaleString('pt-BR')}</td><td className="p-3">{event.attempts}</td><td className="p-3 text-right">{event.status==='failed'&&<button onClick={()=>action(`/api/admin/billing/webhooks/${event.id}/reprocess`)} className="text-[#B66E45] font-semibold">Reprocessar</button>}</td></tr>)}</tbody></table></div>}</section>}
   </div>;
 }
+
