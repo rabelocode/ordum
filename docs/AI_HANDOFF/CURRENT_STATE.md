@@ -1,6 +1,6 @@
 # Estado Atual (CURRENT STATE)
 
-- **Commit de referência:** aed8d4f138bceee9aebba40d633416ae6f9a2635
+- **Commit de referência:** 2e6a310 (Pós-Cherry-pick base)
 
 ## Módulos operacionais
 - NÃO CONFIRMADO (Embora a pipeline SPA front-end compile, os E2E não atestam fluxos integrais operacionais em todas as pontas). A base de React/Vite com Auth load inicial existe e funciona.
