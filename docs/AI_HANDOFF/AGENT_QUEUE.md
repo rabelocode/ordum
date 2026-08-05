@@ -2,11 +2,11 @@
 
 ## Current Assignment
 
-Owner: antigravity_frontend
-Status: implementing
+Owner: chatgpt_backend
+Status: ready_for_review
 Created by: chatgpt_backend
 Branch: feat/admin-ordum-operations
-Reviewed Head: c96b45c564457369382f0666cfb9510efc44612e
+Head: 51abd2654c609650db94ff8a3ebcde59adcdced0
 
 ## Requested Action
 
