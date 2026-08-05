@@ -1,16 +1,14 @@
 import React, { useState, useEffect } from 'react';
-import { ArrowLeft, Loader2, Save } from 'lucide-react';
+import { ArrowLeft, Loader2, Save, Ban, PlayCircle } from 'lucide-react';
 import { useAccess } from '../../core/auth/AccessContext';
-import { AssignLeadModal } from '../../components/admin/AssignLeadModal'; // We can reuse it for client assignment
-import { usePlatform } from '../../core/auth/PlatformAuthProvider';
+import { AssignLeadModal } from '../../components/admin/AssignLeadModal';
 import { DetailSkeleton } from '../../components/ui/LoadingSkeletons';
 
 export function CompanyDetailPage({ tenantId }: { tenantId: string }) {
-  const { session } = useAccess();
-  const { platformRole } = usePlatform();
+  const { session, hasPlatformPermission } = useAccess();
   const [tenant, setTenant] = useState<any>(null);
   const [activeTab, setActiveTab] = useState("visoogeral");
-  const [isSaving, setIsSaving] = useState(false);
+  const [isActioning, setIsActioning] = useState(false);
   const [solutionKeys, setSolutionKeys] = useState<string[]>([]);
   const [entitlements, setEntitlements] = useState<any>(null);
   const [isAssignModalOpen, setIsAssignModalOpen] = useState(false);
@@ -40,14 +38,11 @@ export function CompanyDetailPage({ tenantId }: { tenantId: string }) {
   }, [session, tenantId]);
 
   const handleSaveSolutions = async () => {
-    setIsSaving(true);
+    setIsActioning(true);
     try {
       const response = await fetch(`/api/admin/clients/${tenantId}/solutions`, {
         method: 'PUT',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${session?.access_token}`
-        },
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${session?.access_token}` },
         body: JSON.stringify({ solutionKeys })
       });
       if (response.ok) {
@@ -56,11 +51,22 @@ export function CompanyDetailPage({ tenantId }: { tenantId: string }) {
       } else {
         alert("Erro ao atualizar soluções.");
       }
-    } catch (e) {
-      console.error(e);
-    } finally {
-      setIsSaving(false);
-    }
+    } catch (e) { console.error(e); } finally { setIsActioning(false); }
+  };
+
+  const handleStatusChange = async (action: 'suspend' | 'reactivate') => {
+    const reason = prompt(`Motivo da ${action === 'suspend' ? 'suspensão' : 'reativação'}:`);
+    if (!reason || reason.trim().length < 5) return alert('Motivo curto demais.');
+    setIsActioning(true);
+    try {
+      const resp = await fetch(`/api/admin/clients/${tenantId}/${action}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${session?.access_token}` },
+        body: JSON.stringify({ reason: reason.trim() })
+      });
+      if (!resp.ok) alert((await resp.json().catch(()=>({}))).error || 'Erro.');
+      else { alert('Ação concluída com sucesso!'); loadTenant(); }
+    } finally { setIsActioning(false); }
   };
 
   const toggleSolution = (key: string) => {
@@ -99,12 +105,22 @@ export function CompanyDetailPage({ tenantId }: { tenantId: string }) {
               </div>
             </div>
             
-            <button 
-              onClick={() => setIsAssignModalOpen(true)}
-              className="px-4 py-2 bg-gray-100 text-gray-700 text-sm font-bold rounded-xl hover:bg-gray-200"
-            >
-              Transferir / Atribuir
-            </button>
+            <div className="flex gap-2">
+              {tenant.status === 'active' && hasPlatformPermission('platform.clients.manage') && <button disabled={isActioning} onClick={() => handleStatusChange('suspend')} className="flex items-center gap-2 px-4 py-2 bg-red-100 text-red-700 text-sm font-bold rounded-xl hover:bg-red-200"><Ban className="w-4 h-4"/> Suspender</button>}
+              {tenant.status === 'suspended' && hasPlatformPermission('platform.clients.manage') && <button disabled={isActioning} onClick={() => handleStatusChange('reactivate')} className="flex items-center gap-2 px-4 py-2 bg-emerald-100 text-emerald-700 text-sm font-bold rounded-xl hover:bg-emerald-200"><PlayCircle className="w-4 h-4"/> Reativar</button>}
+              <button 
+                onClick={() => setIsAssignModalOpen(true)}
+                className="px-4 py-2 bg-gray-100 text-gray-700 text-sm font-bold rounded-xl hover:bg-gray-200"
+              >
+                Transferir
+              </button>
+              <a 
+                href={`#/admin/operacoes?tenant=${tenant.id}`}
+                className="px-4 py-2 bg-[#B66E45] text-white text-sm font-bold rounded-xl hover:bg-[#A05C38]"
+              >
+                Abrir Onboarding
+              </a>
+            </div>
           </div>
         </div>
         
@@ -156,7 +172,7 @@ export function CompanyDetailPage({ tenantId }: { tenantId: string }) {
                 ].map(sol => (
                   <label key={sol.key} className="flex items-center gap-3 p-4 bg-white rounded-xl border border-gray-200 cursor-pointer hover:bg-gray-50 transition-colors">
                     <input
-                      disabled={platformRole?.key !== 'admin'}
+                      disabled={!hasPlatformPermission('platform.solutions.manage')}
                       type="checkbox" 
                       className="w-5 h-5 text-[#B66E45] border-gray-300 rounded focus:ring-[#B66E45]"
                       checked={solutionKeys.includes(sol.key)}
@@ -170,13 +186,13 @@ export function CompanyDetailPage({ tenantId }: { tenantId: string }) {
                 ))}
               </div>
               
-              {platformRole?.key === 'admin' && <div className="flex justify-end pt-4">
+              {hasPlatformPermission('platform.solutions.manage') && <div className="flex justify-end pt-4">
                 <button 
                   onClick={handleSaveSolutions}
-                  disabled={isSaving}
+                  disabled={isActioning}
                   className="flex items-center gap-2 px-6 py-2.5 text-sm font-medium text-white bg-[#B66E45] rounded-xl hover:bg-[#a05e38] disabled:opacity-50 transition-colors shadow-sm"
                 >
-                  {isSaving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
+                  {isActioning ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
                   Atualizar Soluções
                 </button>
               </div>}

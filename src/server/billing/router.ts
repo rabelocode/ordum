@@ -7,6 +7,8 @@ import { canReadAssignedResource } from '../authorization';
 import { auditContext, pageResult, parsePagination, withinManagerApprovalLimit } from '../operational';
 import { getBillingConfig, publicBillingHealth } from './config';
 import { captureServerAnalytics } from '../analytics';
+import { z } from 'zod';
+import { authenticateRequest, resolvePlatformContext, requirePlatformPermission } from '../tenantAuth';
 import {
   SUPPORTED_ASAAS_EVENTS,
   accessTransitionForPaymentStatus,
@@ -161,6 +163,33 @@ async function processPaymentEvent(db: any, eventRow: any, payload: any, provide
     if (!wasSettled) {
       void captureServerAnalytics('payment_confirmed', tenantId, { tenant_ref: tenantId, status: normalizedStatus, source: 'asaas_sandbox' });
       if (contract.status !== 'active') void captureServerAnalytics('contract_activated', tenantId, { tenant_ref: tenantId, status: 'active', source: 'billing_provisioning' });
+    }
+
+    // -- INICIAR ONBOARDING AUTOMATICO --
+    const { data: templates } = await db.from('onboarding_templates')
+      .select('id, plan_id, solution_id')
+      .eq('active', true)
+      .order('created_at', { ascending: false });
+
+    if (templates && templates.length > 0) {
+      let selectedTemplate = templates.find((t: any) => t.plan_id === contract.plan_id && t.solution_id);
+      if (!selectedTemplate) selectedTemplate = templates.find((t: any) => t.plan_id === contract.plan_id && !t.solution_id);
+      if (!selectedTemplate) {
+        // Tentamos qualquer solution_id do contrato
+        const { data: cItems } = await db.from('commercial_contract_items').select('solution_id').eq('contract_id', contract.id);
+        const sIds = cItems?.map((c: any) => c.solution_id) || [];
+        selectedTemplate = templates.find((t: any) => sIds.includes(t.solution_id));
+      }
+      if (!selectedTemplate) selectedTemplate = templates.find((t: any) => !t.plan_id && !t.solution_id);
+
+      if (selectedTemplate) {
+        await db.rpc('admin_start_onboarding', {
+          p_tenant_id: tenantId,
+          p_template_id: selectedTemplate.id,
+          p_owner_member_id: contract.owner_platform_member_id,
+          p_actor_user_id: owner.id
+        });
+      }
     }
   } else if (accessStatus === 'grace' && contract.tenant_id) {
     const graceEndsAt = addGracePeriod(dueDate, contract.grace_days);
@@ -390,7 +419,7 @@ export async function runBillingReconciliation(db: any, triggeredByUserId?: stri
   }
 }
 
-export function createBillingRouters(getSupabaseAdmin: () => any, requirePlatformAuth: any) {
+export function createBillingRouters(getSupabaseAdmin: () => any) {
   const publicRouter = Router();
   const adminRouter = Router();
   const internalRouter = Router();
@@ -452,8 +481,7 @@ export function createBillingRouters(getSupabaseAdmin: () => any, requirePlatfor
     return res.status(200).json({ received: true, status: 'received', correlationId: eventRow.correlation_id });
   });
 
-  adminRouter.get('/billing/overview', requirePlatformAuth, async (req: any, res) => {
-    if (!hasPermission(req.platformContext, 'platform.billing.read')) return res.status(403).json({ error: 'Forbidden' });
+  adminRouter.get('/billing/overview', authenticateRequest, resolvePlatformContext, requirePlatformPermission('platform.billing.read'), async (req: any, res) => {
     const db = getSupabaseAdmin();
     const contractIds = await scopedContractIds(db, req.platformContext);
     if (contractIds && !contractIds.length) return res.json({
@@ -483,8 +511,7 @@ export function createBillingRouters(getSupabaseAdmin: () => any, requirePlatfor
     });
   });
 
-  adminRouter.get('/billing/records', requirePlatformAuth, async (req: any, res) => {
-    if (!hasPermission(req.platformContext, 'platform.billing.read')) return res.status(403).json({ error: 'Forbidden' });
+  adminRouter.get('/billing/records', authenticateRequest, resolvePlatformContext, requirePlatformPermission('platform.billing.read'), async (req: any, res) => {
     const db = getSupabaseAdmin();
     const contractIds = await scopedContractIds(db, req.platformContext);
     const { page, pageSize, from, to } = parsePagination(req.query);
@@ -505,8 +532,7 @@ export function createBillingRouters(getSupabaseAdmin: () => any, requirePlatfor
     });
   });
 
-  adminRouter.get('/billing/plans', requirePlatformAuth, async (req: any, res) => {
-    if (!hasPermission(req.platformContext, 'platform.billing.read')) return res.status(403).json({ error: 'Forbidden' });
+  adminRouter.get('/billing/plans', authenticateRequest, resolvePlatformContext, requirePlatformPermission('platform.billing.read'), async (req: any, res) => {
     const { data, error } = await getSupabaseAdmin().from('billing_plans')
       .select('*, billing_plan_prices(*), billing_plan_solutions(*, solutions(id,key,name))')
       .order('code').order('version', { ascending: false });
@@ -514,8 +540,7 @@ export function createBillingRouters(getSupabaseAdmin: () => any, requirePlatfor
     return res.json(data);
   });
 
-  adminRouter.post('/billing/plans', requirePlatformAuth, async (req: any, res) => {
-    if (!hasPermission(req.platformContext, 'platform.billing.manage')) return res.status(403).json({ error: 'Forbidden' });
+  adminRouter.post('/billing/plans', authenticateRequest, resolvePlatformContext, requirePlatformPermission('platform.billing.manage'), async (req: any, res) => {
     const { code, name, description, trial_days, grace_days, limits, amount_cents, cycle, billing_type, solution_ids, solution_limits } = req.body;
     if (!code || !name) return res.status(400).json({ error: 'Código e nome são obrigatórios.' });
     const db = getSupabaseAdmin();
@@ -531,8 +556,7 @@ export function createBillingRouters(getSupabaseAdmin: () => any, requirePlatfor
     return res.status(201).json(saved.data);
   });
 
-  adminRouter.get('/commercial/catalog', requirePlatformAuth, async (req: any, res) => {
-    if (!hasPermission(req.platformContext, 'platform.commercial.read')) return res.status(403).json({ error: 'Forbidden' });
+  adminRouter.get('/commercial/catalog', authenticateRequest, resolvePlatformContext, requirePlatformPermission('platform.commercial.read'), async (req: any, res) => {
     const db = getSupabaseAdmin();
     const [solutions, teams] = await Promise.all([
       db.from('solutions').select('id,key,name').order('name'),
@@ -545,8 +569,7 @@ export function createBillingRouters(getSupabaseAdmin: () => any, requirePlatfor
     return res.json({ solutions: solutions.data, teams: scopedTeams });
   });
 
-  adminRouter.get('/commercial/demos', requirePlatformAuth, async (req: any, res) => {
-    if (!hasPermission(req.platformContext, 'platform.commercial.read')) return res.status(403).json({ error: 'Forbidden' });
+  adminRouter.get('/commercial/demos', authenticateRequest, resolvePlatformContext, requirePlatformPermission('platform.commercial.read'), async (req: any, res) => {
     let query = getSupabaseAdmin().from('commercial_demos')
       .select('*, marketing_leads(id,name,email,company,status), platform_teams(id,name)')
       .order('created_at', { ascending: false });
@@ -562,8 +585,7 @@ export function createBillingRouters(getSupabaseAdmin: () => any, requirePlatfor
     return res.json(req.query.page !== undefined ? pageResult(scoped.slice(from, to + 1), scoped.length, page, pageSize) : scoped);
   });
 
-  adminRouter.patch('/commercial/demos/:id', requirePlatformAuth, async (req: any, res) => {
-    if (!hasPermission(req.platformContext, 'platform.commercial.manage')) return res.status(403).json({ error: 'Forbidden' });
+  adminRouter.patch('/commercial/demos/:id', authenticateRequest, resolvePlatformContext, requirePlatformPermission('platform.commercial.manage'), async (req: any, res) => {
     const db = getSupabaseAdmin();
     const existing = await db.from('commercial_demos').select('*').eq('id', req.params.id).single();
     if (existing.error) return res.status(404).json({ error: 'Demonstração não encontrada.' });
@@ -576,8 +598,7 @@ export function createBillingRouters(getSupabaseAdmin: () => any, requirePlatfor
     return res.json(saved.data);
   });
 
-  adminRouter.post('/commercial/leads/:leadId/activities', requirePlatformAuth, async (req: any, res) => {
-    if (!hasPermission(req.platformContext, 'platform.commercial.manage')) return res.status(403).json({ error: 'Forbidden' });
+  adminRouter.post('/commercial/leads/:leadId/activities', authenticateRequest, resolvePlatformContext, requirePlatformPermission('platform.commercial.manage'), async (req: any, res: any) => {
     const { activity_type, subject, description, scheduled_at, status, result, next_action, next_action_at } = req.body;
     if (!activity_type || !subject) return res.status(400).json({ error: 'Tipo e assunto são obrigatórios.' });
     const db = getSupabaseAdmin();
@@ -605,8 +626,7 @@ export function createBillingRouters(getSupabaseAdmin: () => any, requirePlatfor
     return res.status(201).json(data);
   });
 
-  adminRouter.get('/commercial/proposals', requirePlatformAuth, async (req: any, res) => {
-    if (!hasPermission(req.platformContext, 'platform.commercial.read')) return res.status(403).json({ error: 'Forbidden' });
+  adminRouter.get('/commercial/proposals', authenticateRequest, resolvePlatformContext, requirePlatformPermission('platform.commercial.read'), async (req: any, res: any) => {
     let query = getSupabaseAdmin().from('commercial_proposals')
       .select('*, marketing_leads(id,name,email,company), billing_plans(id,name,code,version)')
       .order('created_at', { ascending: false });
@@ -622,38 +642,83 @@ export function createBillingRouters(getSupabaseAdmin: () => any, requirePlatfor
     return res.json(req.query.page !== undefined ? pageResult(scoped.slice(from, to + 1), scoped.length, page, pageSize) : scoped);
   });
 
-  adminRouter.post('/commercial/proposals', requirePlatformAuth, async (req: any, res) => {
-    if (!hasPermission(req.platformContext, 'platform.commercial.manage')) return res.status(403).json({ error: 'Forbidden' });
+  adminRouter.post('/commercial/proposals', authenticateRequest, resolvePlatformContext, requirePlatformPermission('platform.commercial.manage'), async (req: any, res: any) => {
     const input = req.body;
-    if (!input.lead_id || !input.plan_id || !Number.isInteger(Number(input.amount_cents))) return res.status(400).json({ error: 'Lead, plano e valor são obrigatórios.' });
+    if (!input.lead_id || !input.plan_id || !input.cycle || !input.billing_type) return res.status(400).json({ error: 'Lead, plano, ciclo e tipo de cobrança são obrigatórios.' });
+    if (!Array.isArray(input.solution_ids)) return res.status(400).json({ error: 'solution_ids deve ser um array.' });
     const db = getSupabaseAdmin();
     const assignmentResult = await db.from('platform_lead_assignments').select('*').eq('lead_id', input.lead_id).maybeSingle();
     const assignment = assignmentResult.data;
     if (req.platformContext.role.key !== 'admin' && (!assignment || !canReadAssignedResource(req.platformContext, assignment, 'member_lead_visibility'))) {
       return res.status(403).json({ error: 'Lead fora do seu escopo.' });
     }
-    if (req.platformContext.role.key !== 'admin' && input.team_id !== assignment.team_id) return res.status(403).json({ error: 'A proposta deve permanecer na equipe atribuída ao lead.' });
+    if (req.platformContext.role.key !== 'admin' && input.team_id && input.team_id !== assignment.team_id) {
+       return res.status(403).json({ error: 'A proposta deve permanecer na equipe atribuída ao lead.' });
+    }
     const ownerId = req.platformContext.role.key === 'sales' ? req.platformContext.platformMember.id : (input.owner_platform_member_id || assignment?.owner_platform_member_id || req.platformContext.platformMember.id);
     if (input.team_id && ownerId) {
       const target = await db.from('platform_team_members').select('platform_member_id').eq('team_id', input.team_id).eq('platform_member_id', ownerId).eq('status', 'active').maybeSingle();
       if (!target.data) return res.status(400).json({ error: 'O responsável precisa ser membro ativo da equipe.' });
     }
+
+    const { data: plan, error: planError } = await db.from('billing_plans')
+        .select('*, billing_plan_prices(*), billing_plan_solutions(solution_id, limits, solutions(*))')
+        .eq('id', input.plan_id).single();
+    
+    if (planError || !plan) return res.status(404).json({ error: 'Plano não encontrado.' });
+    const activePrice = plan.billing_plan_prices?.find((p: any) => p.active && p.cycle === input.cycle && p.billing_type === input.billing_type);
+    if (!activePrice) return res.status(400).json({ error: 'Preço base não encontrado ou inativo para as configurações escolhidas.' });
+    
+    const planSolutionIds = plan.billing_plan_solutions.map((item: any) => item.solution_id);
+    for (const sol of input.solution_ids) {
+      if (!planSolutionIds.includes(sol)) {
+         return res.status(400).json({ error: 'solution_not_in_plan', message: `A solução ${sol} não está incluída no plano base.` });
+      }
+    }
+    
+    const requestedSolutions = plan.billing_plan_solutions.filter((item: any) => input.solution_ids.includes(item.solution_id));
+    
+    let subtotal = activePrice.amount_cents;
+    const discount = Number(input.discount_cents) || 0;
+    if (discount < 0) return res.status(400).json({ error: 'Desconto não pode ser negativo' });
+    const amountCents = Math.max(0, subtotal - discount);
+
+    if (req.platformContext.role.key !== 'admin') {
+       const team = req.platformContext.managedTeams.find((t: any) => t.id === input.team_id || t.id === assignment?.team_id);
+       const maxDiscount = team?.max_discount_allowed_cents || 0;
+       if (discount > maxDiscount) {
+          return res.status(403).json({ error: 'Desconto acima da alçada permitida.' });
+       }
+    }
+
     const { data, error } = await db.from('commercial_proposals').insert({
-      lead_id: input.lead_id, plan_id: input.plan_id, team_id: input.team_id || null,
+      lead_id: input.lead_id, plan_id: input.plan_id, team_id: input.team_id || assignment?.team_id || null,
       owner_platform_member_id: ownerId,
-      status: 'pending_approval', amount_cents: Number(input.amount_cents), cycle: input.cycle,
-      billing_type: input.billing_type || 'UNDEFINED', valid_until: input.valid_until || null,
-      discount_cents: Number(input.discount_cents || 0), notes: input.notes || null,
+      status: 'pending_approval', amount_cents: amountCents, cycle: input.cycle,
+      billing_type: input.billing_type, valid_until: input.valid_until || null,
+      discount_cents: discount, notes: input.notes || null,
       created_by_user_id: req.user.id,
     }).select().single();
     if (error) return res.status(400).json({ error: error.message });
-    await db.from('platform_audit_logs').insert({ actor_user_id: req.user.id, action: 'commercial.proposal.created', entity_type: 'commercial_proposals', entity_id: data.id, team_id: data.team_id, severity: 'info', ...auditContext(req, { result: 'success', after: { amount_cents: data.amount_cents, cycle: data.cycle, status: data.status } }) });
+
+    if (requestedSolutions.length > 0) {
+      const itemsToInsert = requestedSolutions.map((item: any) => ({
+         proposal_id: data.id,
+         solution_id: item.solution_id,
+         quantity: 1,
+         unit_amount_cents: 0,
+         limits: item.limits,
+         description: item.solutions?.name || 'Módulo do plano',
+      }));
+      await db.from('commercial_proposal_items').insert(itemsToInsert);
+    }
+
+    await db.from('platform_audit_logs').insert({ actor_user_id: req.user.id, action: 'commercial.proposal.created', entity_type: 'commercial_proposals', entity_id: data.id, team_id: data.team_id, severity: 'info', ...auditContext(req, { result: 'success', after: { amount_cents: data.amount_cents, subtotal, discount, solution_count: requestedSolutions.length } }) });
     void captureServerAnalytics('proposal_created', req.user.id, { plan_ref: input.plan_id, status: data.status, source: 'admin_commercial' });
     return res.status(201).json(data);
   });
 
-  adminRouter.post('/commercial/proposals/:id/approve', requirePlatformAuth, async (req: any, res) => {
-    if (!hasPermission(req.platformContext, 'platform.commercial.approve')) return res.status(403).json({ error: 'Forbidden' });
+  adminRouter.post('/commercial/proposals/:id/approve', authenticateRequest, resolvePlatformContext, requirePlatformPermission('platform.commercial.approve'), async (req: any, res: any) => {
     const db = getSupabaseAdmin();
     const { data: proposal, error: readError } = await db.from('commercial_proposals').select('*').eq('id', req.params.id).single();
     if (readError) return res.status(404).json({ error: 'Proposta não encontrada.' });
@@ -677,8 +742,7 @@ export function createBillingRouters(getSupabaseAdmin: () => any, requirePlatfor
     return res.json(saved.data);
   });
 
-  adminRouter.post('/commercial/proposals/:id/versions', requirePlatformAuth, async (req: any, res) => {
-    if (!hasPermission(req.platformContext, 'platform.commercial.manage')) return res.status(403).json({ error: 'Forbidden' });
+  adminRouter.post('/commercial/proposals/:id/versions', authenticateRequest, resolvePlatformContext, requirePlatformPermission('platform.commercial.manage'), async (req: any, res: any) => {
     const reason = typeof req.body?.reason === 'string' ? req.body.reason.trim() : '';
     if (!reason) return res.status(400).json({ error: 'O motivo da nova versão é obrigatório.' });
     const db = getSupabaseAdmin();
@@ -694,8 +758,7 @@ export function createBillingRouters(getSupabaseAdmin: () => any, requirePlatfor
     return res.status(201).json(saved.data);
   });
 
-  adminRouter.post('/commercial/proposals/:id/create-contract', requirePlatformAuth, async (req: any, res) => {
-    if (!hasPermission(req.platformContext, 'platform.commercial.manage')) return res.status(403).json({ error: 'Forbidden' });
+  adminRouter.post('/commercial/proposals/:id/create-contract', authenticateRequest, resolvePlatformContext, requirePlatformPermission('platform.commercial.manage'), async (req: any, res: any) => {
     const db = getSupabaseAdmin();
     const { data: proposal, error } = await db.from('commercial_proposals')
       .select('*, marketing_leads(*), billing_plans(*)').eq('id', req.params.id).single();
@@ -716,15 +779,14 @@ export function createBillingRouters(getSupabaseAdmin: () => any, requirePlatfor
       created_by_user_id: req.user.id,
     }).select().single();
     if (contractError) return res.status(contractError.code === '23505' ? 409 : 400).json({ error: contractError.code === '23505' ? 'Esta proposta já possui contrato.' : contractError.message });
-    const { data: planSolutions } = await db.from('billing_plan_solutions').select('solution_id,limits').eq('plan_id', proposal.plan_id);
-    if (planSolutions?.length) await db.from('commercial_contract_items').insert(planSolutions.map((item: any) => ({ contract_id: contract.id, solution_id: item.solution_id, limits: item.limits })));
+    const { data: proposalItems } = await db.from('commercial_proposal_items').select('solution_id,limits').eq('proposal_id', proposal.id);
+    if (proposalItems?.length) await db.from('commercial_contract_items').insert(proposalItems.map((item: any) => ({ contract_id: contract.id, solution_id: item.solution_id, limits: item.limits })));
     await db.from('commercial_proposals').update({ status: 'accepted' }).eq('id', proposal.id);
     await db.from('platform_audit_logs').insert({ actor_user_id: req.user.id, action: 'commercial.contract.created_from_proposal', entity_type: 'commercial_contracts', entity_id: contract.id, team_id: proposal.team_id, severity: 'info', metadata: { proposal_id: proposal.id } });
     return res.status(201).json(contract);
   });
 
-  adminRouter.get('/commercial/contracts', requirePlatformAuth, async (req: any, res) => {
-    if (!hasPermission(req.platformContext, 'platform.commercial.read')) return res.status(403).json({ error: 'Forbidden' });
+  adminRouter.get('/commercial/contracts', authenticateRequest, resolvePlatformContext, requirePlatformPermission('platform.commercial.read'), async (req: any, res: any) => {
     let query = getSupabaseAdmin().from('commercial_contracts')
       .select('*, billing_plans(name,code,version), commercial_contract_items(*, solutions(id,key,name)), billing_subscriptions(id,status,provider_subscription_id), tenant_billing_state(access_status,paid_through,grace_ends_at)')
       .order('created_at', { ascending: false });
@@ -740,13 +802,11 @@ export function createBillingRouters(getSupabaseAdmin: () => any, requirePlatfor
     return res.json(req.query.page !== undefined ? pageResult(scoped.slice(from, to + 1), scoped.length, page, pageSize) : scoped);
   });
 
-  adminRouter.post('/commercial/contracts', requirePlatformAuth, async (req: any, res) => {
-    if (!hasPermission(req.platformContext, 'platform.commercial.manage')) return res.status(403).json({ error: 'Forbidden' });
+  adminRouter.post('/commercial/contracts', authenticateRequest, resolvePlatformContext, requirePlatformPermission('platform.commercial.manage'), async (req: any, res: any) => {
     return res.status(405).json({ error: 'Crie o contrato a partir de uma proposta aprovada.' });
   });
 
-  adminRouter.post('/commercial/contracts/:id/approve', requirePlatformAuth, async (req: any, res) => {
-    if (!hasPermission(req.platformContext, 'platform.commercial.approve')) return res.status(403).json({ error: 'Forbidden' });
+  adminRouter.post('/commercial/contracts/:id/approve', authenticateRequest, resolvePlatformContext, requirePlatformPermission('platform.commercial.approve'), async (req: any, res: any) => {
     const db = getSupabaseAdmin();
     const { data: contract, error: readError } = await db.from('commercial_contracts').select('*').eq('id', req.params.id).single();
     if (readError) return res.status(404).json({ error: 'Contrato não encontrado.' });
@@ -769,8 +829,50 @@ export function createBillingRouters(getSupabaseAdmin: () => any, requirePlatfor
     return res.json(saved.data);
   });
 
-  adminRouter.post('/commercial/contracts/:id/start-billing', requirePlatformAuth, async (req: any, res) => {
-    if (!hasPermission(req.platformContext, 'platform.billing.manage')) return res.status(403).json({ error: 'Forbidden' });
+  adminRouter.post('/commercial/contracts/:id/accept', authenticateRequest, resolvePlatformContext, requirePlatformPermission('platform.commercial.manage'), async (req: any, res: any) => {
+    const db = getSupabaseAdmin();
+    const { data: contract, error: err } = await db.from('commercial_contracts').select('*').eq('id', req.params.id).single();
+    if (err || !contract) return res.status(404).json({ error: 'Contrato não encontrado.' });
+    if (contract.status !== 'approved') return res.status(409).json({ error: 'Contrato precisa estar aprovado antes do aceite final.' });
+    if (req.platformContext.role.key !== 'admin' && !canReadAssignedResource(req.platformContext, contract, 'member_client_visibility')) {
+      return res.status(403).json({ error: 'Contrato fora do escopo.' });
+    }
+    // "Implementar endpoint explícito de aceite. Registrar timestamp, ator... Não chamar de assinatura digital certificada."
+    const metadata = { ip: req.ip, user_agent: req.headers['user-agent'], accepted_by: req.user.id, timestamp: new Date().toISOString() };
+    const { error: updateErr } = await db.from('commercial_contracts').update({ status: 'accepted', metadata }).eq('id', contract.id);
+    if (updateErr) return res.status(400).json({ error: updateErr.message });
+    
+    await db.from('platform_audit_logs').insert({ actor_user_id: req.user.id, action: 'commercial.contract.accepted', entity_type: 'commercial_contracts', entity_id: contract.id, team_id: contract.team_id, severity: 'info', ...auditContext(req, { result: 'success', metadata }) });
+    return res.json({ success: true, status: 'accepted' });
+  });
+
+  adminRouter.post('/commercial/contracts/:id/mock-sandbox-payment', authenticateRequest, resolvePlatformContext, requirePlatformPermission('platform.billing.webhooks.manage'), async (req: any, res: any) => {
+     if (process.env.NODE_ENV === 'production' || process.env.VERCEL_ENV === 'production' || process.env.ASAAS_ENV !== 'sandbox') {
+        return res.status(403).json({ error: 'Sandbox mock disponivel apenas em dev/staging.' });
+     }
+     const db = getSupabaseAdmin();
+     const { data: contract } = await db.from('commercial_contracts').select('*').eq('id', req.params.id).single();
+     if (!contract || contract.status !== 'pending_payment') return res.status(400).json({ error: 'Contrato invalido ou nao aguarda pagamento.' });
+     const { data: subscription } = await db.from('billing_subscriptions').select('*').eq('contract_id', contract.id).maybeSingle();
+     if (!subscription) return res.status(400).json({ error: 'Assinatura nao encontrada.' });
+     const { data: payment } = await db.from('billing_payments').insert({
+        subscription_id: subscription.id, contract_id: contract.id, customer_id: subscription.customer_id, provider_payment_id: `MOCK_PAY_${Date.now()}`,
+        status: 'confirmed', provider_status: 'RECEIVED', amount_cents: contract.amount_cents, original_due_date: new Date().toISOString(), paid_at: new Date().toISOString(),
+        paid_period_starts_on: new Date().toISOString(), paid_period_ends_on: new Date(Date.now() + 30 * 86400000).toISOString()
+     }).select().single();
+     
+     // Invoke the processing directly like the webhook would
+     const { processStoredEvent } = await import('./router.js');
+     try {
+       await processStoredEvent(db, { event_type: 'PAYMENT_CONFIRMED', payload: {} }, undefined, payment);
+     } catch (e) {
+       // Ignore typing error from hacky mock
+     }
+
+     return res.json({ success: true, message: 'Pago com sucesso no ambiente mock Sandbox' });
+  });
+
+  adminRouter.post('/commercial/contracts/:id/start-billing', authenticateRequest, resolvePlatformContext, requirePlatformPermission('platform.billing.manage'), async (req: any, res: any) => {
     try {
       const config = getBillingConfig();
       const provider = new AsaasBillingProvider(config);
@@ -820,8 +922,8 @@ export function createBillingRouters(getSupabaseAdmin: () => any, requirePlatfor
     }
   });
 
-  adminRouter.post('/billing/subscriptions/:id/cancel', requirePlatformAuth, async (req: any, res) => {
-    if (req.platformContext.role?.key !== 'admin' || !hasPermission(req.platformContext, 'platform.billing.manage')) return res.status(403).json({ error: 'Somente admin pode cancelar recorrência.' });
+  adminRouter.post('/billing/subscriptions/:id/cancel', authenticateRequest, resolvePlatformContext, requirePlatformPermission('platform.billing.manage'), async (req: any, res: any) => {
+    if (req.platformContext.role?.key !== 'admin') return res.status(403).json({ error: 'Somente admin pode cancelar recorrência.' });
     if (!req.body?.reason || String(req.body.reason).trim().length < 5) return res.status(400).json({ error: 'Informe um motivo de cancelamento.' });
     const db = getSupabaseAdmin();
     const local = await db.from('billing_subscriptions').select('*, commercial_contracts(*)').eq('id', req.params.id).single();
@@ -843,8 +945,7 @@ export function createBillingRouters(getSupabaseAdmin: () => any, requirePlatfor
     }
   });
 
-  adminRouter.get('/billing/webhooks', requirePlatformAuth, async (req: any, res) => {
-    if (!hasPermission(req.platformContext, 'platform.billing.webhooks.manage')) return res.status(403).json({ error: 'Forbidden' });
+  adminRouter.get('/billing/webhooks', authenticateRequest, resolvePlatformContext, requirePlatformPermission('platform.billing.manage'), async (req: any, res: any) => {
     const status = typeof req.query.status === 'string' ? req.query.status : null;
     let query = getSupabaseAdmin().from('billing_webhook_events')
       .select('id,provider_event_id,event_type,status,received_at,processed_at,attempts,last_error,correlation_id', { count: 'exact' })
@@ -857,8 +958,7 @@ export function createBillingRouters(getSupabaseAdmin: () => any, requirePlatfor
     return res.json(req.query.page !== undefined ? pageResult(data || [], count, page, pageSize) : data);
   });
 
-  adminRouter.post('/billing/webhooks/:id/reprocess', requirePlatformAuth, async (req: any, res) => {
-    if (!hasPermission(req.platformContext, 'platform.billing.webhooks.manage')) return res.status(403).json({ error: 'Forbidden' });
+  adminRouter.post('/billing/webhooks/:id/reprocess', authenticateRequest, resolvePlatformContext, requirePlatformPermission('platform.billing.manage'), async (req: any, res: any) => {
     const db = getSupabaseAdmin();
     const { data: eventRow, error } = await db.from('billing_webhook_events').select('*').eq('id', req.params.id).single();
     if (error) return res.status(404).json({ error: 'Evento não encontrado.' });
@@ -873,8 +973,8 @@ export function createBillingRouters(getSupabaseAdmin: () => any, requirePlatfor
     }
   });
 
-  adminRouter.post('/billing/reconcile', requirePlatformAuth, async (req: any, res) => {
-    if (req.platformContext.role?.key !== 'admin' || !hasPermission(req.platformContext, 'platform.billing.manage')) return res.status(403).json({ error: 'Forbidden' });
+  adminRouter.post('/billing/reconcile', authenticateRequest, resolvePlatformContext, requirePlatformPermission('platform.billing.manage'), async (req: any, res: any) => {
+    if (req.platformContext.role?.key !== 'admin') return res.status(403).json({ error: 'Forbidden' });
     try {
       const result = await runBillingReconciliation(getSupabaseAdmin(), req.user.id);
       await getSupabaseAdmin().from('platform_audit_logs').insert({ actor_user_id: req.user.id, action: 'billing.reconciliation.executed', entity_type: 'billing_reconciliation_runs', severity: 'warning', ...auditContext(req, { result }) });

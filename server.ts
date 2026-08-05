@@ -341,11 +341,11 @@ export async function createApp() {
   
   app.use("/api/admin/teams", createAdminTeamsRouter(getSupabaseAdmin, requirePlatformAuth));
   app.use("/api/admin/leads", createAdminLeadsRouter(getSupabaseAdmin, requirePlatformAuth));
-  app.use("/api/admin/clients", createAdminClientsRouter(getSupabaseAdmin, requirePlatformAuth));
-  app.use("/api/admin", createAdminControlPlaneRouter(getSupabaseAdmin, requirePlatformAuth));
+  app.use("/api/admin/clients", createAdminClientsRouter(getSupabaseAdmin));
+  app.use("/api/admin", createAdminControlPlaneRouter(getSupabaseAdmin));
   app.use("/api/admin", createAdminOtherRouter(getSupabaseAdmin, requirePlatformAuth));
 
-  const billingRouters = createBillingRouters(getSupabaseAdmin, requirePlatformAuth);
+  const billingRouters = createBillingRouters(getSupabaseAdmin);
   app.use('/api/webhooks', billingRouters.publicRouter);
   app.use('/api/admin', billingRouters.adminRouter);
   app.use('/api/internal/billing', billingRouters.internalRouter);

@@ -1,12 +1,14 @@
 import { Router } from 'express';
+import { z } from 'zod';
 import { canReadAssignedResource } from './authorization';
 import { auditContext, pageResult, parsePagination } from './operational';
+import { authenticateRequest, resolvePlatformContext, requirePlatformPermission } from './tenantAuth';
 
-export function createAdminClientsRouter(getSupabaseAdmin: any, requirePlatformAuth: any) {
+export function createAdminClientsRouter(getSupabaseAdmin: any) {
   const router = Router();
 
   // GET /api/admin/clients
-  router.get('/', requirePlatformAuth, async (req: any, res: any) => {
+  router.get('/', authenticateRequest, resolvePlatformContext, requirePlatformPermission(['platform.clients.read', 'platform.commercial.read']), async (req: any, res: any) => {
     try {
       const { platformContext } = req;
       const { page, pageSize, from, to } = parsePagination(req.query);
@@ -60,7 +62,7 @@ export function createAdminClientsRouter(getSupabaseAdmin: any, requirePlatformA
 
 
   // GET /api/admin/clients/:id
-  router.get('/:id', requirePlatformAuth, async (req: any, res: any) => {
+  router.get('/:id', authenticateRequest, resolvePlatformContext, requirePlatformPermission(['platform.clients.read', 'platform.commercial.read']), async (req: any, res: any) => {
     try {
       const { platformContext } = req;
       const clientId = req.params.id;
@@ -96,12 +98,14 @@ export function createAdminClientsRouter(getSupabaseAdmin: any, requirePlatformA
   });
 
   // POST /api/admin/clients/:id/assign
-  router.post('/:id/assign', requirePlatformAuth, async (req: any, res: any) => {
+  router.post('/:id/assign', authenticateRequest, resolvePlatformContext, requirePlatformPermission(['platform.clients.manage', 'platform.commercial.manage']), async (req: any, res: any) => {
     try {
       const { platformContext } = req;
       const clientId = req.params.id;
-      const { team_id, owner_platform_member_id } = req.body;
-      const reason = typeof req.body?.reason === 'string' ? req.body.reason.trim() : '';
+      const schema = z.object({ team_id: z.string().uuid(), owner_platform_member_id: z.string().uuid().optional().nullable(), reason: z.string().min(3) });
+      const parse = schema.safeParse(req.body);
+      if (!parse.success) return res.status(400).json({ error: 'Equipe e motivo são obrigatórios.', details: parse.error.issues });
+      const { team_id, owner_platform_member_id, reason } = parse.data;
       if (!team_id || !reason) return res.status(400).json({ error: 'Equipe e motivo da transferência são obrigatórios.' });
       const previous = await getSupabaseAdmin().from('platform_client_assignments').select('*')
         .eq('tenant_id', clientId).eq('assignment_type', 'commercial').maybeSingle();
@@ -151,19 +155,73 @@ export function createAdminClientsRouter(getSupabaseAdmin: any, requirePlatformA
     }
   });
 
-  // PUT /api/admin/clients/:id/solutions
-  router.put('/:id/solutions', requirePlatformAuth, async (req: any, res: any) => {
+  // POST /api/admin/clients/:id/suspend
+  router.post('/:id/suspend', authenticateRequest, resolvePlatformContext, requirePlatformPermission('platform.clients.manage'), async (req: any, res: any) => {
     try {
       const { platformContext } = req;
       const clientId = req.params.id;
-      const { solutionKeys } = req.body; // e.g. ['integrity', 'people']
+      const parse = z.object({ reason: z.string().min(5) }).safeParse(req.body);
+      if (!parse.success) return res.status(400).json({ error: 'Motivo da suspensão é obrigatório.' });
       
-      if (platformContext.role?.key !== 'admin' || !platformContext.permissions.includes('platform.solutions.manage')) {
-        return res.status(403).json({ error: 'Forbidden' });
-      }
-      if (!Array.isArray(solutionKeys) || solutionKeys.some((key: unknown) => typeof key !== 'string')) {
-        return res.status(400).json({ error: 'solutionKeys deve ser uma lista de chaves.' });
-      }
+      const db = getSupabaseAdmin();
+      const existing = await db.from('tenants').select('status, lifecycle_status').eq('id', clientId).single();
+      if (existing.error) return res.status(404).json({ error: 'Cliente não encontrado.' });
+      if (existing.data.status === 'suspended') return res.status(400).json({ error: 'Cliente já está suspenso.' });
+
+      const updated = await db.from('tenants').update({ status: 'suspended', lifecycle_status: 'churn', updated_at: new Date().toISOString() }).eq('id', clientId).select().single();
+      if (updated.error) throw updated.error;
+      
+      await db.from('platform_audit_logs').insert({
+        actor_user_id: req.user.id,
+        action: 'client.suspended',
+        entity_type: 'tenants',
+        entity_id: clientId,
+        severity: 'high',
+        ...auditContext(req, { result: 'success', reason: parse.data.reason, before: existing.data, after: { status: 'suspended', lifecycle_status: 'churn' } })
+      });
+      res.json({ success: true, tenant: updated.data });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  // POST /api/admin/clients/:id/reactivate
+  router.post('/:id/reactivate', authenticateRequest, resolvePlatformContext, requirePlatformPermission('platform.clients.manage'), async (req: any, res: any) => {
+    try {
+      const { platformContext } = req;
+      const clientId = req.params.id;
+      const parse = z.object({ reason: z.string().min(5) }).safeParse(req.body);
+      if (!parse.success) return res.status(400).json({ error: 'Motivo da reativação é obrigatório.' });
+      
+      const db = getSupabaseAdmin();
+      const existing = await db.from('tenants').select('status, lifecycle_status').eq('id', clientId).single();
+      if (existing.error) return res.status(404).json({ error: 'Cliente não encontrado.' });
+      if (existing.data.status === 'active') return res.status(400).json({ error: 'Cliente já está ativo.' });
+
+      const updated = await db.from('tenants').update({ status: 'active', lifecycle_status: 'active', updated_at: new Date().toISOString() }).eq('id', clientId).select().single();
+      if (updated.error) throw updated.error;
+      
+      await db.from('platform_audit_logs').insert({
+        actor_user_id: req.user.id,
+        action: 'client.reactivated',
+        entity_type: 'tenants',
+        entity_id: clientId,
+        severity: 'info',
+        ...auditContext(req, { result: 'success', reason: parse.data.reason, before: existing.data, after: { status: 'active', lifecycle_status: 'active' } })
+      });
+      res.json({ success: true, tenant: updated.data });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  // PUT /api/admin/clients/:id/solutions
+  router.put('/:id/solutions', authenticateRequest, resolvePlatformContext, requirePlatformPermission('platform.solutions.manage'), async (req: any, res: any) => {
+    try {
+      const clientId = req.params.id;
+      const parse = z.object({ solutionKeys: z.array(z.string()) }).safeParse(req.body);
+      if (!parse.success) return res.status(400).json({ error: 'solutionKeys deve ser uma lista de chaves válidas.' });
+      const { solutionKeys } = parse.data;
       const before = await getSupabaseAdmin().from('tenant_solutions').select('solutions(key)').eq('tenant_id', clientId);
       const replaced = await getSupabaseAdmin().rpc('admin_replace_tenant_solutions', {
         p_tenant_id: clientId,

@@ -290,5 +290,51 @@ export function createAdminLeadsRouter(getSupabaseAdmin: any, _old_requirePlatfo
     }
   });
 
+  router.post('/:id/demos', authenticateRequest, resolvePlatformContext, requirePlatformPermission(['platform.commercial.manage']), async (req: any, res: any) => {
+    try {
+      const db = getSupabaseAdmin();
+      const lead = await db.from('marketing_leads').select('*').eq('id', req.params.id).maybeSingle();
+      if (lead.error || !lead.data) return res.status(404).json({ error: 'Lead não encontrado.' });
+      const assignmentResult = await db.from('platform_lead_assignments').select('*').eq('lead_id', req.params.id).maybeSingle();
+      if (!assignmentResult.data || !canReadAssignedResource(req.platformContext, assignmentResult.data, 'member_lead_visibility')) {
+        return res.status(403).json({ error: 'Lead fora do seu escopo.' });
+      }
+      if (req.platformContext.role.key !== 'admin' && req.body.team_id && req.body.team_id !== assignmentResult.data.team_id) {
+         return res.status(403).json({ error: 'A demo deve pertencer à mesma equipe do lead.' });
+      }
+
+      const starts_at = req.body.starts_at;
+      if (!starts_at || isNaN(new Date(starts_at).getTime())) return res.status(400).json({ error: 'Data/hora inválida.' });
+
+      const { data, error } = await db.from('commercial_demos').insert({
+        lead_id: req.params.id,
+        team_id: req.body.team_id || assignmentResult.data.team_id,
+        owner_platform_member_id: req.body.owner_platform_member_id || assignmentResult.data.owner_platform_member_id || req.platformContext.platformMember.id,
+        status: 'scheduled',
+        starts_at,
+        notes: req.body.notes || null,
+        created_by_user_id: req.user.id,
+      }).select().single();
+      if (error) return res.status(400).json({ error: error.message });
+
+      await db.from('commercial_activities').insert({
+        lead_id: req.params.id,
+        activity_type: 'demo',
+        subject: 'Demonstração agendada',
+        status: 'completed',
+        result: `Demo agendada para ${starts_at}. ${req.body.notes || ''}`,
+        created_by_user_id: req.user.id
+      });
+      await db.from('marketing_leads').update({ next_action: 'Demonstração', next_action_at: starts_at }).eq('id', req.params.id);
+      await db.from('platform_audit_logs').insert({
+        actor_user_id: req.user.id, action: 'commercial.demo.scheduled', entity_type: 'commercial_demos', entity_id: data.id,
+        team_id: data.team_id, severity: 'info', ...auditContext(req, { result: 'success', after: data })
+      });
+      return res.status(201).json(data);
+    } catch (e: any) {
+      return res.status(500).json({ error: e.message });
+    }
+  });
+
   return router;
 }

@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { canReadAssignedResource, isGlobalAdmin } from './authorization';
 import { auditContext, pageResult, parsePagination } from './operational';
+import { authenticateRequest, resolvePlatformContext, requirePlatformPermission } from './tenantAuth';
 
 const MODULES: Record<string, {
   table: string;
@@ -60,10 +61,10 @@ export function csvCell(value: unknown) {
   return `"${text.replace(/"/g, '""').replace(/[\r\n]+/g, ' ')}"`;
 }
 
-export function createAdminControlPlaneRouter(getSupabaseAdmin: any, requirePlatformAuth: any) {
+export function createAdminControlPlaneRouter(getSupabaseAdmin: any) {
   const router = Router();
 
-  router.get('/control-plane/metrics', requirePlatformAuth, async (req: any, res) => {
+  router.get('/control-plane/metrics', authenticateRequest, resolvePlatformContext, requirePlatformPermission(['platform.commercial.read', 'platform.clients.read', 'platform.billing.read', 'platform.support.read']), async (req: any, res) => {
     try {
       const db = getSupabaseAdmin();
       const now = new Date();
@@ -113,7 +114,7 @@ export function createAdminControlPlaneRouter(getSupabaseAdmin: any, requirePlat
     }
   });
 
-  router.get('/control-plane/filters', requirePlatformAuth, async (req: any, res) => {
+  router.get('/control-plane/filters', authenticateRequest, resolvePlatformContext, requirePlatformPermission(['platform.commercial.read', 'platform.clients.read']), async (req: any, res: any) => {
     try {
       const db = getSupabaseAdmin();
       const context = req.platformContext;
@@ -136,7 +137,7 @@ export function createAdminControlPlaneRouter(getSupabaseAdmin: any, requirePlat
     }
   });
 
-  router.get('/control-plane/modules/:module', requirePlatformAuth, async (req: any, res) => {
+  router.get('/control-plane/modules/:module', authenticateRequest, resolvePlatformContext, requirePlatformPermission(['platform.commercial.read', 'platform.operations.read', 'platform.onboarding.read', 'platform.success.read', 'platform.support.read', 'platform.privacy.read']), async (req: any, res: any) => {
     try {
       const config = MODULES[req.params.module];
       if (!config) return res.status(404).json({ error: 'Módulo não encontrado.' });
@@ -164,7 +165,7 @@ export function createAdminControlPlaneRouter(getSupabaseAdmin: any, requirePlat
     }
   });
 
-  router.post('/control-plane/transition', requirePlatformAuth, async (req: any, res) => {
+  router.post('/control-plane/transition', authenticateRequest, resolvePlatformContext, requirePlatformPermission(['platform.commercial.manage', 'platform.onboarding.manage', 'platform.support.manage', 'platform.privacy.manage', 'platform.clients.manage']), async (req: any, res: any) => {
     try {
       const { entityType, entityId, toStatus, reason, teamId, tenantId, requestId, metadata } = req.body || {};
       if (!['lead', 'proposal', 'contract', 'tenant', 'onboarding', 'support', 'lgpd'].includes(entityType)) return res.status(400).json({ error: 'Tipo de recurso inválido.' });
@@ -184,7 +185,7 @@ export function createAdminControlPlaneRouter(getSupabaseAdmin: any, requirePlat
     }
   });
 
-  router.post('/control-plane/onboarding/start', requirePlatformAuth, async (req: any, res) => {
+  router.post('/control-plane/onboarding/start', authenticateRequest, resolvePlatformContext, requirePlatformPermission('platform.onboarding.manage'), async (req: any, res: any) => {
     if (!hasPermission(req.platformContext, 'platform.onboarding.manage')) return res.status(403).json({ error: 'Forbidden' });
     const tenants = await visibleTenantIds(getSupabaseAdmin(), req.platformContext);
     if (tenants !== null && !tenants.includes(req.body?.tenantId)) return res.status(403).json({ error: 'Cliente fora do escopo.' });
@@ -196,14 +197,14 @@ export function createAdminControlPlaneRouter(getSupabaseAdmin: any, requirePlat
     return res.status(201).json({ id: result.data });
   });
 
-  router.post('/control-plane/onboarding/:id/refresh', requirePlatformAuth, async (req: any, res) => {
+  router.post('/control-plane/onboarding/:id/refresh', authenticateRequest, resolvePlatformContext, requirePlatformPermission('platform.onboarding.manage'), async (req: any, res: any) => {
     if (!hasPermission(req.platformContext, 'platform.onboarding.manage')) return res.status(403).json({ error: 'Forbidden' });
     const result = await getSupabaseAdmin().rpc('admin_refresh_onboarding_progress', { p_run_id: req.params.id, p_actor_user_id: req.user.id });
     if (result.error) return res.status(409).json({ error: result.error.message });
     return res.json({ progressPercent: result.data });
   });
 
-  router.get('/control-plane/tenants/:id/entitlements', requirePlatformAuth, async (req: any, res) => {
+  router.get('/control-plane/tenants/:id/entitlements', authenticateRequest, resolvePlatformContext, requirePlatformPermission('platform.clients.read'), async (req: any, res: any) => {
     if (!hasPermission(req.platformContext, 'platform.clients.read')) return res.status(403).json({ error: 'Forbidden' });
     const tenants = await visibleTenantIds(getSupabaseAdmin(), req.platformContext);
     if (tenants !== null && !tenants.includes(req.params.id)) return res.status(403).json({ error: 'Cliente fora do escopo.' });
@@ -212,7 +213,7 @@ export function createAdminControlPlaneRouter(getSupabaseAdmin: any, requirePlat
     return res.json(result.data);
   });
 
-  router.get('/access/matrix', requirePlatformAuth, async (req: any, res) => {
+  router.get('/access/matrix', authenticateRequest, resolvePlatformContext, requirePlatformPermission('platform.access.simulate'), async (req: any, res: any) => {
     if (!hasPermission(req.platformContext, 'platform.access.simulate')) return res.status(403).json({ error: 'Forbidden' });
     const db = getSupabaseAdmin();
     const [members, permissions, memberships] = await Promise.all([
@@ -224,7 +225,7 @@ export function createAdminControlPlaneRouter(getSupabaseAdmin: any, requirePlat
     return res.json({ members: members.data || [], rolePermissions: permissions.data || [], teamMemberships: memberships.data || [], rule: 'relationship_type é informativo e nunca concede privilégios.' });
   });
 
-  router.post('/access/simulate', requirePlatformAuth, async (req: any, res) => {
+  router.post('/access/simulate', authenticateRequest, resolvePlatformContext, requirePlatformPermission('platform.access.simulate'), async (req: any, res: any) => {
     if (!hasPermission(req.platformContext, 'platform.access.simulate')) return res.status(403).json({ error: 'Forbidden' });
     const { platformMemberId, permission, teamId, ownerPlatformMemberId } = req.body || {};
     const db = getSupabaseAdmin();
@@ -243,7 +244,7 @@ export function createAdminControlPlaneRouter(getSupabaseAdmin: any, requirePlat
     return res.json({ allowed, role: role.key, relationshipType: member.data.relationship_type, teamId: teamId || null, permission, origin, note: 'relationship_type não participa da decisão.' });
   });
 
-  router.get('/control-plane/search', requirePlatformAuth, async (req: any, res) => {
+  router.get('/control-plane/search', authenticateRequest, resolvePlatformContext, requirePlatformPermission(['platform.commercial.read', 'platform.clients.read', 'platform.billing.read']), async (req: any, res: any) => {
     const term = typeof req.query.q === 'string' ? req.query.q.trim().replace(/[%(),]/g, '').slice(0, 80) : '';
     if (term.length < 2) return res.json({ items: [] });
     const db = getSupabaseAdmin();
@@ -258,7 +259,7 @@ export function createAdminControlPlaneRouter(getSupabaseAdmin: any, requirePlat
     return res.json({ items: (tenants.data || []).map((item: any) => ({ type: 'client', id: item.id, title: item.name, subtitle: item.lifecycle_status, href: `#/admin/empresas/${item.id}` })) });
   });
 
-  router.get('/control-plane/export/:resource', requirePlatformAuth, async (req: any, res) => {
+  router.get('/control-plane/export/:resource', authenticateRequest, resolvePlatformContext, requirePlatformPermission('platform.exports.execute'), async (req: any, res: any) => {
     if (!hasPermission(req.platformContext, 'platform.exports.execute')) return res.status(403).json({ error: 'Forbidden' });
     const resource = String(req.params.resource);
     const allowed: Record<string, { table: string; columns: string; permission: string; tenantField?: string }> = {
