@@ -3,18 +3,16 @@ import { publicBillingHealth } from './billing/config';
 import { auditContext, pageResult, parsePagination } from './operational';
 import { captureServerAnalytics } from './analytics';
 import { reportServerError } from './observability';
+import { authenticateRequest, resolvePlatformContext, requirePlatformPermission } from './tenantAuth';
 
-export function createAdminOtherRouter(getSupabaseAdmin: any, requirePlatformAuth: any) {
+export function createAdminOtherRouter(getSupabaseAdmin: any, old_requirePlatformAuth: any) {
   const router = Router();
+  const baseMiddlewares = [authenticateRequest, resolvePlatformContext, requirePlatformPermission('platform.staff.read')];
 
   // GET /api/admin/staff
-  router.get('/staff', requirePlatformAuth, async (req: any, res: any) => {
+  router.get('/staff', ...baseMiddlewares, async (req: any, res: any) => {
     try {
       const { platformContext } = req;
-      if (!platformContext.permissions.includes('platform.staff.read') && platformContext.role?.key !== 'admin') {
-        return res.status(403).json({ error: 'Forbidden' });
-      }
-      
       const { data: members, error: memberErr } = await getSupabaseAdmin()
         .from('platform_members')
         .select(`

@@ -52,7 +52,7 @@ function auditContext(req, metadata = {}) {
 }
 
 // src/server/adminLeadsRouter.ts
-function createAdminLeadsRouter(getSupabaseAdmin, requirePlatformAuth) {
+function createAdminLeadsRouter(getSupabaseAdmin2, requirePlatformAuth) {
   const router = Router();
   router.get("/", requirePlatformAuth, async (req, res) => {
     try {
@@ -62,7 +62,7 @@ function createAdminLeadsRouter(getSupabaseAdmin, requirePlatformAuth) {
       let visibleLeadIds = null;
       if (platformContext.role?.key !== "admin") {
         const visibleTeams = platformContext.teams.filter((team) => platformContext.managedTeams.some((managed) => managed.id === team.id) || ["team", "all"].includes(team.member_lead_visibility)).map((team) => team.id);
-        let assignmentQuery = getSupabaseAdmin().from("platform_lead_assignments").select("lead_id");
+        let assignmentQuery = getSupabaseAdmin2().from("platform_lead_assignments").select("lead_id");
         const clauses = [`owner_platform_member_id.eq.${platformContext.platformMember.id}`];
         if (visibleTeams.length) clauses.push(`team_id.in.(${visibleTeams.join(",")})`);
         assignmentQuery = assignmentQuery.or(clauses.join(","));
@@ -71,7 +71,7 @@ function createAdminLeadsRouter(getSupabaseAdmin, requirePlatformAuth) {
         visibleLeadIds = [...new Set((assignmentResult.data || []).map((item) => String(item.lead_id)))];
         if (!visibleLeadIds.length) return res.json(paginated ? pageResult([], 0, page, pageSize) : []);
       }
-      let query = getSupabaseAdmin().from("marketing_leads").select("*, platform_lead_assignments(*, platform_teams(name,allow_self_claim), platform_members(user_id, platform_roles(key, name))), commercial_activities(id,activity_type,subject,status,scheduled_at,result,next_action,next_action_at,created_at), commercial_demos(id,status,starts_at,expires_at,result,next_action,next_action_at)", { count: "exact" }).order("created_at", { ascending: false });
+      let query = getSupabaseAdmin2().from("marketing_leads").select("*, platform_lead_assignments(*, platform_teams(name,allow_self_claim), platform_members(user_id, platform_roles(key, name))), commercial_activities(id,activity_type,subject,status,scheduled_at,result,next_action,next_action_at,created_at), commercial_demos(id,status,starts_at,expires_at,result,next_action,next_action_at)", { count: "exact" }).order("created_at", { ascending: false });
       if (visibleLeadIds) query = query.in("id", visibleLeadIds);
       if (typeof req.query.status === "string" && req.query.status) query = query.eq("status", req.query.status);
       if (typeof req.query.priority === "string" && req.query.priority) query = query.eq("priority", req.query.priority);
@@ -82,7 +82,7 @@ function createAdminLeadsRouter(getSupabaseAdmin, requirePlatformAuth) {
       if (paginated) query = query.range(from, to);
       const { data, error, count } = await query;
       if (error) throw error;
-      const { data: usersData } = await getSupabaseAdmin().auth.admin.listUsers();
+      const { data: usersData } = await getSupabaseAdmin2().auth.admin.listUsers();
       let leads = data.map((l) => {
         const assignment = l.platform_lead_assignments?.[0];
         let owner = null;
@@ -105,7 +105,7 @@ function createAdminLeadsRouter(getSupabaseAdmin, requirePlatformAuth) {
       if (!team_id || typeof req.body?.reason !== "string" || !req.body.reason.trim()) {
         return res.status(400).json({ error: "Equipe e motivo da transfer\xEAncia s\xE3o obrigat\xF3rios." });
       }
-      const current = await getSupabaseAdmin().from("platform_lead_assignments").select("*").eq("lead_id", leadId).maybeSingle();
+      const current = await getSupabaseAdmin2().from("platform_lead_assignments").select("*").eq("lead_id", leadId).maybeSingle();
       if (current.error) throw current.error;
       if (platformContext.role?.key !== "admin") {
         const isManager = platformContext.managedTeams.some((t) => t.id === team_id);
@@ -115,17 +115,17 @@ function createAdminLeadsRouter(getSupabaseAdmin, requirePlatformAuth) {
         }
       }
       if (owner_platform_member_id) {
-        const target = await getSupabaseAdmin().from("platform_team_members").select("platform_member_id").eq("team_id", team_id).eq("platform_member_id", owner_platform_member_id).eq("status", "active").maybeSingle();
+        const target = await getSupabaseAdmin2().from("platform_team_members").select("platform_member_id").eq("team_id", team_id).eq("platform_member_id", owner_platform_member_id).eq("status", "active").maybeSingle();
         if (!target.data) return res.status(400).json({ error: "O respons\xE1vel precisa ser membro ativo da equipe." });
       }
-      const { data, error } = await getSupabaseAdmin().from("platform_lead_assignments").upsert({
+      const { data, error } = await getSupabaseAdmin2().from("platform_lead_assignments").upsert({
         lead_id: leadId,
         team_id,
         owner_platform_member_id: owner_platform_member_id || null,
         assigned_by_user_id: req.user.id
       }, { onConflict: "lead_id" }).select().single();
       if (error) throw error;
-      await getSupabaseAdmin().from("commercial_lead_assignment_history").insert({
+      await getSupabaseAdmin2().from("commercial_lead_assignment_history").insert({
         lead_id: leadId,
         from_team_id: current.data?.team_id || null,
         to_team_id: team_id,
@@ -134,7 +134,7 @@ function createAdminLeadsRouter(getSupabaseAdmin, requirePlatformAuth) {
         reason: req.body.reason.trim(),
         actor_user_id: req.user.id
       });
-      await getSupabaseAdmin().from("platform_audit_logs").insert({
+      await getSupabaseAdmin2().from("platform_audit_logs").insert({
         actor_user_id: req.user.id,
         action: "lead.assigned",
         entity_type: "platform_lead_assignments",
@@ -150,7 +150,7 @@ function createAdminLeadsRouter(getSupabaseAdmin, requirePlatformAuth) {
   });
   router.patch("/:id", requirePlatformAuth, async (req, res) => {
     try {
-      const db = getSupabaseAdmin();
+      const db = getSupabaseAdmin2();
       const { data: lead, error: leadError } = await db.from("marketing_leads").select("*, platform_lead_assignments(*)").eq("id", req.params.id).single();
       if (leadError || !lead) return res.status(404).json({ error: "Lead n\xE3o encontrado." });
       const assignment = lead.platform_lead_assignments?.[0];
@@ -181,7 +181,7 @@ function createAdminLeadsRouter(getSupabaseAdmin, requirePlatformAuth) {
   });
   router.get("/:id/duplicates", requirePlatformAuth, async (req, res) => {
     try {
-      const db = getSupabaseAdmin();
+      const db = getSupabaseAdmin2();
       const leadResult = await db.from("marketing_leads").select("id,platform_lead_assignments(*)").eq("id", req.params.id).maybeSingle();
       if (leadResult.error || !leadResult.data) return res.status(404).json({ error: "Lead n\xE3o encontrado." });
       const assignment = leadResult.data.platform_lead_assignments?.[0];
@@ -208,7 +208,7 @@ function createAdminLeadsRouter(getSupabaseAdmin, requirePlatformAuth) {
       const reason = typeof req.body?.reason === "string" ? req.body.reason.trim() : "";
       if (!teamId || !reason) return res.status(400).json({ error: "Equipe e motivo s\xE3o obrigat\xF3rios." });
       if (req.platformContext.role?.key !== "admin" && !req.platformContext.managedTeams.some((team) => team.id === teamId)) return res.status(403).json({ error: "Equipe fora do escopo gerenciado." });
-      const result = await getSupabaseAdmin().rpc("admin_auto_assign_lead", { p_lead_id: req.params.id, p_team_id: teamId, p_actor_user_id: req.user.id, p_reason: reason });
+      const result = await getSupabaseAdmin2().rpc("admin_auto_assign_lead", { p_lead_id: req.params.id, p_team_id: teamId, p_actor_user_id: req.user.id, p_reason: reason });
       if (result.error) return res.status(409).json({ error: result.error.message });
       return res.json({ ownerPlatformMemberId: result.data });
     } catch (error) {
@@ -217,7 +217,7 @@ function createAdminLeadsRouter(getSupabaseAdmin, requirePlatformAuth) {
   });
   router.post("/:id/recalculate-score", requirePlatformAuth, async (req, res) => {
     try {
-      const db = getSupabaseAdmin();
+      const db = getSupabaseAdmin2();
       const lead = await db.from("marketing_leads").select("*").eq("id", req.params.id).maybeSingle();
       if (lead.error || !lead.data) return res.status(404).json({ error: "Lead n\xE3o encontrado." });
       const assignmentResult = await db.from("platform_lead_assignments").select("*").eq("lead_id", req.params.id).maybeSingle();
@@ -249,7 +249,7 @@ function createAdminLeadsRouter(getSupabaseAdmin, requirePlatformAuth) {
       const { platformContext } = req;
       const leadId = req.params.id;
       const myMemberId = platformContext.platformMember.id;
-      const { data: assignment, error: err1 } = await getSupabaseAdmin().from("platform_lead_assignments").select("*, platform_teams(allow_self_claim)").eq("lead_id", leadId).single();
+      const { data: assignment, error: err1 } = await getSupabaseAdmin2().from("platform_lead_assignments").select("*, platform_teams(allow_self_claim)").eq("lead_id", leadId).single();
       if (err1 || !assignment) return res.status(404).json({ error: "Lead assignment not found" });
       if (!assignment.platform_teams?.allow_self_claim) {
         return res.status(403).json({ error: "Self claim not allowed for this team" });
@@ -260,11 +260,11 @@ function createAdminLeadsRouter(getSupabaseAdmin, requirePlatformAuth) {
       if (!platformContext.teams.some((t) => t.id === assignment.team_id)) {
         return res.status(403).json({ error: "You are not in this team" });
       }
-      const { data, error } = await getSupabaseAdmin().from("platform_lead_assignments").update({ owner_platform_member_id: myMemberId, updated_at: (/* @__PURE__ */ new Date()).toISOString() }).eq("lead_id", leadId).is("owner_platform_member_id", null).select().single();
+      const { data, error } = await getSupabaseAdmin2().from("platform_lead_assignments").update({ owner_platform_member_id: myMemberId, updated_at: (/* @__PURE__ */ new Date()).toISOString() }).eq("lead_id", leadId).is("owner_platform_member_id", null).select().single();
       if (error || !data) {
         return res.status(409).json({ error: "Failed to claim lead. It may have been claimed by someone else." });
       }
-      await getSupabaseAdmin().from("platform_audit_logs").insert({
+      await getSupabaseAdmin2().from("platform_audit_logs").insert({
         actor_user_id: req.user.id,
         action: "lead.claimed",
         entity_type: "platform_lead_assignments",
@@ -282,7 +282,7 @@ function createAdminLeadsRouter(getSupabaseAdmin, requirePlatformAuth) {
 
 // src/server/adminClientsRouter.ts
 import { Router as Router2 } from "express";
-function createAdminClientsRouter(getSupabaseAdmin, requirePlatformAuth) {
+function createAdminClientsRouter(getSupabaseAdmin2, requirePlatformAuth) {
   const router = Router2();
   router.get("/", requirePlatformAuth, async (req, res) => {
     try {
@@ -292,7 +292,7 @@ function createAdminClientsRouter(getSupabaseAdmin, requirePlatformAuth) {
       let visibleTenantIds2 = null;
       if (platformContext.role?.key !== "admin") {
         const visibleTeams = platformContext.teams.filter((team) => platformContext.managedTeams.some((managed) => managed.id === team.id) || ["team", "all"].includes(team.member_client_visibility)).map((team) => team.id);
-        let assignmentQuery = getSupabaseAdmin().from("platform_client_assignments").select("tenant_id");
+        let assignmentQuery = getSupabaseAdmin2().from("platform_client_assignments").select("tenant_id");
         const clauses = [`owner_platform_member_id.eq.${platformContext.platformMember.id}`];
         if (visibleTeams.length) clauses.push(`team_id.in.(${visibleTeams.join(",")})`);
         assignmentQuery = assignmentQuery.or(clauses.join(","));
@@ -301,14 +301,14 @@ function createAdminClientsRouter(getSupabaseAdmin, requirePlatformAuth) {
         visibleTenantIds2 = [...new Set((assignmentResult.data || []).map((item) => String(item.tenant_id)))];
         if (!visibleTenantIds2.length) return res.json(paginated ? pageResult([], 0, page, pageSize) : []);
       }
-      let query = getSupabaseAdmin().from("tenants").select("*, tenant_solutions(*), platform_client_assignments(*, platform_teams(name), platform_members(user_id, platform_roles(key, name))), tenant_billing_state(*), tenant_domains(*), memberships(id,status,user_id,employment_level), departments(id,name,active)", { count: "exact" }).in("status", ["active", "trial", "suspended"]).order("created_at", { ascending: false });
+      let query = getSupabaseAdmin2().from("tenants").select("*, tenant_solutions(*), platform_client_assignments(*, platform_teams(name), platform_members(user_id, platform_roles(key, name))), tenant_billing_state(*), tenant_domains(*), memberships(id,status,user_id,employment_level), departments(id,name,active)", { count: "exact" }).in("status", ["active", "trial", "suspended"]).order("created_at", { ascending: false });
       if (visibleTenantIds2) query = query.in("id", visibleTenantIds2);
       if (typeof req.query.status === "string" && req.query.status) query = query.eq("status", req.query.status);
       if (typeof req.query.search === "string" && req.query.search.trim()) query = query.ilike("name", `%${req.query.search.trim().slice(0, 100)}%`);
       if (paginated) query = query.range(from, to);
       const { data, error, count } = await query;
       if (error) throw error;
-      const { data: usersData } = await getSupabaseAdmin().auth.admin.listUsers();
+      const { data: usersData } = await getSupabaseAdmin2().auth.admin.listUsers();
       let clients = data.map((c) => {
         const assignment = c.platform_client_assignments?.[0];
         let owner = null;
@@ -327,9 +327,9 @@ function createAdminClientsRouter(getSupabaseAdmin, requirePlatformAuth) {
     try {
       const { platformContext } = req;
       const clientId = req.params.id;
-      const { data, error } = await getSupabaseAdmin().from("tenants").select("*, tenant_solutions(solution_id, status, solutions(key,name)), platform_client_assignments(*, platform_teams(name), platform_members(user_id, platform_roles(key, name))), tenant_domains(*), departments(*), memberships(id,user_id,status,employment_level,joined_at), tenant_billing_state(*), commercial_contracts(*, billing_subscriptions(*), billing_payments(*))").eq("id", clientId).single();
+      const { data, error } = await getSupabaseAdmin2().from("tenants").select("*, tenant_solutions(solution_id, status, solutions(key,name)), platform_client_assignments(*, platform_teams(name), platform_members(user_id, platform_roles(key, name))), tenant_domains(*), departments(*), memberships(id,user_id,status,employment_level,joined_at), tenant_billing_state(*), commercial_contracts(*, billing_subscriptions(*), billing_payments(*))").eq("id", clientId).single();
       if (error) throw error;
-      const { data: usersData } = await getSupabaseAdmin().auth.admin.listUsers();
+      const { data: usersData } = await getSupabaseAdmin2().auth.admin.listUsers();
       const assignment = data.platform_client_assignments?.[0];
       let owner = null;
       if (assignment?.platform_members?.user_id) {
@@ -339,7 +339,7 @@ function createAdminClientsRouter(getSupabaseAdmin, requirePlatformAuth) {
       if (platformContext.role?.key !== "admin") {
         if (!canReadAssignedResource(platformContext, assignment, "member_client_visibility")) return res.status(403).json({ error: "Forbidden" });
       }
-      const { data: audit } = await getSupabaseAdmin().from("platform_audit_logs").select("id,action,severity,metadata,created_at,actor_user_id,request_id").eq("entity_id", clientId).order("created_at", { ascending: false }).limit(50);
+      const { data: audit } = await getSupabaseAdmin2().from("platform_audit_logs").select("id,action,severity,metadata,created_at,actor_user_id,request_id").eq("entity_id", clientId).order("created_at", { ascending: false }).limit(50);
       res.json({ ...data, assignment, owner, audit: audit || [] });
     } catch (e) {
       res.status(500).json({ error: e.message });
@@ -352,7 +352,7 @@ function createAdminClientsRouter(getSupabaseAdmin, requirePlatformAuth) {
       const { team_id, owner_platform_member_id } = req.body;
       const reason = typeof req.body?.reason === "string" ? req.body.reason.trim() : "";
       if (!team_id || !reason) return res.status(400).json({ error: "Equipe e motivo da transfer\xEAncia s\xE3o obrigat\xF3rios." });
-      const previous = await getSupabaseAdmin().from("platform_client_assignments").select("*").eq("tenant_id", clientId).eq("assignment_type", "commercial").maybeSingle();
+      const previous = await getSupabaseAdmin2().from("platform_client_assignments").select("*").eq("tenant_id", clientId).eq("assignment_type", "commercial").maybeSingle();
       if (previous.error) throw previous.error;
       if (platformContext.role?.key !== "admin") {
         const isManager = platformContext.managedTeams.some((t) => t.id === team_id);
@@ -362,10 +362,10 @@ function createAdminClientsRouter(getSupabaseAdmin, requirePlatformAuth) {
         }
       }
       if (owner_platform_member_id) {
-        const target = await getSupabaseAdmin().from("platform_team_members").select("platform_member_id").eq("team_id", team_id).eq("platform_member_id", owner_platform_member_id).eq("status", "active").maybeSingle();
+        const target = await getSupabaseAdmin2().from("platform_team_members").select("platform_member_id").eq("team_id", team_id).eq("platform_member_id", owner_platform_member_id).eq("status", "active").maybeSingle();
         if (!target.data) return res.status(400).json({ error: "O respons\xE1vel precisa ser membro ativo da equipe." });
       }
-      const { data, error } = await getSupabaseAdmin().from("platform_client_assignments").upsert({
+      const { data, error } = await getSupabaseAdmin2().from("platform_client_assignments").upsert({
         tenant_id: clientId,
         team_id,
         owner_platform_member_id: owner_platform_member_id || null,
@@ -374,7 +374,7 @@ function createAdminClientsRouter(getSupabaseAdmin, requirePlatformAuth) {
         status: "active"
       }, { onConflict: "tenant_id,team_id,assignment_type" }).select().single();
       if (error) throw error;
-      await getSupabaseAdmin().from("platform_audit_logs").insert({
+      await getSupabaseAdmin2().from("platform_audit_logs").insert({
         actor_user_id: req.user.id,
         action: "client.assigned",
         entity_type: "platform_client_assignments",
@@ -399,13 +399,13 @@ function createAdminClientsRouter(getSupabaseAdmin, requirePlatformAuth) {
       if (!Array.isArray(solutionKeys) || solutionKeys.some((key) => typeof key !== "string")) {
         return res.status(400).json({ error: "solutionKeys deve ser uma lista de chaves." });
       }
-      const before = await getSupabaseAdmin().from("tenant_solutions").select("solutions(key)").eq("tenant_id", clientId);
-      const replaced = await getSupabaseAdmin().rpc("admin_replace_tenant_solutions", {
+      const before = await getSupabaseAdmin2().from("tenant_solutions").select("solutions(key)").eq("tenant_id", clientId);
+      const replaced = await getSupabaseAdmin2().rpc("admin_replace_tenant_solutions", {
         p_tenant_id: clientId,
         p_solution_keys: [...new Set(solutionKeys)]
       });
       if (replaced.error) throw replaced.error;
-      await getSupabaseAdmin().from("platform_audit_logs").insert({
+      await getSupabaseAdmin2().from("platform_audit_logs").insert({
         actor_user_id: req.user.id,
         action: "solution.updated",
         entity_type: "tenant_solutions",
@@ -599,7 +599,7 @@ function installServerErrorHandler(app) {
 }
 
 // src/server/adminOtherRouter.ts
-function createAdminOtherRouter(getSupabaseAdmin, requirePlatformAuth) {
+function createAdminOtherRouter(getSupabaseAdmin2, requirePlatformAuth) {
   const router = Router3();
   router.get("/staff", requirePlatformAuth, async (req, res) => {
     try {
@@ -607,13 +607,13 @@ function createAdminOtherRouter(getSupabaseAdmin, requirePlatformAuth) {
       if (!platformContext.permissions.includes("platform.staff.read") && platformContext.role?.key !== "admin") {
         return res.status(403).json({ error: "Forbidden" });
       }
-      const { data: members, error: memberErr } = await getSupabaseAdmin().from("platform_members").select(`
+      const { data: members, error: memberErr } = await getSupabaseAdmin2().from("platform_members").select(`
           *,
           platform_roles(*),
           platform_team_members(*, platform_teams(*))
         `);
       if (memberErr) throw memberErr;
-      const { data: usersData, error: userErr } = await getSupabaseAdmin().auth.admin.listUsers();
+      const { data: usersData, error: userErr } = await getSupabaseAdmin2().auth.admin.listUsers();
       if (userErr) throw userErr;
       let result = members.map((m) => {
         const user = usersData.users.find((u) => u.id === m.user_id);
@@ -669,14 +669,14 @@ function createAdminOtherRouter(getSupabaseAdmin, requirePlatformAuth) {
       }
       const origin = req.headers.origin || `${req.protocol}://${req.get("host")}`;
       const redirectTo = `${origin}/#/auth/accept-invite`;
-      const { data: roleData } = await getSupabaseAdmin().from("platform_roles").select("id").eq("key", role_key).single();
+      const { data: roleData } = await getSupabaseAdmin2().from("platform_roles").select("id").eq("key", role_key).single();
       if (!roleData) return res.status(400).json({ error: "Fun\xE7\xE3o interna inv\xE1lida." });
       let userId;
-      const { data: inviteData, error: inviteErr } = await getSupabaseAdmin().auth.admin.inviteUserByEmail(email, {
+      const { data: inviteData, error: inviteErr } = await getSupabaseAdmin2().auth.admin.inviteUserByEmail(email, {
         redirectTo
       });
       if (inviteErr) {
-        const { data: usersList } = await getSupabaseAdmin().auth.admin.listUsers();
+        const { data: usersList } = await getSupabaseAdmin2().auth.admin.listUsers();
         const existingUser = usersList?.users?.find((u) => u.email?.toLowerCase() === email.toLowerCase());
         if (!existingUser) {
           return res.status(400).json({ error: inviteErr.message || "Erro ao enviar convite por e-mail." });
@@ -685,9 +685,9 @@ function createAdminOtherRouter(getSupabaseAdmin, requirePlatformAuth) {
       } else {
         userId = inviteData.user.id;
       }
-      let { data: member } = await getSupabaseAdmin().from("platform_members").select("*").eq("user_id", userId).maybeSingle();
+      let { data: member } = await getSupabaseAdmin2().from("platform_members").select("*").eq("user_id", userId).maybeSingle();
       if (!member) {
-        const { data: newMem, error: insMemErr } = await getSupabaseAdmin().from("platform_members").insert({
+        const { data: newMem, error: insMemErr } = await getSupabaseAdmin2().from("platform_members").insert({
           user_id: userId,
           relationship_type: finalRelationshipType,
           role_id: roleData?.id || null,
@@ -696,14 +696,14 @@ function createAdminOtherRouter(getSupabaseAdmin, requirePlatformAuth) {
         if (insMemErr) throw insMemErr;
         member = newMem;
       } else {
-        await getSupabaseAdmin().from("platform_members").update({
+        await getSupabaseAdmin2().from("platform_members").update({
           relationship_type: finalRelationshipType,
           role_id: roleData?.id || member.role_id
         }).eq("id", member.id);
       }
       if (Array.isArray(team_ids) && team_ids.length > 0) {
         for (const teamId of team_ids) {
-          await getSupabaseAdmin().from("platform_team_members").upsert({
+          await getSupabaseAdmin2().from("platform_team_members").upsert({
             team_id: teamId,
             platform_member_id: member.id,
             team_role: "member",
@@ -711,7 +711,7 @@ function createAdminOtherRouter(getSupabaseAdmin, requirePlatformAuth) {
           }, { onConflict: "team_id,platform_member_id" });
         }
       }
-      await getSupabaseAdmin().from("platform_audit_logs").insert({
+      await getSupabaseAdmin2().from("platform_audit_logs").insert({
         actor_user_id: req.user.id,
         action: "platform.member.invited",
         entity_type: "platform_members",
@@ -736,7 +736,7 @@ function createAdminOtherRouter(getSupabaseAdmin, requirePlatformAuth) {
       }
       const memberId = req.params.id;
       const { role_key, relationship_type, team_ids } = req.body;
-      const { data: targetMember, error: tgtErr } = await getSupabaseAdmin().from("platform_members").select("*, platform_roles(key)").eq("id", memberId).single();
+      const { data: targetMember, error: tgtErr } = await getSupabaseAdmin2().from("platform_members").select("*, platform_roles(key)").eq("id", memberId).single();
       if (tgtErr || !targetMember) {
         return res.status(404).json({ error: "Membro n\xE3o encontrado." });
       }
@@ -745,7 +745,7 @@ function createAdminOtherRouter(getSupabaseAdmin, requirePlatformAuth) {
       }
       if (isManager) {
         const managedTeamIds = new Set(platformContext.managedTeams.map((team) => team.id));
-        const { data: targetTeams } = await getSupabaseAdmin().from("platform_team_members").select("team_id").eq("platform_member_id", memberId).eq("status", "active");
+        const { data: targetTeams } = await getSupabaseAdmin2().from("platform_team_members").select("team_id").eq("platform_member_id", memberId).eq("status", "active");
         const inScope = (targetTeams || []).some((team) => managedTeamIds.has(team.team_id));
         const requestedTeamsAreScoped = !Array.isArray(team_ids) || team_ids.length > 0 && team_ids.every((teamId) => managedTeamIds.has(teamId));
         if (targetMember.platform_roles?.key !== "sales" || role_key && role_key !== "sales" || !inScope || !requestedTeamsAreScoped) {
@@ -754,9 +754,9 @@ function createAdminOtherRouter(getSupabaseAdmin, requirePlatformAuth) {
       }
       const targetCurrentRole = targetMember.platform_roles?.key;
       if (targetCurrentRole === "admin" && role_key && role_key !== "admin") {
-        const { data: adminRole } = await getSupabaseAdmin().from("platform_roles").select("id").eq("key", "admin").single();
+        const { data: adminRole } = await getSupabaseAdmin2().from("platform_roles").select("id").eq("key", "admin").single();
         if (adminRole) {
-          const { data: activeAdmins } = await getSupabaseAdmin().from("platform_members").select("id").eq("role_id", adminRole.id).eq("status", "active");
+          const { data: activeAdmins } = await getSupabaseAdmin2().from("platform_members").select("id").eq("role_id", adminRole.id).eq("status", "active");
           if ((activeAdmins || []).length <= 1) {
             return res.status(400).json({ error: "N\xE3o \xE9 poss\xEDvel rebaixar a fun\xE7\xE3o do \xFAnico Admin ativo da plataforma." });
           }
@@ -767,8 +767,8 @@ function createAdminOtherRouter(getSupabaseAdmin, requirePlatformAuth) {
         finalRelationshipType = "partner";
       }
       if (relationship_type && finalRelationshipType !== targetMember.relationship_type) {
-        await getSupabaseAdmin().from("platform_members").update({ relationship_type: finalRelationshipType }).eq("id", memberId);
-        await getSupabaseAdmin().from("platform_audit_logs").insert({
+        await getSupabaseAdmin2().from("platform_members").update({ relationship_type: finalRelationshipType }).eq("id", memberId);
+        await getSupabaseAdmin2().from("platform_audit_logs").insert({
           actor_user_id: req.user.id,
           action: "platform.member.relationship_changed",
           entity_type: "platform_members",
@@ -778,10 +778,10 @@ function createAdminOtherRouter(getSupabaseAdmin, requirePlatformAuth) {
         });
       }
       if (role_key && role_key !== targetCurrentRole) {
-        const { data: roleData } = await getSupabaseAdmin().from("platform_roles").select("id").eq("key", role_key).single();
+        const { data: roleData } = await getSupabaseAdmin2().from("platform_roles").select("id").eq("key", role_key).single();
         if (roleData) {
-          await getSupabaseAdmin().from("platform_members").update({ role_id: roleData.id }).eq("id", memberId);
-          await getSupabaseAdmin().from("platform_audit_logs").insert({
+          await getSupabaseAdmin2().from("platform_members").update({ role_id: roleData.id }).eq("id", memberId);
+          await getSupabaseAdmin2().from("platform_audit_logs").insert({
             actor_user_id: req.user.id,
             action: "platform.member.role_changed",
             entity_type: "platform_members",
@@ -792,16 +792,16 @@ function createAdminOtherRouter(getSupabaseAdmin, requirePlatformAuth) {
         }
       }
       if (Array.isArray(team_ids)) {
-        await getSupabaseAdmin().from("platform_team_members").delete().eq("platform_member_id", memberId);
+        await getSupabaseAdmin2().from("platform_team_members").delete().eq("platform_member_id", memberId);
         for (const teamId of team_ids) {
-          await getSupabaseAdmin().from("platform_team_members").insert({
+          await getSupabaseAdmin2().from("platform_team_members").insert({
             team_id: teamId,
             platform_member_id: memberId,
             team_role: "member",
             status: "active"
           });
         }
-        await getSupabaseAdmin().from("platform_audit_logs").insert({
+        await getSupabaseAdmin2().from("platform_audit_logs").insert({
           actor_user_id: req.user.id,
           action: "platform.member.team_added",
           entity_type: "platform_members",
@@ -823,23 +823,23 @@ function createAdminOtherRouter(getSupabaseAdmin, requirePlatformAuth) {
         return res.status(403).json({ error: "Forbidden" });
       }
       const memberId = req.params.id;
-      const { data: targetMember } = await getSupabaseAdmin().from("platform_members").select("*, platform_roles(key)").eq("id", memberId).single();
+      const { data: targetMember } = await getSupabaseAdmin2().from("platform_members").select("*, platform_roles(key)").eq("id", memberId).single();
       if (!targetMember) {
         return res.status(404).json({ error: "Membro n\xE3o encontrado." });
       }
       const targetRole = targetMember.platform_roles?.key;
       if (targetRole === "admin" && targetMember.status === "active") {
-        const { data: adminRole } = await getSupabaseAdmin().from("platform_roles").select("id").eq("key", "admin").single();
+        const { data: adminRole } = await getSupabaseAdmin2().from("platform_roles").select("id").eq("key", "admin").single();
         if (adminRole) {
-          const { data: activeAdmins } = await getSupabaseAdmin().from("platform_members").select("id").eq("role_id", adminRole.id).eq("status", "active");
+          const { data: activeAdmins } = await getSupabaseAdmin2().from("platform_members").select("id").eq("role_id", adminRole.id).eq("status", "active");
           if ((activeAdmins || []).length <= 1) {
             return res.status(400).json({ error: "N\xE3o \xE9 poss\xEDvel suspender o \xFAnico Admin ativo do sistema." });
           }
         }
       }
-      const { error: updErr } = await getSupabaseAdmin().from("platform_members").update({ status: "suspended" }).eq("id", memberId);
+      const { error: updErr } = await getSupabaseAdmin2().from("platform_members").update({ status: "suspended" }).eq("id", memberId);
       if (updErr) throw updErr;
-      await getSupabaseAdmin().from("platform_audit_logs").insert({
+      await getSupabaseAdmin2().from("platform_audit_logs").insert({
         actor_user_id: req.user.id,
         action: "platform.member.suspended",
         entity_type: "platform_members",
@@ -859,9 +859,9 @@ function createAdminOtherRouter(getSupabaseAdmin, requirePlatformAuth) {
         return res.status(403).json({ error: "Forbidden" });
       }
       const memberId = req.params.id;
-      const { error: updErr } = await getSupabaseAdmin().from("platform_members").update({ status: "active" }).eq("id", memberId);
+      const { error: updErr } = await getSupabaseAdmin2().from("platform_members").update({ status: "active" }).eq("id", memberId);
       if (updErr) throw updErr;
-      await getSupabaseAdmin().from("platform_audit_logs").insert({
+      await getSupabaseAdmin2().from("platform_audit_logs").insert({
         actor_user_id: req.user.id,
         action: "platform.member.reactivated",
         entity_type: "platform_members",
@@ -878,7 +878,7 @@ function createAdminOtherRouter(getSupabaseAdmin, requirePlatformAuth) {
     try {
       const { platformContext } = req;
       const { page, pageSize, from, to } = parsePagination(req.query);
-      let query = getSupabaseAdmin().from("platform_audit_logs").select("*", { count: "exact" }).order("created_at", { ascending: false }).range(from, to);
+      let query = getSupabaseAdmin2().from("platform_audit_logs").select("*", { count: "exact" }).order("created_at", { ascending: false }).range(from, to);
       if (typeof req.query.action === "string" && req.query.action) query = query.ilike("action", `%${req.query.action.replace(/[%(),]/g, "").slice(0, 100)}%`);
       if (typeof req.query.severity === "string" && req.query.severity) query = query.eq("severity", req.query.severity);
       if (platformContext.role?.key !== "admin") {
@@ -891,7 +891,7 @@ function createAdminOtherRouter(getSupabaseAdmin, requirePlatformAuth) {
       }
       const { data, error, count } = await query;
       if (error) throw error;
-      const { data: usersData } = await getSupabaseAdmin().auth.admin.listUsers();
+      const { data: usersData } = await getSupabaseAdmin2().auth.admin.listUsers();
       const result = data.map((log) => {
         const user = usersData?.users?.find((u) => u.id === log.actor_user_id);
         return { ...log, actor_email: user?.email || "Sistema" };
@@ -908,15 +908,15 @@ function createAdminOtherRouter(getSupabaseAdmin, requirePlatformAuth) {
         return res.status(403).json({ error: "Forbidden" });
       }
       const dbStart = performance.now();
-      const { error } = await getSupabaseAdmin().from("platform_roles").select("id").limit(1);
+      const { error } = await getSupabaseAdmin2().from("platform_roles").select("id").limit(1);
       const databaseLatencyMs = Math.round(performance.now() - dbStart);
       const authStart = performance.now();
-      const authCheck = await getSupabaseAdmin().auth.admin.listUsers({ page: 1, perPage: 1 });
+      const authCheck = await getSupabaseAdmin2().auth.admin.listUsers({ page: 1, perPage: 1 });
       const authLatencyMs = Math.round(performance.now() - authStart);
       const [lastWebhook, queue, lastReconciliation] = await Promise.all([
-        getSupabaseAdmin().from("billing_webhook_events").select("event_type,status,received_at").order("received_at", { ascending: false }).limit(1).maybeSingle(),
-        getSupabaseAdmin().from("billing_webhook_events").select("*", { count: "exact", head: true }).in("status", ["received", "processing", "failed"]),
-        getSupabaseAdmin().from("billing_reconciliation_runs").select("status,started_at,completed_at,error_count,summary").order("started_at", { ascending: false }).limit(1).maybeSingle()
+        getSupabaseAdmin2().from("billing_webhook_events").select("event_type,status,received_at").order("received_at", { ascending: false }).limit(1).maybeSingle(),
+        getSupabaseAdmin2().from("billing_webhook_events").select("*", { count: "exact", head: true }).in("status", ["received", "processing", "failed"]),
+        getSupabaseAdmin2().from("billing_reconciliation_runs").select("status,started_at,completed_at,error_count,summary").order("started_at", { ascending: false }).limit(1).maybeSingle()
       ]);
       res.json({
         status: !error && !authCheck.error ? "operational" : "degraded",
@@ -936,7 +936,7 @@ function createAdminOtherRouter(getSupabaseAdmin, requirePlatformAuth) {
   });
   router.post("/staff/:id/terminate-sessions", requirePlatformAuth, async (req, res) => {
     if (req.platformContext.role?.key !== "admin") return res.status(403).json({ error: "Somente admin pode encerrar sess\xF5es." });
-    const db = getSupabaseAdmin();
+    const db = getSupabaseAdmin2();
     const target = await db.from("platform_members").select("id,user_id").eq("id", req.params.id).single();
     if (target.error) return res.status(404).json({ error: "Membro n\xE3o encontrado." });
     if (target.data.user_id === req.user.id) return res.status(403).json({ error: "Encerre sua pr\xF3pria sess\xE3o pelo logout." });
@@ -947,7 +947,7 @@ function createAdminOtherRouter(getSupabaseAdmin, requirePlatformAuth) {
   });
   router.get("/system/solutions", requirePlatformAuth, async (req, res) => {
     if (!req.platformContext.permissions.includes("platform.solutions.read") && req.platformContext.role?.key !== "admin") return res.status(403).json({ error: "Forbidden" });
-    const result = await getSupabaseAdmin().from("solutions").select("id,key,name,created_at").order("name");
+    const result = await getSupabaseAdmin2().from("solutions").select("id,key,name,created_at").order("name");
     if (result.error) return res.status(500).json({ error: result.error.message });
     return res.json(result.data);
   });
@@ -955,7 +955,7 @@ function createAdminOtherRouter(getSupabaseAdmin, requirePlatformAuth) {
     if (req.platformContext.role?.key !== "admin" || !req.platformContext.permissions.includes("platform.solutions.manage")) return res.status(403).json({ error: "Forbidden" });
     const name = typeof req.body?.name === "string" ? req.body.name.trim().slice(0, 100) : "";
     if (!name) return res.status(400).json({ error: "Nome \xE9 obrigat\xF3rio." });
-    const db = getSupabaseAdmin();
+    const db = getSupabaseAdmin2();
     const before = await db.from("solutions").select("*").eq("id", req.params.id).single();
     if (before.error) return res.status(404).json({ error: "Solu\xE7\xE3o n\xE3o encontrada." });
     const saved = await db.from("solutions").update({ name }).eq("id", req.params.id).select().single();
@@ -972,7 +972,7 @@ function createAdminOtherRouter(getSupabaseAdmin, requirePlatformAuth) {
     return res.json({ billing: publicBillingHealth(), publicSignup: false, authProvider: "supabase", billingProvider: "asaas", billingEnvironment: process.env.ASAAS_ENV || "sandbox", webhookConfigured: Boolean(process.env.ASAAS_WEBHOOK_TOKEN), cronConfigured: Boolean(process.env.CRON_SECRET) });
   });
   router.get("/performance/own", requirePlatformAuth, async (req, res) => {
-    const db = getSupabaseAdmin();
+    const db = getSupabaseAdmin2();
     const memberId = req.platformContext.platformMember.id;
     const [leads, activities, proposals, contracts] = await Promise.all([
       db.from("platform_lead_assignments").select("*", { count: "exact", head: true }).eq("owner_platform_member_id", memberId),
@@ -1029,11 +1029,11 @@ function csvCell(value) {
   const text = /^[=+\-@]/.test(raw) ? `'${raw}` : raw;
   return `"${text.replace(/"/g, '""').replace(/[\r\n]+/g, " ")}"`;
 }
-function createAdminControlPlaneRouter(getSupabaseAdmin, requirePlatformAuth) {
+function createAdminControlPlaneRouter(getSupabaseAdmin2, requirePlatformAuth) {
   const router = Router4();
   router.get("/control-plane/metrics", requirePlatformAuth, async (req, res) => {
     try {
-      const db = getSupabaseAdmin();
+      const db = getSupabaseAdmin2();
       const now = /* @__PURE__ */ new Date();
       const defaultFrom = new Date(now.valueOf() - 30 * 864e5);
       const from = validDate(req.query.from, defaultFrom);
@@ -1083,7 +1083,7 @@ function createAdminControlPlaneRouter(getSupabaseAdmin, requirePlatformAuth) {
   });
   router.get("/control-plane/filters", requirePlatformAuth, async (req, res) => {
     try {
-      const db = getSupabaseAdmin();
+      const db = getSupabaseAdmin2();
       const context = req.platformContext;
       const teamIds = isGlobalAdmin(context) ? null : context.teams.map((team) => team.id);
       let teamsQuery = db.from("platform_teams").select("id,name,status").eq("status", "active").order("name");
@@ -1109,7 +1109,7 @@ function createAdminControlPlaneRouter(getSupabaseAdmin, requirePlatformAuth) {
       if (!config) return res.status(404).json({ error: "M\xF3dulo n\xE3o encontrado." });
       if (!hasPermission(req.platformContext, config.permission)) return res.status(403).json({ error: "Forbidden" });
       if (req.params.module === "operations" && !isGlobalAdmin(req.platformContext)) return res.status(403).json({ error: "Opera\xE7\xF5es globais exigem perfil admin." });
-      const db = getSupabaseAdmin();
+      const db = getSupabaseAdmin2();
       const { page, pageSize, from, to } = parsePagination(req.query);
       let query = db.from(config.table).select(config.select, { count: "exact" }).order(config.orderField, { ascending: false }).range(from, to);
       const tenants = config.tenantField ? await visibleTenantIds(db, req.platformContext) : null;
@@ -1138,7 +1138,7 @@ function createAdminControlPlaneRouter(getSupabaseAdmin, requirePlatformAuth) {
       const permission = entityType === "onboarding" ? "platform.onboarding.manage" : entityType === "support" ? "platform.support.manage" : entityType === "lgpd" ? "platform.privacy.manage" : entityType === "tenant" ? "platform.clients.manage" : "platform.commercial.manage";
       if (!hasPermission(req.platformContext, permission)) return res.status(403).json({ error: "Forbidden" });
       if (!isGlobalAdmin(req.platformContext) && teamId && !req.platformContext.managedTeams.some((team) => team.id === teamId)) return res.status(403).json({ error: "Recurso fora do escopo gerenciado." });
-      const result = await getSupabaseAdmin().rpc("admin_transition_control_plane", {
+      const result = await getSupabaseAdmin2().rpc("admin_transition_control_plane", {
         p_entity_type: entityType,
         p_entity_id: entityId,
         p_to_status: toStatus,
@@ -1157,9 +1157,9 @@ function createAdminControlPlaneRouter(getSupabaseAdmin, requirePlatformAuth) {
   });
   router.post("/control-plane/onboarding/start", requirePlatformAuth, async (req, res) => {
     if (!hasPermission(req.platformContext, "platform.onboarding.manage")) return res.status(403).json({ error: "Forbidden" });
-    const tenants = await visibleTenantIds(getSupabaseAdmin(), req.platformContext);
+    const tenants = await visibleTenantIds(getSupabaseAdmin2(), req.platformContext);
     if (tenants !== null && !tenants.includes(req.body?.tenantId)) return res.status(403).json({ error: "Cliente fora do escopo." });
-    const result = await getSupabaseAdmin().rpc("admin_start_onboarding", {
+    const result = await getSupabaseAdmin2().rpc("admin_start_onboarding", {
       p_tenant_id: req.body?.tenantId,
       p_template_id: req.body?.templateId,
       p_actor_user_id: req.user.id,
@@ -1170,21 +1170,21 @@ function createAdminControlPlaneRouter(getSupabaseAdmin, requirePlatformAuth) {
   });
   router.post("/control-plane/onboarding/:id/refresh", requirePlatformAuth, async (req, res) => {
     if (!hasPermission(req.platformContext, "platform.onboarding.manage")) return res.status(403).json({ error: "Forbidden" });
-    const result = await getSupabaseAdmin().rpc("admin_refresh_onboarding_progress", { p_run_id: req.params.id, p_actor_user_id: req.user.id });
+    const result = await getSupabaseAdmin2().rpc("admin_refresh_onboarding_progress", { p_run_id: req.params.id, p_actor_user_id: req.user.id });
     if (result.error) return res.status(409).json({ error: result.error.message });
     return res.json({ progressPercent: result.data });
   });
   router.get("/control-plane/tenants/:id/entitlements", requirePlatformAuth, async (req, res) => {
     if (!hasPermission(req.platformContext, "platform.clients.read")) return res.status(403).json({ error: "Forbidden" });
-    const tenants = await visibleTenantIds(getSupabaseAdmin(), req.platformContext);
+    const tenants = await visibleTenantIds(getSupabaseAdmin2(), req.platformContext);
     if (tenants !== null && !tenants.includes(req.params.id)) return res.status(403).json({ error: "Cliente fora do escopo." });
-    const result = await getSupabaseAdmin().rpc("admin_effective_entitlements", { p_tenant_id: req.params.id });
+    const result = await getSupabaseAdmin2().rpc("admin_effective_entitlements", { p_tenant_id: req.params.id });
     if (result.error) throw result.error;
     return res.json(result.data);
   });
   router.get("/access/matrix", requirePlatformAuth, async (req, res) => {
     if (!hasPermission(req.platformContext, "platform.access.simulate")) return res.status(403).json({ error: "Forbidden" });
-    const db = getSupabaseAdmin();
+    const db = getSupabaseAdmin2();
     const [members, permissions, memberships] = await Promise.all([
       db.from("platform_members").select("id,user_id,status,relationship_type,platform_roles(id,key,name)"),
       db.from("platform_role_permissions").select("role_id,platform_permissions(key,category,description)"),
@@ -1196,7 +1196,7 @@ function createAdminControlPlaneRouter(getSupabaseAdmin, requirePlatformAuth) {
   router.post("/access/simulate", requirePlatformAuth, async (req, res) => {
     if (!hasPermission(req.platformContext, "platform.access.simulate")) return res.status(403).json({ error: "Forbidden" });
     const { platformMemberId, permission, teamId, ownerPlatformMemberId } = req.body || {};
-    const db = getSupabaseAdmin();
+    const db = getSupabaseAdmin2();
     const member = await db.from("platform_members").select("id,status,relationship_type,platform_roles(id,key,name)").eq("id", platformMemberId).maybeSingle();
     if (member.error || !member.data) return res.status(404).json({ error: "Usu\xE1rio n\xE3o encontrado." });
     const role = member.data.platform_roles;
@@ -1214,7 +1214,7 @@ function createAdminControlPlaneRouter(getSupabaseAdmin, requirePlatformAuth) {
   router.get("/control-plane/search", requirePlatformAuth, async (req, res) => {
     const term = typeof req.query.q === "string" ? req.query.q.trim().replace(/[%(),]/g, "").slice(0, 80) : "";
     if (term.length < 2) return res.json({ items: [] });
-    const db = getSupabaseAdmin();
+    const db = getSupabaseAdmin2();
     const tenantScope = await visibleTenantIds(db, req.platformContext);
     let tenantQuery = db.from("tenants").select("id,name,slug,lifecycle_status").ilike("name", `%${term}%`).limit(8);
     if (tenantScope !== null) {
@@ -1234,7 +1234,7 @@ function createAdminControlPlaneRouter(getSupabaseAdmin, requirePlatformAuth) {
     };
     const config = allowed[resource];
     if (!config || !hasPermission(req.platformContext, config.permission)) return res.status(404).json({ error: "Exporta\xE7\xE3o indispon\xEDvel." });
-    const db = getSupabaseAdmin();
+    const db = getSupabaseAdmin2();
     const tenants = await visibleTenantIds(db, req.platformContext);
     let query = db.from(config.table).select(config.columns).limit(1e3);
     if (tenants !== null) {
@@ -1256,12 +1256,12 @@ function createAdminControlPlaneRouter(getSupabaseAdmin, requirePlatformAuth) {
 
 // src/server/adminTeamsRouter.ts
 import { Router as Router5 } from "express";
-function createAdminTeamsRouter(getSupabaseAdmin, requirePlatformAuth) {
+function createAdminTeamsRouter(getSupabaseAdmin2, requirePlatformAuth) {
   const router = Router5();
   router.get("/", requirePlatformAuth, async (req, res) => {
     try {
       const { platformContext } = req;
-      let query = getSupabaseAdmin().from("platform_teams").select("*").order("name");
+      let query = getSupabaseAdmin2().from("platform_teams").select("*").order("name");
       if (platformContext.role?.key !== "admin") {
         const teamIds = platformContext.teams.map((t) => t.id);
         if (teamIds.length === 0) return res.json([]);
@@ -1282,7 +1282,7 @@ function createAdminTeamsRouter(getSupabaseAdmin, requirePlatformAuth) {
       }
       const { name, team_type, channel, description, member_lead_visibility, member_client_visibility, allow_self_claim } = req.body;
       const slug = name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "");
-      const { data, error } = await getSupabaseAdmin().from("platform_teams").insert({
+      const { data, error } = await getSupabaseAdmin2().from("platform_teams").insert({
         name,
         slug,
         team_type,
@@ -1295,7 +1295,7 @@ function createAdminTeamsRouter(getSupabaseAdmin, requirePlatformAuth) {
         created_by: req.user.id
       }).select().single();
       if (error) throw error;
-      await getSupabaseAdmin().from("platform_audit_logs").insert({
+      await getSupabaseAdmin2().from("platform_audit_logs").insert({
         actor_user_id: req.user.id,
         action: "team.created",
         entity_type: "platform_teams",
@@ -1316,7 +1316,7 @@ function createAdminTeamsRouter(getSupabaseAdmin, requirePlatformAuth) {
         const isMember = platformContext.teams.some((t) => t.id === teamId);
         if (!isMember) return res.status(403).json({ error: "Forbidden" });
       }
-      const { data, error } = await getSupabaseAdmin().from("platform_teams").select("*").eq("id", teamId).single();
+      const { data, error } = await getSupabaseAdmin2().from("platform_teams").select("*").eq("id", teamId).single();
       if (error) throw error;
       res.json(data);
     } catch (e) {
@@ -1343,10 +1343,10 @@ function createAdminTeamsRouter(getSupabaseAdmin, requirePlatformAuth) {
         }
       }
       if (Object.keys(updates).length === 0) return res.status(400).json({ error: "No valid fields to update" });
-      const before = await getSupabaseAdmin().from("platform_teams").select("*").eq("id", teamId).single();
-      const { data, error } = await getSupabaseAdmin().from("platform_teams").update(updates).eq("id", teamId).select().single();
+      const before = await getSupabaseAdmin2().from("platform_teams").select("*").eq("id", teamId).single();
+      const { data, error } = await getSupabaseAdmin2().from("platform_teams").update(updates).eq("id", teamId).select().single();
       if (error) throw error;
-      await getSupabaseAdmin().from("platform_audit_logs").insert({
+      await getSupabaseAdmin2().from("platform_audit_logs").insert({
         actor_user_id: req.user.id,
         action: "team.updated",
         entity_type: "platform_teams",
@@ -1368,7 +1368,7 @@ function createAdminTeamsRouter(getSupabaseAdmin, requirePlatformAuth) {
         const isMember = platformContext.teams.some((t) => t.id === teamId);
         if (!isMember) return res.status(403).json({ error: "Forbidden" });
       }
-      const { data: teamMembers, error } = await getSupabaseAdmin().from("platform_team_members").select(`
+      const { data: teamMembers, error } = await getSupabaseAdmin2().from("platform_team_members").select(`
           team_role,
           status,
           joined_at,
@@ -1381,7 +1381,7 @@ function createAdminTeamsRouter(getSupabaseAdmin, requirePlatformAuth) {
           )
         `).eq("team_id", teamId);
       if (error) throw error;
-      const { data: usersData } = await getSupabaseAdmin().auth.admin.listUsers();
+      const { data: usersData } = await getSupabaseAdmin2().auth.admin.listUsers();
       const result = teamMembers.map((tm) => {
         const member = tm.platform_members;
         const user = usersData?.users?.find((u) => u.id === member.user_id);
@@ -1412,7 +1412,7 @@ function createAdminTeamsRouter(getSupabaseAdmin, requirePlatformAuth) {
       if (!hasGlobal) {
         isManager = platformContext.managedTeams.some((t) => t.id === teamId);
         if (!isManager) return res.status(403).json({ error: "Forbidden" });
-        const { data: tgtMember } = await getSupabaseAdmin().from("platform_members").select("platform_roles(key)").eq("id", platform_member_id).single();
+        const { data: tgtMember } = await getSupabaseAdmin2().from("platform_members").select("platform_roles(key)").eq("id", platform_member_id).single();
         if (tgtMember?.platform_roles?.key !== "sales") {
           return res.status(403).json({ error: "Managers can only add Sales to their team" });
         }
@@ -1420,14 +1420,14 @@ function createAdminTeamsRouter(getSupabaseAdmin, requirePlatformAuth) {
           return res.status(403).json({ error: "Managers cannot create other Managers" });
         }
       }
-      const { data, error } = await getSupabaseAdmin().from("platform_team_members").upsert({
+      const { data, error } = await getSupabaseAdmin2().from("platform_team_members").upsert({
         team_id: teamId,
         platform_member_id,
         team_role,
         status: "active"
       }, { onConflict: "team_id,platform_member_id" }).select().single();
       if (error) throw error;
-      await getSupabaseAdmin().from("platform_audit_logs").insert({
+      await getSupabaseAdmin2().from("platform_audit_logs").insert({
         actor_user_id: req.user.id,
         action: team_role === "manager" ? "team.manager.added" : "team.member.added",
         entity_type: "platform_team_members",
@@ -1449,14 +1449,14 @@ function createAdminTeamsRouter(getSupabaseAdmin, requirePlatformAuth) {
       if (platformContext.role?.key !== "admin") {
         isManager = platformContext.managedTeams.some((t) => t.id === teamId);
         if (!isManager) return res.status(403).json({ error: "Forbidden" });
-        const { data: target } = await getSupabaseAdmin().from("platform_team_members").select("team_role, platform_members(platform_roles(key))").eq("team_id", teamId).eq("platform_member_id", platform_member_id).maybeSingle();
+        const { data: target } = await getSupabaseAdmin2().from("platform_team_members").select("team_role, platform_members(platform_roles(key))").eq("team_id", teamId).eq("platform_member_id", platform_member_id).maybeSingle();
         if (target?.team_role === "manager" || target?.platform_members?.platform_roles?.key !== "sales") {
           return res.status(403).json({ error: "Managers can only remove Sales members from their team" });
         }
       }
-      const { error } = await getSupabaseAdmin().from("platform_team_members").delete().eq("team_id", teamId).eq("platform_member_id", platform_member_id);
+      const { error } = await getSupabaseAdmin2().from("platform_team_members").delete().eq("team_id", teamId).eq("platform_member_id", platform_member_id);
       if (error) throw error;
-      await getSupabaseAdmin().from("platform_audit_logs").insert({
+      await getSupabaseAdmin2().from("platform_audit_logs").insert({
         actor_user_id: req.user.id,
         action: "team.member.removed",
         entity_type: "platform_team_members",
@@ -2002,12 +2002,12 @@ async function runBillingReconciliation(db, triggeredByUserId) {
     throw error;
   }
 }
-function createBillingRouters(getSupabaseAdmin, requirePlatformAuth) {
+function createBillingRouters(getSupabaseAdmin2, requirePlatformAuth) {
   const publicRouter = Router6();
   const adminRouter = Router6();
   const internalRouter = Router6();
   publicRouter.post("/asaas", async (req, res) => {
-    const db = getSupabaseAdmin();
+    const db = getSupabaseAdmin2();
     let config;
     try {
       config = getBillingConfig();
@@ -2060,7 +2060,7 @@ function createBillingRouters(getSupabaseAdmin, requirePlatformAuth) {
   });
   adminRouter.get("/billing/overview", requirePlatformAuth, async (req, res) => {
     if (!hasPermission2(req.platformContext, "platform.billing.read")) return res.status(403).json({ error: "Forbidden" });
-    const db = getSupabaseAdmin();
+    const db = getSupabaseAdmin2();
     const contractIds = await scopedContractIds(db, req.platformContext);
     if (contractIds && !contractIds.length) return res.json({
       configuration: publicBillingHealth(),
@@ -2092,7 +2092,7 @@ function createBillingRouters(getSupabaseAdmin, requirePlatformAuth) {
   });
   adminRouter.get("/billing/records", requirePlatformAuth, async (req, res) => {
     if (!hasPermission2(req.platformContext, "platform.billing.read")) return res.status(403).json({ error: "Forbidden" });
-    const db = getSupabaseAdmin();
+    const db = getSupabaseAdmin2();
     const contractIds = await scopedContractIds(db, req.platformContext);
     const { page, pageSize, from, to } = parsePagination(req.query);
     if (contractIds && !contractIds.length) return res.json({ subscriptions: pageResult([], 0, page, pageSize), payments: pageResult([], 0, page, pageSize) });
@@ -2115,7 +2115,7 @@ function createBillingRouters(getSupabaseAdmin, requirePlatformAuth) {
   });
   adminRouter.get("/billing/plans", requirePlatformAuth, async (req, res) => {
     if (!hasPermission2(req.platformContext, "platform.billing.read")) return res.status(403).json({ error: "Forbidden" });
-    const { data, error } = await getSupabaseAdmin().from("billing_plans").select("*, billing_plan_prices(*), billing_plan_solutions(*, solutions(id,key,name))").order("code").order("version", { ascending: false });
+    const { data, error } = await getSupabaseAdmin2().from("billing_plans").select("*, billing_plan_prices(*), billing_plan_solutions(*, solutions(id,key,name))").order("code").order("version", { ascending: false });
     if (error) return res.status(500).json({ error: error.message });
     return res.json(data);
   });
@@ -2123,7 +2123,7 @@ function createBillingRouters(getSupabaseAdmin, requirePlatformAuth) {
     if (!hasPermission2(req.platformContext, "platform.billing.manage")) return res.status(403).json({ error: "Forbidden" });
     const { code, name, description, trial_days, grace_days, limits, amount_cents, cycle, billing_type, solution_ids, solution_limits } = req.body;
     if (!code || !name) return res.status(400).json({ error: "C\xF3digo e nome s\xE3o obrigat\xF3rios." });
-    const db = getSupabaseAdmin();
+    const db = getSupabaseAdmin2();
     const created = await db.rpc("admin_create_billing_plan_version", {
       p_code: code,
       p_name: name,
@@ -2145,7 +2145,7 @@ function createBillingRouters(getSupabaseAdmin, requirePlatformAuth) {
   });
   adminRouter.get("/commercial/catalog", requirePlatformAuth, async (req, res) => {
     if (!hasPermission2(req.platformContext, "platform.commercial.read")) return res.status(403).json({ error: "Forbidden" });
-    const db = getSupabaseAdmin();
+    const db = getSupabaseAdmin2();
     const [solutions, teams] = await Promise.all([
       db.from("solutions").select("id,key,name").order("name"),
       db.from("platform_teams").select("id,name,status").eq("status", "active").order("name")
@@ -2156,7 +2156,7 @@ function createBillingRouters(getSupabaseAdmin, requirePlatformAuth) {
   });
   adminRouter.get("/commercial/demos", requirePlatformAuth, async (req, res) => {
     if (!hasPermission2(req.platformContext, "platform.commercial.read")) return res.status(403).json({ error: "Forbidden" });
-    let query = getSupabaseAdmin().from("commercial_demos").select("*, marketing_leads(id,name,email,company,status), platform_teams(id,name)").order("created_at", { ascending: false });
+    let query = getSupabaseAdmin2().from("commercial_demos").select("*, marketing_leads(id,name,email,company,status), platform_teams(id,name)").order("created_at", { ascending: false });
     if (req.platformContext.role.key !== "admin") {
       const teamIds = req.platformContext.teams.map((team) => team.id);
       if (!teamIds.length) return res.json([]);
@@ -2170,7 +2170,7 @@ function createBillingRouters(getSupabaseAdmin, requirePlatformAuth) {
   });
   adminRouter.patch("/commercial/demos/:id", requirePlatformAuth, async (req, res) => {
     if (!hasPermission2(req.platformContext, "platform.commercial.manage")) return res.status(403).json({ error: "Forbidden" });
-    const db = getSupabaseAdmin();
+    const db = getSupabaseAdmin2();
     const existing = await db.from("commercial_demos").select("*").eq("id", req.params.id).single();
     if (existing.error) return res.status(404).json({ error: "Demonstra\xE7\xE3o n\xE3o encontrada." });
     if (!canReadAssignedResource(req.platformContext, existing.data, "member_lead_visibility")) return res.status(403).json({ error: "Demonstra\xE7\xE3o fora do seu escopo." });
@@ -2185,7 +2185,7 @@ function createBillingRouters(getSupabaseAdmin, requirePlatformAuth) {
     if (!hasPermission2(req.platformContext, "platform.commercial.manage")) return res.status(403).json({ error: "Forbidden" });
     const { activity_type, subject, description, scheduled_at, status, result, next_action, next_action_at } = req.body;
     if (!activity_type || !subject) return res.status(400).json({ error: "Tipo e assunto s\xE3o obrigat\xF3rios." });
-    const db = getSupabaseAdmin();
+    const db = getSupabaseAdmin2();
     const { data: assignment } = await db.from("platform_lead_assignments").select("*").eq("lead_id", req.params.leadId).maybeSingle();
     if (req.platformContext.role.key !== "admin" && !canReadAssignedResource(req.platformContext, assignment, "member_lead_visibility")) {
       return res.status(403).json({ error: "Lead fora do seu escopo." });
@@ -2211,7 +2211,7 @@ function createBillingRouters(getSupabaseAdmin, requirePlatformAuth) {
   });
   adminRouter.get("/commercial/proposals", requirePlatformAuth, async (req, res) => {
     if (!hasPermission2(req.platformContext, "platform.commercial.read")) return res.status(403).json({ error: "Forbidden" });
-    let query = getSupabaseAdmin().from("commercial_proposals").select("*, marketing_leads(id,name,email,company), billing_plans(id,name,code,version)").order("created_at", { ascending: false });
+    let query = getSupabaseAdmin2().from("commercial_proposals").select("*, marketing_leads(id,name,email,company), billing_plans(id,name,code,version)").order("created_at", { ascending: false });
     if (req.platformContext.role.key !== "admin") {
       const teamIds = req.platformContext.teams.map((team) => team.id);
       if (!teamIds.length) return res.json([]);
@@ -2227,7 +2227,7 @@ function createBillingRouters(getSupabaseAdmin, requirePlatformAuth) {
     if (!hasPermission2(req.platformContext, "platform.commercial.manage")) return res.status(403).json({ error: "Forbidden" });
     const input = req.body;
     if (!input.lead_id || !input.plan_id || !Number.isInteger(Number(input.amount_cents))) return res.status(400).json({ error: "Lead, plano e valor s\xE3o obrigat\xF3rios." });
-    const db = getSupabaseAdmin();
+    const db = getSupabaseAdmin2();
     const assignmentResult = await db.from("platform_lead_assignments").select("*").eq("lead_id", input.lead_id).maybeSingle();
     const assignment = assignmentResult.data;
     if (req.platformContext.role.key !== "admin" && (!assignment || !canReadAssignedResource(req.platformContext, assignment, "member_lead_visibility"))) {
@@ -2260,7 +2260,7 @@ function createBillingRouters(getSupabaseAdmin, requirePlatformAuth) {
   });
   adminRouter.post("/commercial/proposals/:id/approve", requirePlatformAuth, async (req, res) => {
     if (!hasPermission2(req.platformContext, "platform.commercial.approve")) return res.status(403).json({ error: "Forbidden" });
-    const db = getSupabaseAdmin();
+    const db = getSupabaseAdmin2();
     const { data: proposal, error: readError } = await db.from("commercial_proposals").select("*").eq("id", req.params.id).single();
     if (readError) return res.status(404).json({ error: "Proposta n\xE3o encontrada." });
     if (req.platformContext.role.key !== "admin" && !req.platformContext.managedTeams.some((team) => team.id === proposal.team_id)) {
@@ -2292,7 +2292,7 @@ function createBillingRouters(getSupabaseAdmin, requirePlatformAuth) {
     if (!hasPermission2(req.platformContext, "platform.commercial.manage")) return res.status(403).json({ error: "Forbidden" });
     const reason = typeof req.body?.reason === "string" ? req.body.reason.trim() : "";
     if (!reason) return res.status(400).json({ error: "O motivo da nova vers\xE3o \xE9 obrigat\xF3rio." });
-    const db = getSupabaseAdmin();
+    const db = getSupabaseAdmin2();
     const existing = await db.from("commercial_proposals").select("*").eq("id", req.params.id).maybeSingle();
     if (existing.error || !existing.data) return res.status(404).json({ error: "Proposta n\xE3o encontrada." });
     if (!canReadAssignedResource(req.platformContext, existing.data, "member_lead_visibility")) return res.status(403).json({ error: "Proposta fora do seu escopo." });
@@ -2306,7 +2306,7 @@ function createBillingRouters(getSupabaseAdmin, requirePlatformAuth) {
   });
   adminRouter.post("/commercial/proposals/:id/create-contract", requirePlatformAuth, async (req, res) => {
     if (!hasPermission2(req.platformContext, "platform.commercial.manage")) return res.status(403).json({ error: "Forbidden" });
-    const db = getSupabaseAdmin();
+    const db = getSupabaseAdmin2();
     const { data: proposal, error } = await db.from("commercial_proposals").select("*, marketing_leads(*), billing_plans(*)").eq("id", req.params.id).single();
     if (error || !proposal) return res.status(404).json({ error: "Proposta n\xE3o encontrada." });
     if (proposal.status !== "approved") return res.status(409).json({ error: "A proposta precisa estar aprovada." });
@@ -2343,7 +2343,7 @@ function createBillingRouters(getSupabaseAdmin, requirePlatformAuth) {
   });
   adminRouter.get("/commercial/contracts", requirePlatformAuth, async (req, res) => {
     if (!hasPermission2(req.platformContext, "platform.commercial.read")) return res.status(403).json({ error: "Forbidden" });
-    let query = getSupabaseAdmin().from("commercial_contracts").select("*, billing_plans(name,code,version), commercial_contract_items(*, solutions(id,key,name)), billing_subscriptions(id,status,provider_subscription_id), tenant_billing_state(access_status,paid_through,grace_ends_at)").order("created_at", { ascending: false });
+    let query = getSupabaseAdmin2().from("commercial_contracts").select("*, billing_plans(name,code,version), commercial_contract_items(*, solutions(id,key,name)), billing_subscriptions(id,status,provider_subscription_id), tenant_billing_state(access_status,paid_through,grace_ends_at)").order("created_at", { ascending: false });
     if (req.platformContext.role.key !== "admin") {
       const teamIds = req.platformContext.teams.map((team) => team.id);
       if (!teamIds.length) return res.json([]);
@@ -2361,7 +2361,7 @@ function createBillingRouters(getSupabaseAdmin, requirePlatformAuth) {
   });
   adminRouter.post("/commercial/contracts/:id/approve", requirePlatformAuth, async (req, res) => {
     if (!hasPermission2(req.platformContext, "platform.commercial.approve")) return res.status(403).json({ error: "Forbidden" });
-    const db = getSupabaseAdmin();
+    const db = getSupabaseAdmin2();
     const { data: contract, error: readError } = await db.from("commercial_contracts").select("*").eq("id", req.params.id).single();
     if (readError) return res.status(404).json({ error: "Contrato n\xE3o encontrado." });
     if (req.platformContext.role.key !== "admin" && !req.platformContext.managedTeams.some((team) => team.id === contract.team_id)) {
@@ -2393,7 +2393,7 @@ function createBillingRouters(getSupabaseAdmin, requirePlatformAuth) {
     try {
       const config = getBillingConfig();
       const provider = new AsaasBillingProvider(config);
-      const db = getSupabaseAdmin();
+      const db = getSupabaseAdmin2();
       const { data: contract, error } = await db.from("commercial_contracts").select("*").eq("id", req.params.id).single();
       if (error || !contract) return res.status(404).json({ error: "Contrato n\xE3o encontrado." });
       if (contract.status !== "approved") return res.status(409).json({ error: "O contrato precisa estar aprovado." });
@@ -2450,7 +2450,7 @@ function createBillingRouters(getSupabaseAdmin, requirePlatformAuth) {
   adminRouter.post("/billing/subscriptions/:id/cancel", requirePlatformAuth, async (req, res) => {
     if (req.platformContext.role?.key !== "admin" || !hasPermission2(req.platformContext, "platform.billing.manage")) return res.status(403).json({ error: "Somente admin pode cancelar recorr\xEAncia." });
     if (!req.body?.reason || String(req.body.reason).trim().length < 5) return res.status(400).json({ error: "Informe um motivo de cancelamento." });
-    const db = getSupabaseAdmin();
+    const db = getSupabaseAdmin2();
     const local = await db.from("billing_subscriptions").select("*, commercial_contracts(*)").eq("id", req.params.id).single();
     if (local.error || !local.data) return res.status(404).json({ error: "Assinatura n\xE3o encontrada." });
     try {
@@ -2476,7 +2476,7 @@ function createBillingRouters(getSupabaseAdmin, requirePlatformAuth) {
   adminRouter.get("/billing/webhooks", requirePlatformAuth, async (req, res) => {
     if (!hasPermission2(req.platformContext, "platform.billing.webhooks.manage")) return res.status(403).json({ error: "Forbidden" });
     const status = typeof req.query.status === "string" ? req.query.status : null;
-    let query = getSupabaseAdmin().from("billing_webhook_events").select("id,provider_event_id,event_type,status,received_at,processed_at,attempts,last_error,correlation_id", { count: "exact" }).order("received_at", { ascending: false });
+    let query = getSupabaseAdmin2().from("billing_webhook_events").select("id,provider_event_id,event_type,status,received_at,processed_at,attempts,last_error,correlation_id", { count: "exact" }).order("received_at", { ascending: false });
     if (status) query = query.eq("status", status);
     const { page, pageSize, from, to } = parsePagination(req.query);
     query = query.range(from, to);
@@ -2486,7 +2486,7 @@ function createBillingRouters(getSupabaseAdmin, requirePlatformAuth) {
   });
   adminRouter.post("/billing/webhooks/:id/reprocess", requirePlatformAuth, async (req, res) => {
     if (!hasPermission2(req.platformContext, "platform.billing.webhooks.manage")) return res.status(403).json({ error: "Forbidden" });
-    const db = getSupabaseAdmin();
+    const db = getSupabaseAdmin2();
     const { data: eventRow, error } = await db.from("billing_webhook_events").select("*").eq("id", req.params.id).single();
     if (error) return res.status(404).json({ error: "Evento n\xE3o encontrado." });
     try {
@@ -2502,8 +2502,8 @@ function createBillingRouters(getSupabaseAdmin, requirePlatformAuth) {
   adminRouter.post("/billing/reconcile", requirePlatformAuth, async (req, res) => {
     if (req.platformContext.role?.key !== "admin" || !hasPermission2(req.platformContext, "platform.billing.manage")) return res.status(403).json({ error: "Forbidden" });
     try {
-      const result = await runBillingReconciliation(getSupabaseAdmin(), req.user.id);
-      await getSupabaseAdmin().from("platform_audit_logs").insert({ actor_user_id: req.user.id, action: "billing.reconciliation.executed", entity_type: "billing_reconciliation_runs", severity: "warning", ...auditContext(req, { result }) });
+      const result = await runBillingReconciliation(getSupabaseAdmin2(), req.user.id);
+      await getSupabaseAdmin2().from("platform_audit_logs").insert({ actor_user_id: req.user.id, action: "billing.reconciliation.executed", entity_type: "billing_reconciliation_runs", severity: "warning", ...auditContext(req, { result }) });
       return res.json(result);
     } catch {
       return res.status(500).json({ error: "Falha na concilia\xE7\xE3o." });
@@ -2512,7 +2512,7 @@ function createBillingRouters(getSupabaseAdmin, requirePlatformAuth) {
   internalRouter.get("/reconcile", async (req, res) => {
     if (!webhookTokenMatches(req.header("authorization")?.replace(/^Bearer\s+/i, ""), process.env.CRON_SECRET)) return res.status(401).json({ error: "Unauthorized" });
     try {
-      return res.json(await runBillingReconciliation(getSupabaseAdmin()));
+      return res.json(await runBillingReconciliation(getSupabaseAdmin2()));
     } catch {
       return res.status(500).json({ error: "Falha na concilia\xE7\xE3o." });
     }
@@ -2521,10 +2521,134 @@ function createBillingRouters(getSupabaseAdmin, requirePlatformAuth) {
 }
 
 // server.ts
-import { createClient } from "@supabase/supabase-js";
+import { createClient as createClient2 } from "@supabase/supabase-js";
 import dotenv from "dotenv";
 import cors from "cors";
 import { randomUUID as randomUUID2 } from "node:crypto";
+
+// src/server/tenantAuth.ts
+import { createClient } from "@supabase/supabase-js";
+var getSupabaseAdmin = () => {
+  const url = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || "";
+  const key = process.env.SUPABASE_SECRET_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY || "";
+  if (!url || !key) throw new Error("Missing server-side Supabase credentials");
+  return createClient(url, key, { auth: { autoRefreshToken: false, persistSession: false } });
+};
+var authenticateRequest = async (req, res, next) => {
+  const authHeader = req.headers.authorization;
+  if (!authHeader) return res.status(401).json({ error: "Missing authorization header" });
+  const token = authHeader.replace("Bearer ", "");
+  try {
+    const db = req.supabaseAdmin || getSupabaseAdmin();
+    const { data: { user }, error: authErr } = await db.auth.getUser(token);
+    if (authErr || !user) return res.status(401).json({ error: "Invalid or expired session" });
+    req.user = user;
+    next();
+  } catch (e) {
+    return res.status(500).json({ error: "Authentication system error" });
+  }
+};
+var resolveTenantContext = async (req, res, next) => {
+  const tenantId = req.headers["x-tenant-id"] || req.body.tenant_id;
+  if (!tenantId) {
+    return res.status(400).json({ error: "Missing tenant identification" });
+  }
+  try {
+    const user = req.user;
+    if (!user) return res.status(401).json({ error: "Authentication required before tenant resolution" });
+    const db = req.supabaseAdmin || getSupabaseAdmin();
+    const { data: membership } = await db.from("memberships").select("*, tenants(*)").eq("user_id", user.id).eq("tenant_id", tenantId).eq("status", "active").maybeSingle();
+    if (!membership) {
+      return res.status(403).json({ error: "Forbidden: No active membership in this tenant" });
+    }
+    if (membership.tenants?.status !== "active" && membership.tenants?.status !== "trial") {
+      return res.status(403).json({ error: "Forbidden: Tenant is not active" });
+    }
+    const { data: roleRefs } = await db.from("membership_roles").select("role_id").eq("membership_id", membership.id);
+    let roles = [];
+    let permissions = [];
+    if (roleRefs && roleRefs.length > 0) {
+      const roleIds = roleRefs.map((r) => r.role_id);
+      const { data: rolesData } = await db.from("roles").select("id, key").in("id", roleIds);
+      if (rolesData) roles = rolesData;
+      const { data: pRefs } = await db.from("role_permissions").select("permission_id").in("role_id", roleIds);
+      if (pRefs && pRefs.length > 0) {
+        const { data: pData } = await db.from("permissions").select("key").in("id", pRefs.map((p) => p.permission_id));
+        if (pData) permissions = pData.map((p) => p.key);
+      }
+    }
+    const { data: sRefs } = await db.from("tenant_solutions").select("solution_id").eq("tenant_id", tenantId).eq("status", "active");
+    let solutions = [];
+    if (sRefs && sRefs.length > 0) {
+      const sIds = sRefs.map((s) => s.solution_id);
+      const { data: sData } = await db.from("solutions").select("key").in("id", sIds);
+      if (sData) solutions = sData.map((s) => s.key);
+    }
+    req.tenantContext = {
+      membership,
+      tenant: membership.tenants,
+      roles,
+      permissions,
+      solutions
+    };
+    next();
+  } catch (e) {
+    return res.status(500).json({ error: "Tenant resolution error" });
+  }
+};
+var requireTenantPermission = (requiredPermission) => {
+  return (req, res, next) => {
+    const context = req.tenantContext;
+    if (!context) return res.status(500).json({ error: "Missing tenant context" });
+    if (!context.permissions.includes(requiredPermission)) {
+      return res.status(403).json({ error: `Forbidden: requires permission ${requiredPermission}` });
+    }
+    next();
+  };
+};
+var resolvePlatformContext = async (req, res, next) => {
+  try {
+    const user = req.user;
+    if (!user) return res.status(401).json({ error: "Authentication required" });
+    const db = req.supabaseAdmin || getSupabaseAdmin();
+    const { data: platformMember } = await db.from("platform_members").select("*, platform_roles(*)").eq("user_id", user.id).maybeSingle();
+    if (!platformMember) {
+      return res.status(403).json({ error: "Forbidden: Not a platform member" });
+    }
+    if (platformMember.status === "suspended") {
+      return res.status(403).json({ error: "Forbidden: Platform member suspended" });
+    }
+    const role = platformMember.platform_roles;
+    let permissions = [];
+    if (role) {
+      const { data: rolePerms } = await db.from("platform_role_permissions").select("platform_permissions(key)").eq("role_id", role.id);
+      if (rolePerms) {
+        permissions = rolePerms.map((rp) => rp.platform_permissions?.key).filter(Boolean);
+      }
+    }
+    req.platformContext = {
+      platformMember,
+      role,
+      permissions
+    };
+    next();
+  } catch (e) {
+    return res.status(500).json({ error: "Platform resolution error" });
+  }
+};
+var requirePlatformPermission = (requiredPermission) => {
+  return (req, res, next) => {
+    const context = req.platformContext;
+    if (!context) return res.status(500).json({ error: "Missing platform context" });
+    if (context.role?.key === "admin") return next();
+    if (!context.permissions.includes(requiredPermission)) {
+      return res.status(403).json({ error: `Forbidden: requires platform permission ${requiredPermission}` });
+    }
+    next();
+  };
+};
+
+// server.ts
 dotenv.config({ path: [".env.local", ".env"] });
 async function createApp() {
   initServerObservability();
@@ -2550,14 +2674,14 @@ async function createApp() {
   });
   app.use(cors());
   let _supabaseAdmin = null;
-  const getSupabaseAdmin = () => {
+  const getSupabaseAdmin2 = () => {
     if (!_supabaseAdmin) {
       const url = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || "";
       const key = process.env.SUPABASE_SECRET_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY || "";
       if (!url || !key) {
         throw new Error("Missing server-side Supabase credentials");
       }
-      _supabaseAdmin = createClient(url, key, { auth: { autoRefreshToken: false, persistSession: false } });
+      _supabaseAdmin = createClient2(url, key, { auth: { autoRefreshToken: false, persistSession: false } });
     }
     return _supabaseAdmin;
   };
@@ -2566,9 +2690,9 @@ async function createApp() {
     if (!authHeader) return res.status(401).json({ error: "Missing authorization header" });
     const token = authHeader.replace("Bearer ", "");
     try {
-      const { data: { user }, error: authErr } = await getSupabaseAdmin().auth.getUser(token);
+      const { data: { user }, error: authErr } = await getSupabaseAdmin2().auth.getUser(token);
       if (authErr || !user) return res.status(401).json({ error: "Invalid session" });
-      const { data: platformMember, error: memberErr } = await getSupabaseAdmin().from("platform_members").select("*, platform_roles(*)").eq("user_id", user.id).maybeSingle();
+      const { data: platformMember, error: memberErr } = await getSupabaseAdmin2().from("platform_members").select("*, platform_roles(*)").eq("user_id", user.id).maybeSingle();
       if (memberErr || !platformMember) {
         return res.status(403).json({ error: "Forbidden: Not a platform member" });
       }
@@ -2579,12 +2703,12 @@ async function createApp() {
       if (!role) {
         return res.status(403).json({ error: "Forbidden: No platform role assigned" });
       }
-      const { data: rolePerms } = await getSupabaseAdmin().from("platform_role_permissions").select("platform_permissions(key)").eq("role_id", role.id);
+      const { data: rolePerms } = await getSupabaseAdmin2().from("platform_role_permissions").select("platform_permissions(key)").eq("role_id", role.id);
       const permissions = (rolePerms || []).map((rp) => rp.platform_permissions?.key).filter(Boolean);
       if (!permissions.includes("platform.access") && role.key !== "admin") {
         return res.status(403).json({ error: "Forbidden: platform.access is required" });
       }
-      const { data: teamMemberships } = await getSupabaseAdmin().from("platform_team_members").select("*, platform_teams(*)").eq("platform_member_id", platformMember.id).eq("status", "active");
+      const { data: teamMemberships } = await getSupabaseAdmin2().from("platform_team_members").select("*, platform_teams(*)").eq("platform_member_id", platformMember.id).eq("status", "active");
       const teams = (teamMemberships || []).map((tm) => tm.platform_teams);
       const managedTeams = (teamMemberships || []).filter((tm) => tm.team_role === "manager").map((tm) => tm.platform_teams);
       req.user = user;
@@ -2607,10 +2731,10 @@ async function createApp() {
     if (!authHeader) return res.status(401).json({ error: "Missing authorization header" });
     const token = authHeader.replace("Bearer ", "");
     try {
-      const { data: { user }, error: authErr } = await getSupabaseAdmin().auth.getUser(token);
+      const { data: { user }, error: authErr } = await getSupabaseAdmin2().auth.getUser(token);
       if (authErr || !user) return res.status(401).json({ error: "Invalid session" });
-      const { data: tenantMemberships } = await getSupabaseAdmin().from("memberships").select("*, tenants(*)").eq("user_id", user.id);
-      const { data: platformMember } = await getSupabaseAdmin().from("platform_members").select("*, platform_roles(*)").eq("user_id", user.id).maybeSingle();
+      const { data: tenantMemberships } = await getSupabaseAdmin2().from("memberships").select("*, tenants(*)").eq("user_id", user.id);
+      const { data: platformMember } = await getSupabaseAdmin2().from("platform_members").select("*, platform_roles(*)").eq("user_id", user.id).maybeSingle();
       if (!platformMember) {
         return res.json({
           user,
@@ -2630,9 +2754,9 @@ async function createApp() {
         });
       }
       const role = platformMember.platform_roles;
-      const { data: rolePerms } = role ? await getSupabaseAdmin().from("platform_role_permissions").select("platform_permissions(key)").eq("role_id", role.id) : { data: [] };
+      const { data: rolePerms } = role ? await getSupabaseAdmin2().from("platform_role_permissions").select("platform_permissions(key)").eq("role_id", role.id) : { data: [] };
       const permissions = (rolePerms || []).map((rp) => rp.platform_permissions?.key).filter(Boolean);
-      const { data: teamMemberships } = await getSupabaseAdmin().from("platform_team_members").select("*, platform_teams(*)").eq("platform_member_id", platformMember.id).eq("status", "active");
+      const { data: teamMemberships } = await getSupabaseAdmin2().from("platform_team_members").select("*, platform_teams(*)").eq("platform_member_id", platformMember.id).eq("status", "active");
       const teams = (teamMemberships || []).map((tm) => tm.platform_teams);
       const managedTeams = (teamMemberships || []).filter((tm) => tm.team_role === "manager").map((tm) => tm.platform_teams);
       return res.json({
@@ -2652,10 +2776,20 @@ async function createApp() {
       return res.status(500).json({ error: "N\xE3o foi poss\xEDvel resolver a sess\xE3o administrativa." });
     }
   });
-  app.get("/api/admin/tenants", requirePlatformAuth, async (req, res) => {
+  app.get("/api/workspace/me", authenticateRequest, resolveTenantContext, requireTenantPermission("workspace.access"), async (req, res) => {
+    const { tenantContext, user } = req;
+    res.json({
+      success: true,
+      user_id: user.id,
+      tenant: tenantContext.tenant.name,
+      permissions: tenantContext.permissions,
+      membership_id: tenantContext.membership.id
+    });
+  });
+  app.get("/api/admin/tenants", authenticateRequest, resolvePlatformContext, requirePlatformPermission("platform.access"), async (req, res) => {
     res.redirect(307, "/api/admin/clients");
   });
-  app.get("/api/admin/tenants/:id", requirePlatformAuth, async (req, res) => {
+  app.get("/api/admin/tenants/:id", authenticateRequest, resolvePlatformContext, requirePlatformPermission("platform.access"), async (req, res) => {
     res.redirect(307, `/api/admin/clients/${encodeURIComponent(req.params.id)}`);
   });
   app.post("/api/admin/tenants/release-demo", requirePlatformAuth, async (req, res) => {
@@ -2666,7 +2800,7 @@ async function createApp() {
       }
       const { tenantId, solutionIds, primaryColor, logoInitials } = req.body;
       if (!Array.isArray(solutionIds) || solutionIds.length === 0) return res.status(400).json({ error: "Selecione ao menos uma solu\xE7\xE3o para o trial." });
-      const db = getSupabaseAdmin();
+      const db = getSupabaseAdmin2();
       const { data: lead, error: leadError } = await db.from("marketing_leads").select("*").eq("id", tenantId).single();
       if (leadError || !lead) return res.status(404).json({ error: "Lead not found" });
       const { data: leadAssignment } = await db.from("platform_lead_assignments").select("*").eq("lead_id", lead.id).maybeSingle();
@@ -2749,7 +2883,7 @@ async function createApp() {
         return res.status(403).json({ error: "Forbidden" });
       }
       const { tenantId } = req.body;
-      const db = getSupabaseAdmin();
+      const db = getSupabaseAdmin2();
       const { data: assignment } = await db.from("platform_client_assignments").select("*").eq("tenant_id", tenantId).eq("assignment_type", "commercial").maybeSingle();
       if (platformContext.role?.key !== "admin") {
         const managesTeam = assignment && platformContext.managedTeams.some((team) => team.id === assignment.team_id);
@@ -2771,19 +2905,19 @@ async function createApp() {
   app.get("/api/admin/contracts", requirePlatformAuth, async (req, res) => {
     res.redirect(307, "/api/admin/commercial/contracts");
   });
-  app.use("/api/admin/teams", createAdminTeamsRouter(getSupabaseAdmin, requirePlatformAuth));
-  app.use("/api/admin/leads", createAdminLeadsRouter(getSupabaseAdmin, requirePlatformAuth));
-  app.use("/api/admin/clients", createAdminClientsRouter(getSupabaseAdmin, requirePlatformAuth));
-  app.use("/api/admin", createAdminControlPlaneRouter(getSupabaseAdmin, requirePlatformAuth));
-  app.use("/api/admin", createAdminOtherRouter(getSupabaseAdmin, requirePlatformAuth));
-  const billingRouters = createBillingRouters(getSupabaseAdmin, requirePlatformAuth);
+  app.use("/api/admin/teams", createAdminTeamsRouter(getSupabaseAdmin2, requirePlatformAuth));
+  app.use("/api/admin/leads", createAdminLeadsRouter(getSupabaseAdmin2, requirePlatformAuth));
+  app.use("/api/admin/clients", createAdminClientsRouter(getSupabaseAdmin2, requirePlatformAuth));
+  app.use("/api/admin", createAdminControlPlaneRouter(getSupabaseAdmin2, requirePlatformAuth));
+  app.use("/api/admin", createAdminOtherRouter(getSupabaseAdmin2, requirePlatformAuth));
+  const billingRouters = createBillingRouters(getSupabaseAdmin2, requirePlatformAuth);
   app.use("/api/webhooks", billingRouters.publicRouter);
   app.use("/api/admin", billingRouters.adminRouter);
   app.use("/api/internal/billing", billingRouters.internalRouter);
   app.get("/api/admin/stats", requirePlatformAuth, async (req, res) => {
     try {
       const { platformContext } = req;
-      const db = getSupabaseAdmin();
+      const db = getSupabaseAdmin2();
       const [leadAssignments, clientAssignments] = await Promise.all([
         db.from("platform_lead_assignments").select("*"),
         db.from("platform_client_assignments").select("*").eq("assignment_type", "commercial")
@@ -2858,12 +2992,12 @@ async function createApp() {
       const { slug, domain } = req.query;
       let tenant = null;
       if (slug) {
-        const { data, error } = await getSupabaseAdmin().from("tenants").select("id, name, slug, status, settings").eq("slug", slug).in("status", ["active", "trial"]).single();
+        const { data, error } = await getSupabaseAdmin2().from("tenants").select("id, name, slug, status, settings").eq("slug", slug).in("status", ["active", "trial"]).single();
         if (!error && data) tenant = data;
       } else if (domain) {
-        const { data: td, error: e1 } = await getSupabaseAdmin().from("tenant_domains").select("tenant_id").eq("hostname", domain).single();
+        const { data: td, error: e1 } = await getSupabaseAdmin2().from("tenant_domains").select("tenant_id").eq("hostname", domain).single();
         if (!e1 && td) {
-          const { data, error } = await getSupabaseAdmin().from("tenants").select("id, name, slug, status, settings").eq("id", td.tenant_id).in("status", ["active", "trial"]).single();
+          const { data, error } = await getSupabaseAdmin2().from("tenants").select("id, name, slug, status, settings").eq("id", td.tenant_id).in("status", ["active", "trial"]).single();
           if (!error && data) tenant = data;
         }
       }
