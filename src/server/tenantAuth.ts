@@ -14,7 +14,7 @@ export const authenticateRequest = async (req: Request, res: Response, next: Nex
 
     const token = authHeader.replace("Bearer ", "");
     try {
-        const db = getSupabaseAdmin();
+        const db = (req as any).supabaseAdmin || getSupabaseAdmin();
         const { data: { user }, error: authErr } = await db.auth.getUser(token);
         
         if (authErr || !user) return res.status(401).json({ error: "Invalid or expired session" });
@@ -36,7 +36,7 @@ export const resolveTenantContext = async (req: Request, res: Response, next: Ne
         const user = (req as any).user;
         if (!user) return res.status(401).json({ error: "Authentication required before tenant resolution" });
 
-        const db = getSupabaseAdmin();
+        const db = (req as any).supabaseAdmin || getSupabaseAdmin();
         
         const { data: membership } = await db
             .from('memberships')
@@ -44,10 +44,14 @@ export const resolveTenantContext = async (req: Request, res: Response, next: Ne
             .eq('user_id', user.id)
             .eq('tenant_id', tenantId)
             .eq('status', 'active')
-            .single();
+            .maybeSingle();
 
         if (!membership) {
             return res.status(403).json({ error: "Forbidden: No active membership in this tenant" });
+        }
+        
+        if (membership.tenants?.status !== 'active' && membership.tenants?.status !== 'trial') {
+             return res.status(403).json({ error: "Forbidden: Tenant is not active" });
         }
 
         const { data: roleRefs } = await db
@@ -111,6 +115,66 @@ export const requireTenantSolution = (requiredSolution: string) => {
 
         if (!context.solutions.includes(requiredSolution)) {
             return res.status(403).json({ error: `Forbidden: requires active solution ${requiredSolution}` });
+        }
+        next();
+    };
+};
+
+export const resolvePlatformContext = async (req: Request, res: Response, next: NextFunction) => {
+    try {
+        const user = (req as any).user;
+        if (!user) return res.status(401).json({ error: "Authentication required" });
+
+        const db = (req as any).supabaseAdmin || getSupabaseAdmin();
+
+        const { data: platformMember } = await db
+            .from('platform_members')
+            .select('*, platform_roles(*)')
+            .eq('user_id', user.id)
+            .maybeSingle();
+
+        if (!platformMember) {
+            return res.status(403).json({ error: "Forbidden: Not a platform member" });
+        }
+        
+        if (platformMember.status === 'suspended') {
+             return res.status(403).json({ error: "Forbidden: Platform member suspended" });
+        }
+
+        const role = platformMember.platform_roles;
+        let permissions: string[] = [];
+
+        if (role) {
+            const { data: rolePerms } = await db
+                .from('platform_role_permissions')
+                .select('platform_permissions(key)')
+                .eq('role_id', role.id);
+            
+            if (rolePerms) {
+                 permissions = rolePerms.map((rp: any) => rp.platform_permissions?.key).filter(Boolean);
+            }
+        }
+
+        (req as any).platformContext = {
+            platformMember,
+            role,
+            permissions
+        };
+
+        next();
+    } catch (e: any) {
+        return res.status(500).json({ error: "Platform resolution error" });
+    }
+};
+
+export const requirePlatformPermission = (requiredPermission: string) => {
+    return (req: Request, res: Response, next: NextFunction) => {
+        const context = (req as any).platformContext;
+        if (!context) return res.status(500).json({ error: "Missing platform context" });
+        if (context.role?.key === 'admin') return next(); // Admin tem bypass global no backend
+
+        if (!context.permissions.includes(requiredPermission)) {
+            return res.status(403).json({ error: `Forbidden: requires platform permission ${requiredPermission}` });
         }
         next();
     };

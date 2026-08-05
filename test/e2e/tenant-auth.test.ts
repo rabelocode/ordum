@@ -1,84 +1,143 @@
-import { describe, it, expect, vi } from 'vitest';
-import { authenticateRequest, resolveTenantContext } from '../../src/server/tenantAuth';
+import { describe, it } from 'node:test';
+import assert from 'node:assert';
+import { authenticateRequest, resolveTenantContext, requireTenantPermission, requireTenantSolution, resolvePlatformContext, requirePlatformPermission } from '../../src/server/tenantAuth';
 
-// Cenário Fictício: Multi-tenant com User A / Tenant A e User B / Tenant B
-// Membership: User A tem Tenant A, User B tem Tenant B
+describe('Tenant and Platform Middlewares', () => {
 
-describe('E2E (Mock) - Proteção de Acesso Multi-tenant e Spoofing', () => {
-
-  const mockSupabase = {
-    auth: {
-      getUser: vi.fn()
-    },
-    from: vi.fn()
+  const fnMock = (): any => {
+     const calls: any[] = [];
+     const f = function(...args: any[]) {
+         calls.push(args);
+         return (f as any)._ret;
+     };
+     f.mockReturnValue = (v: any) => { (f as any)._ret = v; return f; };
+     f.mockResolvedValue = (v: any) => { (f as any)._ret = Promise.resolve(v); return f; };
+     f.mockReturnThis = () => { (f as any)._ret = f; return f; };
+     f.calls = calls;
+     return f;
   };
 
-  const reqHelper = (token: string, tenantId?: string) => ({
-    headers: {
-      authorization: token ? `Bearer ${token}` : undefined,
-      'x-tenant-id': tenantId
-    },
-    get: (key: string) => key === 'x-tenant-id' ? tenantId : undefined,
-  });
+  const reqHelper = (token?: string, tenantId?: string, authUserId?: string) => {
+    const req: any = {
+      headers: {
+        authorization: token ? `Bearer ${token}` : undefined,
+        'x-tenant-id': tenantId
+      },
+      body: {}
+    };
+    if (authUserId) req.user = { id: authUserId };
+    return req;
+  };
 
   const resHelper = () => {
     const res: any = {};
-    res.status = vi.fn().mockReturnValue(res);
-    res.json = vi.fn().mockReturnValue(res);
+    res.status = fnMock().mockReturnValue(res);
+    res.json = fnMock().mockReturnValue(res);
     return res;
   };
 
-  it('A acessa A: Deve invocar next() e injetar tenantContext', async () => {
-    mockSupabase.auth.getUser.mockResolvedValueOnce({ data: { user: { id: 'userA' } } });
-    mockSupabase.from.mockReturnValueOnce({
-      select: vi.fn().mockReturnThis(),
-      eq: vi.fn().mockReturnThis(),
-      maybeSingle: vi.fn().mockResolvedValueOnce({
-        data: { id: 'membershipA', tenant_id: 'tenantA', role_id: 'r1', status: 'active', tenants: { status: 'active' } }
-      })
-    });
-    mockSupabase.from.mockReturnValueOnce({
-      select: vi.fn().mockReturnThis(),
-      eq: vi.fn().mockResolvedValueOnce({ data: [] }) // permissions fake
+  describe('authenticateRequest', () => {
+    it('Token ausente deve retornar 401', async () => {
+      const req = reqHelper();
+      const res = resHelper();
+      const next = fnMock();
+      await authenticateRequest(req as any, res as any, next as any);
+      assert.strictEqual(res.status.calls[0][0], 401);
     });
 
-    const req = reqHelper('valid_token_A', 'tenantA') as any;
-    req.supabaseAdmin = mockSupabase; // Mock injetado para teste
-    
-    // Auth bypass mock
-    req.user = { id: 'userA' };
-
-    const res = resHelper();
-    const next = vi.fn();
-
-    await resolveTenantContext(req, res, next);
-    
-    expect(res.status).not.toHaveBeenCalled();
-    expect(next).toHaveBeenCalled();
-    expect(req.tenantContext.tenantId).toBe('tenantA');
+    it('Token inválido deve retornar 401', async () => {
+      const req = reqHelper('invalid');
+      req.supabaseAdmin = { auth: { getUser: fnMock().mockResolvedValue({ data: { user: null }, error: new Error('bad token') }) } };
+      const res = resHelper();
+      const next = fnMock();
+      await authenticateRequest(req as any, res as any, next as any);
+      assert.strictEqual(res.status.calls[0][0], 401);
+    });
   });
 
-  it('A não acessa B: Spoofing Header falha devolvendo 403 Forbidden', async () => {
-    // User A calls with Tenant B in header
-    mockSupabase.from.mockReturnValueOnce({
-      select: vi.fn().mockReturnThis(),
-      eq: vi.fn().mockReturnThis(),
-      maybeSingle: vi.fn().mockResolvedValueOnce({
-        data: null // User A não possui membership no Tenant B
-      })
+  const makeChain = (finalRet: any) => {
+      const chain: any = {
+          select: () => chain,
+          eq: () => chain,
+          in: () => chain,
+          maybeSingle: async () => finalRet,
+          single: async () => finalRet,
+      };
+      return chain;
+  };
+
+  describe('resolveTenantContext', () => {
+    it('Tenant ausente deve retornar 400', async () => {
+      const req = reqHelper('token', undefined, 'userA');
+      const res = resHelper();
+      const next = fnMock();
+      await resolveTenantContext(req as any, res as any, next as any);
+      assert.strictEqual(res.status.calls[0][0], 400);
     });
 
-    const req = reqHelper('valid_token_A', 'tenantB') as any;
-    req.user = { id: 'userA' };
-    req.supabaseAdmin = mockSupabase;
+    it('Membership inexistente falha com 403', async () => {
+      const req = reqHelper('token', 'tenantA', 'userA');
+      const dbFrom = fnMock().mockReturnValue(makeChain({ data: null }));
+      req.supabaseAdmin = { from: dbFrom };
+      
+      const res = resHelper();
+      const next = fnMock();
+      await resolveTenantContext(req as any, res as any, next as any);
+      assert.strictEqual(res.status.calls[0][0], 403);
+    });
 
-    const res = resHelper();
-    const next = vi.fn();
+    it('Tenant A acessando A injeta contexto via next', async () => {
+      const req = reqHelper('token', 'tenantA', 'userA');
+      const mockSupabase = { 
+        from: (table: string) => {
+          if (table === 'memberships') return makeChain({ data: { id: 'm1', tenants: { status: 'active' } } });
+          if (table === 'membership_roles') return makeChain({ data: [] });
+          if (table === 'tenant_solutions') return makeChain({ data: [] });
+          return makeChain({ data: [] });
+        }
+      };
+      req.supabaseAdmin = mockSupabase;
+      const res = resHelper();
+      const next = fnMock();
+      await resolveTenantContext(req as any, res as any, next as any);
+      assert.strictEqual(next.calls.length, 1);
+      assert.strictEqual(req.tenantContext.membership.id, 'm1');
+    });
 
-    await resolveTenantContext(req, res, next);
-    
-    expect(res.status).toHaveBeenCalledWith(403);
-    expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ error: expect.stringContaining('Forbidden') }));
-    expect(next).not.toHaveBeenCalled();
+    it('Tenant A tentando acessar Tenant B devolve 403', async () => {
+      const req = reqHelper('token', 'tenantB', 'userA');
+      const dbFrom = fnMock().mockReturnValue(makeChain({ data: null }));
+      req.supabaseAdmin = { from: dbFrom };
+      const res = resHelper();
+      const next = fnMock();
+      await resolveTenantContext(req as any, res as any, next as any);
+      assert.strictEqual(res.status.calls[0][0], 403);
+    });
+  });
+
+  describe('Guards', () => {
+    it('RequireTenantPermission - Permission ausente devolve 403', () => {
+      const req: any = { tenantContext: { permissions: ['other-permission'] } };
+      const res = resHelper();
+      const next = fnMock();
+      requireTenantPermission('required-permission')(req, res as any, next as any);
+      assert.strictEqual(res.status.calls[0][0], 403);
+    });
+
+    it('RequireTenantSolution - Solution inativa devolve 403', () => {
+      const req: any = { tenantContext: { solutions: [] } };
+      const res = resHelper();
+      const next = fnMock();
+      requireTenantSolution('people')(req, res as any, next as any);
+      assert.strictEqual(res.status.calls[0][0], 403);
+    });
+
+    it('RequirePlatformPermission - Platform member sem permission devolve 403', () => {
+      const req: any = { platformContext: { permissions: [], role: { key: 'manager' } } };
+      const res = resHelper();
+      const next = fnMock();
+      requirePlatformPermission('platform.settings.write')(req, res as any, next as any);
+      assert.strictEqual(res.status.calls[0][0], 403);
+    });
   });
 });

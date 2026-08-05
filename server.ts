@@ -12,6 +12,7 @@ import cors from 'cors';
 import { randomUUID } from 'node:crypto';
 import { canReadAssignedResource } from './src/server/authorization';
 import { initServerObservability, installServerErrorHandler, reportServerError } from './src/server/observability';
+import { authenticateRequest, resolveTenantContext, requireTenantPermission, resolvePlatformContext, requirePlatformPermission } from './src/server/tenantAuth';
 
 dotenv.config({ path: ['.env.local', '.env'] });
 
@@ -204,11 +205,22 @@ export async function createApp() {
   });
 
 
-  app.get("/api/admin/tenants", requirePlatformAuth, async (req, res) => {
+  app.get("/api/workspace/me", authenticateRequest, resolveTenantContext, requireTenantPermission('workspace.access'), async (req, res) => {
+    const { tenantContext, user } = req as any;
+    res.json({
+        success: true,
+        user_id: user.id,
+        tenant: tenantContext.tenant.name,
+        permissions: tenantContext.permissions,
+        membership_id: tenantContext.membership.id
+    });
+  });
+
+  app.get("/api/admin/tenants", authenticateRequest, resolvePlatformContext, requirePlatformPermission('platform.access'), async (req, res) => {
     res.redirect(307, '/api/admin/clients');
   });
 
-  app.get("/api/admin/tenants/:id", requirePlatformAuth, async (req, res) => {
+  app.get("/api/admin/tenants/:id", authenticateRequest, resolvePlatformContext, requirePlatformPermission('platform.access'), async (req, res) => {
     res.redirect(307, `/api/admin/clients/${encodeURIComponent(req.params.id)}`);
   });
 
