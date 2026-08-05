@@ -1,12 +1,12 @@
 import React, { useState, useEffect } from 'react';
-import { useAuth } from '../../core/auth/AuthProvider';
+import { useAccess } from '../../core/auth/AccessContext';
 import { Plus, ChevronRight } from 'lucide-react';
 import { PlatformTeam } from '../../types/platform';
 import { CreateTeamModal } from '../../components/admin/CreateTeamModal';
 import { ListSkeleton } from '../../components/ui/LoadingSkeletons';
 
 export function TeamsPage() {
-  const { session } = useAuth();
+  const { session } = useAccess();
   const [teams, setTeams] = useState<PlatformTeam[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);

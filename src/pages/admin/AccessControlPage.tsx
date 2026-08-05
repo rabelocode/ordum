@@ -1,9 +1,9 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { ShieldCheck } from 'lucide-react';
-import { useAuth } from '../../core/auth/AuthProvider';
+import { useAccess } from '../../core/auth/AccessContext';
 
 export function AccessControlPage() {
-  const { session } = useAuth();
+  const { session } = useAccess();
   const [matrix, setMatrix] = useState<any>({ members: [], rolePermissions: [], teamMemberships: [] });
   const [memberId, setMemberId] = useState(''); const [permission, setPermission] = useState('platform.clients.read'); const [teamId, setTeamId] = useState('');
   const [result, setResult] = useState<any>(null); const [error, setError] = useState('');

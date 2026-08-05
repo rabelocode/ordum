@@ -4,8 +4,7 @@ import {
   Ban, RefreshCw, Edit3, X, Loader2, AlertCircle, Calendar, Mail, Check
 } from 'lucide-react';
 import { Button } from '../../components/ui/Button';
-import { useAuth } from '../../core/auth/AuthProvider';
-import { usePlatform } from '../../core/auth/PlatformAuthProvider';
+import { useAccess } from '../../core/auth/AccessContext';
 import { ListSkeleton } from '../../components/ui/LoadingSkeletons';
 
 interface StaffMember {
@@ -32,8 +31,7 @@ interface StaffMember {
 }
 
 export function ConsultantsPage() {
-  const { session } = useAuth();
-  const { platformRole } = usePlatform();
+  const { session, platformRole, hasPlatformPermission } = useAccess();
 
   const [members, setMembers] = useState<StaffMember[]>([]);
   const [teamsList, setTeamsList] = useState<any[]>([]);

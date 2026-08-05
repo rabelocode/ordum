@@ -1,11 +1,13 @@
 import { Router } from 'express';
+import { z } from 'zod';
 import { auditContext } from './operational';
+import { authenticateRequest, resolvePlatformContext, requirePlatformPermission } from './tenantAuth';
 
-export function createAdminTeamsRouter(getSupabaseAdmin: any, requirePlatformAuth: any) {
+export function createAdminTeamsRouter(getSupabaseAdmin: any, _old_requirePlatformAuth: any) {
   const router = Router();
 
   // GET /api/admin/teams
-  router.get('/', requirePlatformAuth, async (req: any, res: any) => {
+  router.get('/', authenticateRequest, resolvePlatformContext, async (req: any, res: any) => {
     try {
       const { platformContext } = req;
       let query = getSupabaseAdmin().from('platform_teams').select('*').order('name');
@@ -25,14 +27,21 @@ export function createAdminTeamsRouter(getSupabaseAdmin: any, requirePlatformAut
   });
 
   // POST /api/admin/teams
-  router.post('/', requirePlatformAuth, async (req: any, res: any) => {
+  const createTeamSchema = z.object({
+    name: z.string().min(1),
+    team_type: z.string(),
+    channel: z.string(),
+    description: z.string().optional(),
+    member_lead_visibility: z.string(),
+    member_client_visibility: z.string(),
+    allow_self_claim: z.boolean()
+  });
+
+  router.post('/', authenticateRequest, resolvePlatformContext, requirePlatformPermission('platform.teams.create'), async (req: any, res: any) => {
     try {
-      const { platformContext } = req;
-      if (platformContext.role?.key !== 'admin' || !platformContext.permissions.includes('platform.teams.create')) {
-        return res.status(403).json({ error: 'Forbidden' });
-      }
-      
-      const { name, team_type, channel, description, member_lead_visibility, member_client_visibility, allow_self_claim } = req.body;
+      const input = createTeamSchema.safeParse(req.body);
+      if (!input.success) return res.status(400).json({ error: 'Payload de criação inválido' });
+      const { name, team_type, channel, description, member_lead_visibility, member_client_visibility, allow_self_claim } = input.data;
       const slug = name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
       
       const { data, error } = await getSupabaseAdmin()
@@ -65,7 +74,7 @@ export function createAdminTeamsRouter(getSupabaseAdmin: any, requirePlatformAut
   });
 
   // GET /api/admin/teams/:id
-  router.get('/:id', requirePlatformAuth, async (req: any, res: any) => {
+  router.get('/:id', authenticateRequest, resolvePlatformContext, async (req: any, res: any) => {
     try {
       const { platformContext } = req;
       const teamId = req.params.id;
@@ -84,7 +93,19 @@ export function createAdminTeamsRouter(getSupabaseAdmin: any, requirePlatformAut
   });
 
   // PATCH /api/admin/teams/:id
-  router.patch('/:id', requirePlatformAuth, async (req: any, res: any) => {
+  const updateTeamSchema = z.object({
+    name: z.string().optional(),
+    description: z.string().optional(),
+    team_type: z.string().optional(),
+    channel: z.string().optional(),
+    status: z.string().optional(),
+    member_lead_visibility: z.string().optional(),
+    member_client_visibility: z.string().optional(),
+    allow_self_claim: z.boolean().optional(),
+    settings: z.any().optional()
+  });
+
+  router.patch('/:id', authenticateRequest, resolvePlatformContext, async (req: any, res: any) => {
     try {
       const { platformContext } = req;
       const teamId = req.params.id;
@@ -96,10 +117,13 @@ export function createAdminTeamsRouter(getSupabaseAdmin: any, requirePlatformAut
         if (!isManager) return res.status(403).json({ error: 'Forbidden' });
       }
       
+      const input = updateTeamSchema.safeParse(req.body);
+      if (!input.success) return res.status(400).json({ error: 'Payload de atualização inválido' });
+      
       const allowedFields = isManager
         ? ['description', 'member_lead_visibility', 'member_client_visibility', 'allow_self_claim']
         : ['name', 'description', 'team_type', 'channel', 'status', 'member_lead_visibility', 'member_client_visibility', 'allow_self_claim', 'settings'];
-      const updates = Object.fromEntries(Object.entries(req.body).filter(([key]) => allowedFields.includes(key)));
+      const updates = Object.fromEntries(Object.entries(input.data).filter(([key, val]) => allowedFields.includes(key) && val !== undefined));
       if (updates.settings && typeof updates.settings === 'object') {
         for (const key of ['proposal_approval_limit_cents', 'contract_approval_limit_cents']) {
           const value = (updates.settings as any)[key];
@@ -139,7 +163,7 @@ export function createAdminTeamsRouter(getSupabaseAdmin: any, requirePlatformAut
   });
 
   // GET /api/admin/teams/:id/members
-  router.get('/:id/members', requirePlatformAuth, async (req: any, res: any) => {
+  router.get('/:id/members', authenticateRequest, resolvePlatformContext, async (req: any, res: any) => {
     try {
       const { platformContext } = req;
       const teamId = req.params.id;
@@ -194,11 +218,18 @@ export function createAdminTeamsRouter(getSupabaseAdmin: any, requirePlatformAut
   });
 
   // POST /api/admin/teams/:id/members
-  router.post('/:id/members', requirePlatformAuth, async (req: any, res: any) => {
+  const teamMemberSchema = z.object({
+    platform_member_id: z.string().uuid(),
+    team_role: z.string()
+  });
+
+  router.post('/:id/members', authenticateRequest, resolvePlatformContext, async (req: any, res: any) => {
     try {
       const { platformContext } = req;
       const teamId = req.params.id;
-      const { platform_member_id, team_role } = req.body;
+      const input = teamMemberSchema.safeParse(req.body);
+      if (!input.success) return res.status(400).json({ error: 'Membro ou função inválidos' });
+      const { platform_member_id, team_role } = input.data;
       
       let isManager = false;
       const hasGlobal = platformContext.role?.key === 'admin';
@@ -247,7 +278,7 @@ export function createAdminTeamsRouter(getSupabaseAdmin: any, requirePlatformAut
   });
 
   // DELETE /api/admin/teams/:id/members/:memberId
-  router.delete('/:id/members/:memberId', requirePlatformAuth, async (req: any, res: any) => {
+  router.delete('/:id/members/:memberId', authenticateRequest, resolvePlatformContext, async (req: any, res: any) => {
     try {
       const { platformContext } = req;
       const teamId = req.params.id;
