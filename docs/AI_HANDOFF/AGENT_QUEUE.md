@@ -3,10 +3,10 @@
 ## Current Assignment
 
 Owner: chatgpt_backend
-Status: ready_for_review
+Status: reviewing
 Created by: chatgpt_backend
 Branch: feat/admin-ordum-operations
-Head: 51abd2654c609650db94ff8a3ebcde59adcdced0
+Head: 51abd269430c70ccbf9024609f14ec05a9715162
 
 ## Requested Action
 
