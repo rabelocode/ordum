@@ -4,6 +4,7 @@ import path from "path";
 
 // src/server/adminLeadsRouter.ts
 import { Router } from "express";
+import { z } from "zod";
 
 // src/server/authorization.ts
 function isGlobalAdmin(context) {
@@ -51,10 +52,140 @@ function auditContext(req, metadata = {}) {
   };
 }
 
+// src/server/tenantAuth.ts
+import { createClient } from "@supabase/supabase-js";
+var getSupabaseAdmin = () => {
+  const url = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || "";
+  const key = process.env.SUPABASE_SECRET_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY || "";
+  if (!url || !key) throw new Error("Missing server-side Supabase credentials");
+  return createClient(url, key, { auth: { autoRefreshToken: false, persistSession: false } });
+};
+var authenticateRequest = async (req, res, next) => {
+  const authHeader = req.headers.authorization;
+  if (!authHeader) return res.status(401).json({ error: "Missing authorization header" });
+  const token = authHeader.replace("Bearer ", "");
+  try {
+    const db = req.supabaseAdmin || getSupabaseAdmin();
+    const { data: { user }, error: authErr } = await db.auth.getUser(token);
+    if (authErr || !user) return res.status(401).json({ error: "Invalid or expired session" });
+    req.user = user;
+    next();
+  } catch (e) {
+    return res.status(500).json({ error: "Authentication system error" });
+  }
+};
+var resolveTenantContext = async (req, res, next) => {
+  const tenantId = req.headers["x-tenant-id"] || req.body.tenant_id;
+  if (!tenantId) {
+    return res.status(400).json({ error: "Missing tenant identification" });
+  }
+  try {
+    const user = req.user;
+    if (!user) return res.status(401).json({ error: "Authentication required before tenant resolution" });
+    const db = req.supabaseAdmin || getSupabaseAdmin();
+    const { data: membership } = await db.from("memberships").select("*, tenants(*)").eq("user_id", user.id).eq("tenant_id", tenantId).eq("status", "active").maybeSingle();
+    if (!membership) {
+      return res.status(403).json({ error: "Forbidden: No active membership in this tenant" });
+    }
+    if (membership.tenants?.status !== "active" && membership.tenants?.status !== "trial") {
+      return res.status(403).json({ error: "Forbidden: Tenant is not active" });
+    }
+    const { data: roleRefs } = await db.from("membership_roles").select("role_id").eq("membership_id", membership.id);
+    let roles = [];
+    let permissions = [];
+    if (roleRefs && roleRefs.length > 0) {
+      const roleIds = roleRefs.map((r) => r.role_id);
+      const { data: rolesData } = await db.from("roles").select("id, key").in("id", roleIds);
+      if (rolesData) roles = rolesData;
+      const { data: pRefs } = await db.from("role_permissions").select("permission_id").in("role_id", roleIds);
+      if (pRefs && pRefs.length > 0) {
+        const { data: pData } = await db.from("permissions").select("key").in("id", pRefs.map((p) => p.permission_id));
+        if (pData) permissions = pData.map((p) => p.key);
+      }
+    }
+    const { data: sRefs } = await db.from("tenant_solutions").select("solution_id").eq("tenant_id", tenantId).eq("status", "active");
+    let solutions = [];
+    if (sRefs && sRefs.length > 0) {
+      const sIds = sRefs.map((s) => s.solution_id);
+      const { data: sData } = await db.from("solutions").select("key").in("id", sIds);
+      if (sData) solutions = sData.map((s) => s.key);
+    }
+    req.tenantContext = {
+      membership,
+      tenant: membership.tenants,
+      roles,
+      permissions,
+      solutions
+    };
+    next();
+  } catch (e) {
+    return res.status(500).json({ error: "Tenant resolution error" });
+  }
+};
+var requireTenantPermission = (requiredPermission) => {
+  return (req, res, next) => {
+    const context = req.tenantContext;
+    if (!context) return res.status(500).json({ error: "Missing tenant context" });
+    if (!context.permissions.includes(requiredPermission)) {
+      return res.status(403).json({ error: `Forbidden: requires permission ${requiredPermission}` });
+    }
+    next();
+  };
+};
+var resolvePlatformContext = async (req, res, next) => {
+  try {
+    const user = req.user;
+    if (!user) return res.status(401).json({ error: "Authentication required" });
+    const db = req.supabaseAdmin || getSupabaseAdmin();
+    const { data: platformMember } = await db.from("platform_members").select("*, platform_roles(*)").eq("user_id", user.id).maybeSingle();
+    if (!platformMember) {
+      return res.status(403).json({ error: "Forbidden: Not a platform member" });
+    }
+    if (platformMember.status === "suspended") {
+      return res.status(403).json({ error: "Forbidden: Platform member suspended" });
+    }
+    const role = platformMember.platform_roles;
+    let permissions = [];
+    if (role) {
+      const { data: rolePerms } = await db.from("platform_role_permissions").select("platform_permissions(key)").eq("role_id", role.id);
+      if (rolePerms) {
+        permissions = rolePerms.map((rp) => rp.platform_permissions?.key).filter(Boolean);
+      }
+    }
+    req.platformContext = {
+      platformMember,
+      role,
+      permissions
+    };
+    next();
+  } catch (e) {
+    return res.status(500).json({ error: "Platform resolution error" });
+  }
+};
+var requirePlatformPermission = (required) => {
+  const requiredPermissions = typeof required === "string" ? [required] : [...required];
+  if (requiredPermissions.length === 0) {
+    throw new Error("requirePlatformPermission requires at least one permission");
+  }
+  return (req, res, next) => {
+    const context = req.platformContext;
+    if (!context) {
+      return res.status(500).json({ error: "Platform authorization context is unavailable" });
+    }
+    const allowed = requiredPermissions.some(
+      (permission) => context.permissions.includes(permission)
+    );
+    if (!allowed) {
+      return res.status(403).json({ error: "Forbidden: insufficient platform permission" });
+    }
+    return next();
+  };
+};
+
 // src/server/adminLeadsRouter.ts
-function createAdminLeadsRouter(getSupabaseAdmin2, requirePlatformAuth) {
+function createAdminLeadsRouter(getSupabaseAdmin2, _old_requirePlatformAuth) {
   const router = Router();
-  router.get("/", requirePlatformAuth, async (req, res) => {
+  router.get("/", authenticateRequest, resolvePlatformContext, requirePlatformPermission("platform.leads.read"), async (req, res) => {
     try {
       const { platformContext } = req;
       const { page, pageSize, from, to } = parsePagination(req.query);
@@ -97,14 +228,18 @@ function createAdminLeadsRouter(getSupabaseAdmin2, requirePlatformAuth) {
       res.status(500).json({ error: e.message });
     }
   });
-  router.post("/:id/assign", requirePlatformAuth, async (req, res) => {
+  const assignLeadSchema = z.object({
+    team_id: z.string().uuid(),
+    owner_platform_member_id: z.string().uuid().optional().nullable(),
+    reason: z.string().min(1)
+  });
+  router.post("/:id/assign", authenticateRequest, resolvePlatformContext, requirePlatformPermission(["platform.leads.assign"]), async (req, res) => {
     try {
       const { platformContext } = req;
       const leadId = req.params.id;
-      const { team_id, owner_platform_member_id } = req.body;
-      if (!team_id || typeof req.body?.reason !== "string" || !req.body.reason.trim()) {
-        return res.status(400).json({ error: "Equipe e motivo da transfer\xEAncia s\xE3o obrigat\xF3rios." });
-      }
+      const input = assignLeadSchema.safeParse(req.body);
+      if (!input.success) return res.status(400).json({ error: "Equipe e motivo da transfer\xEAncia s\xE3o obrigat\xF3rios." });
+      const { team_id, owner_platform_member_id, reason } = input.data;
       const current = await getSupabaseAdmin2().from("platform_lead_assignments").select("*").eq("lead_id", leadId).maybeSingle();
       if (current.error) throw current.error;
       if (platformContext.role?.key !== "admin") {
@@ -131,7 +266,7 @@ function createAdminLeadsRouter(getSupabaseAdmin2, requirePlatformAuth) {
         to_team_id: team_id,
         from_owner_platform_member_id: current.data?.owner_platform_member_id || null,
         to_owner_platform_member_id: owner_platform_member_id || null,
-        reason: req.body.reason.trim(),
+        reason: reason.trim(),
         actor_user_id: req.user.id
       });
       await getSupabaseAdmin2().from("platform_audit_logs").insert({
@@ -148,7 +283,7 @@ function createAdminLeadsRouter(getSupabaseAdmin2, requirePlatformAuth) {
       res.status(500).json({ error: e.message });
     }
   });
-  router.patch("/:id", requirePlatformAuth, async (req, res) => {
+  router.patch("/:id", authenticateRequest, resolvePlatformContext, requirePlatformPermission(["platform.leads.assign", "platform.leads.claim"]), async (req, res) => {
     try {
       const db = getSupabaseAdmin2();
       const { data: lead, error: leadError } = await db.from("marketing_leads").select("*, platform_lead_assignments(*)").eq("id", req.params.id).single();
@@ -179,7 +314,7 @@ function createAdminLeadsRouter(getSupabaseAdmin2, requirePlatformAuth) {
       return res.status(500).json({ error: error.message });
     }
   });
-  router.get("/:id/duplicates", requirePlatformAuth, async (req, res) => {
+  router.get("/:id/duplicates", authenticateRequest, resolvePlatformContext, requirePlatformPermission("platform.leads.read"), async (req, res) => {
     try {
       const db = getSupabaseAdmin2();
       const leadResult = await db.from("marketing_leads").select("id,platform_lead_assignments(*)").eq("id", req.params.id).maybeSingle();
@@ -202,7 +337,7 @@ function createAdminLeadsRouter(getSupabaseAdmin2, requirePlatformAuth) {
       return res.status(500).json({ error: error.message });
     }
   });
-  router.post("/:id/auto-assign", requirePlatformAuth, async (req, res) => {
+  router.post("/:id/auto-assign", authenticateRequest, resolvePlatformContext, requirePlatformPermission(["platform.leads.assign"]), async (req, res) => {
     try {
       const teamId = req.body?.teamId;
       const reason = typeof req.body?.reason === "string" ? req.body.reason.trim() : "";
@@ -215,7 +350,7 @@ function createAdminLeadsRouter(getSupabaseAdmin2, requirePlatformAuth) {
       return res.status(500).json({ error: error.message });
     }
   });
-  router.post("/:id/recalculate-score", requirePlatformAuth, async (req, res) => {
+  router.post("/:id/recalculate-score", authenticateRequest, resolvePlatformContext, requirePlatformPermission(["platform.leads.assign", "platform.leads.claim"]), async (req, res) => {
     try {
       const db = getSupabaseAdmin2();
       const lead = await db.from("marketing_leads").select("*").eq("id", req.params.id).maybeSingle();
@@ -244,7 +379,7 @@ function createAdminLeadsRouter(getSupabaseAdmin2, requirePlatformAuth) {
       return res.status(500).json({ error: error.message });
     }
   });
-  router.post("/:id/claim", requirePlatformAuth, async (req, res) => {
+  router.post("/:id/claim", authenticateRequest, resolvePlatformContext, requirePlatformPermission(["platform.leads.claim"]), async (req, res) => {
     try {
       const { platformContext } = req;
       const leadId = req.params.id;
@@ -599,14 +734,12 @@ function installServerErrorHandler(app) {
 }
 
 // src/server/adminOtherRouter.ts
-function createAdminOtherRouter(getSupabaseAdmin2, requirePlatformAuth) {
+import { z as z2 } from "zod";
+function createAdminOtherRouter(getSupabaseAdmin2, _old_requirePlatformAuth) {
   const router = Router3();
-  router.get("/staff", requirePlatformAuth, async (req, res) => {
+  router.get("/staff", authenticateRequest, resolvePlatformContext, requirePlatformPermission("platform.staff.read"), async (req, res) => {
     try {
       const { platformContext } = req;
-      if (!platformContext.permissions.includes("platform.staff.read") && platformContext.role?.key !== "admin") {
-        return res.status(403).json({ error: "Forbidden" });
-      }
       const { data: members, error: memberErr } = await getSupabaseAdmin2().from("platform_members").select(`
           *,
           platform_roles(*),
@@ -641,7 +774,13 @@ function createAdminOtherRouter(getSupabaseAdmin2, requirePlatformAuth) {
       res.status(500).json({ error: e.message });
     }
   });
-  router.post("/staff", requirePlatformAuth, async (req, res) => {
+  const inviteSchema = z2.object({
+    email: z2.string().email(),
+    role_key: z2.string(),
+    relationship_type: z2.string(),
+    team_ids: z2.array(z2.string().uuid()).optional()
+  });
+  router.post("/staff", authenticateRequest, resolvePlatformContext, requirePlatformPermission(["platform.staff.manage", "platform.staff.invite_sales"]), async (req, res) => {
     try {
       const { platformContext } = req;
       const callerRoleKey = platformContext.role?.key;
@@ -650,16 +789,17 @@ function createAdminOtherRouter(getSupabaseAdmin2, requirePlatformAuth) {
           return res.status(403).json({ error: "Forbidden: Insufficient permissions to invite staff." });
         }
       }
-      const { email, role_key, relationship_type, team_ids } = req.body;
-      if (!email || !role_key || !relationship_type) {
-        return res.status(400).json({ error: "Campos obrigat\xF3rios: e-mail, fun\xE7\xE3o e v\xEDnculo." });
+      const input = inviteSchema.safeParse(req.body);
+      if (!input.success) {
+        return res.status(400).json({ error: "Campos obrigat\xF3rios: e-mail, fun\xE7\xE3o e v\xEDnculo v\xE1lidos." });
       }
+      const { email, role_key, relationship_type, team_ids } = input.data;
       if (callerRoleKey === "manager" && role_key !== "sales") {
         return res.status(403).json({ error: "Gerentes s\xF3 podem convidar membros para a fun\xE7\xE3o Sales (Vendas)." });
       }
       if (callerRoleKey === "manager") {
         const managedTeamIds = new Set(platformContext.managedTeams.map((team) => team.id));
-        if (!Array.isArray(team_ids) || team_ids.length === 0 || team_ids.some((teamId) => !managedTeamIds.has(teamId))) {
+        if (!team_ids || team_ids.length === 0 || team_ids.some((teamId) => !managedTeamIds.has(teamId))) {
           return res.status(403).json({ error: "Gerentes s\xF3 podem convidar Sales para equipes que gerenciam." });
         }
       }
@@ -726,7 +866,12 @@ function createAdminOtherRouter(getSupabaseAdmin2, requirePlatformAuth) {
       res.status(500).json({ error: "N\xE3o foi poss\xEDvel concluir o convite." });
     }
   });
-  router.patch("/staff/:id", requirePlatformAuth, async (req, res) => {
+  const updateStaffSchema = z2.object({
+    role_key: z2.string().optional(),
+    relationship_type: z2.string().optional(),
+    team_ids: z2.array(z2.string().uuid()).optional()
+  });
+  router.patch("/staff/:id", authenticateRequest, resolvePlatformContext, requirePlatformPermission(["platform.staff.manage", "platform.staff.invite_sales"]), async (req, res) => {
     try {
       const { platformContext } = req;
       const callerRoleKey = platformContext.role?.key;
@@ -735,7 +880,9 @@ function createAdminOtherRouter(getSupabaseAdmin2, requirePlatformAuth) {
         return res.status(403).json({ error: "Forbidden" });
       }
       const memberId = req.params.id;
-      const { role_key, relationship_type, team_ids } = req.body;
+      const input = updateStaffSchema.safeParse(req.body);
+      if (!input.success) return res.status(400).json({ error: "Payload inv\xE1lido." });
+      const { role_key, relationship_type, team_ids } = input.data;
       const { data: targetMember, error: tgtErr } = await getSupabaseAdmin2().from("platform_members").select("*, platform_roles(key)").eq("id", memberId).single();
       if (tgtErr || !targetMember) {
         return res.status(404).json({ error: "Membro n\xE3o encontrado." });
@@ -816,12 +963,8 @@ function createAdminOtherRouter(getSupabaseAdmin2, requirePlatformAuth) {
       res.status(500).json({ error: e.message });
     }
   });
-  router.post("/staff/:id/suspend", requirePlatformAuth, async (req, res) => {
+  router.post("/staff/:id/suspend", authenticateRequest, resolvePlatformContext, requirePlatformPermission("platform.staff.manage"), async (req, res) => {
     try {
-      const { platformContext } = req;
-      if (!platformContext.permissions.includes("platform.staff.manage") && platformContext.role?.key !== "admin") {
-        return res.status(403).json({ error: "Forbidden" });
-      }
       const memberId = req.params.id;
       const { data: targetMember } = await getSupabaseAdmin2().from("platform_members").select("*, platform_roles(key)").eq("id", memberId).single();
       if (!targetMember) {
@@ -852,12 +995,8 @@ function createAdminOtherRouter(getSupabaseAdmin2, requirePlatformAuth) {
       res.status(500).json({ error: e.message });
     }
   });
-  router.post("/staff/:id/reactivate", requirePlatformAuth, async (req, res) => {
+  router.post("/staff/:id/reactivate", authenticateRequest, resolvePlatformContext, requirePlatformPermission("platform.staff.manage"), async (req, res) => {
     try {
-      const { platformContext } = req;
-      if (!platformContext.permissions.includes("platform.staff.manage") && platformContext.role?.key !== "admin") {
-        return res.status(403).json({ error: "Forbidden" });
-      }
       const memberId = req.params.id;
       const { error: updErr } = await getSupabaseAdmin2().from("platform_members").update({ status: "active" }).eq("id", memberId);
       if (updErr) throw updErr;
@@ -874,7 +1013,7 @@ function createAdminOtherRouter(getSupabaseAdmin2, requirePlatformAuth) {
       res.status(500).json({ error: e.message });
     }
   });
-  router.get("/audit", requirePlatformAuth, async (req, res) => {
+  router.get("/audit", authenticateRequest, resolvePlatformContext, requirePlatformPermission(["platform.audit.read", "platform.audit.team.read"]), async (req, res) => {
     try {
       const { platformContext } = req;
       const { page, pageSize, from, to } = parsePagination(req.query);
@@ -901,12 +1040,8 @@ function createAdminOtherRouter(getSupabaseAdmin2, requirePlatformAuth) {
       res.status(500).json({ error: e.message });
     }
   });
-  router.get("/system/health", requirePlatformAuth, async (req, res) => {
+  router.get("/system/health", authenticateRequest, resolvePlatformContext, requirePlatformPermission("platform.system.read"), async (req, res) => {
     try {
-      const { platformContext } = req;
-      if (!platformContext.permissions.includes("platform.system.read") && platformContext.role?.key !== "admin") {
-        return res.status(403).json({ error: "Forbidden" });
-      }
       const dbStart = performance.now();
       const { error } = await getSupabaseAdmin2().from("platform_roles").select("id").limit(1);
       const databaseLatencyMs = Math.round(performance.now() - dbStart);
@@ -934,7 +1069,7 @@ function createAdminOtherRouter(getSupabaseAdmin2, requirePlatformAuth) {
       res.status(500).json({ error: e.message });
     }
   });
-  router.post("/staff/:id/terminate-sessions", requirePlatformAuth, async (req, res) => {
+  router.post("/staff/:id/terminate-sessions", authenticateRequest, resolvePlatformContext, requirePlatformPermission("platform.staff.manage"), async (req, res) => {
     if (req.platformContext.role?.key !== "admin") return res.status(403).json({ error: "Somente admin pode encerrar sess\xF5es." });
     const db = getSupabaseAdmin2();
     const target = await db.from("platform_members").select("id,user_id").eq("id", req.params.id).single();
@@ -945,16 +1080,17 @@ function createAdminOtherRouter(getSupabaseAdmin2, requirePlatformAuth) {
     await db.from("platform_audit_logs").insert({ actor_user_id: req.user.id, action: "platform.member.sessions_terminated", entity_type: "platform_members", entity_id: target.data.id, severity: "warning", ...auditContext(req, { result: "success" }) });
     return res.json({ success: true });
   });
-  router.get("/system/solutions", requirePlatformAuth, async (req, res) => {
-    if (!req.platformContext.permissions.includes("platform.solutions.read") && req.platformContext.role?.key !== "admin") return res.status(403).json({ error: "Forbidden" });
+  router.get("/system/solutions", authenticateRequest, resolvePlatformContext, requirePlatformPermission("platform.solutions.read"), async (req, res) => {
     const result = await getSupabaseAdmin2().from("solutions").select("id,key,name,created_at").order("name");
     if (result.error) return res.status(500).json({ error: result.error.message });
     return res.json(result.data);
   });
-  router.patch("/system/solutions/:id", requirePlatformAuth, async (req, res) => {
-    if (req.platformContext.role?.key !== "admin" || !req.platformContext.permissions.includes("platform.solutions.manage")) return res.status(403).json({ error: "Forbidden" });
-    const name = typeof req.body?.name === "string" ? req.body.name.trim().slice(0, 100) : "";
-    if (!name) return res.status(400).json({ error: "Nome \xE9 obrigat\xF3rio." });
+  const solutionSchema = z2.object({ name: z2.string().min(1).max(100) });
+  router.patch("/system/solutions/:id", authenticateRequest, resolvePlatformContext, requirePlatformPermission("platform.solutions.manage"), async (req, res) => {
+    if (req.platformContext.role?.key !== "admin") return res.status(403).json({ error: "Forbidden" });
+    const input = solutionSchema.safeParse(req.body);
+    if (!input.success) return res.status(400).json({ error: "Nome \xE9 obrigat\xF3rio." });
+    const { name } = input.data;
     const db = getSupabaseAdmin2();
     const before = await db.from("solutions").select("*").eq("id", req.params.id).single();
     if (before.error) return res.status(404).json({ error: "Solu\xE7\xE3o n\xE3o encontrada." });
@@ -963,15 +1099,13 @@ function createAdminOtherRouter(getSupabaseAdmin2, requirePlatformAuth) {
     await db.from("platform_audit_logs").insert({ actor_user_id: req.user.id, action: "platform.solution.updated", entity_type: "solutions", entity_id: req.params.id, severity: "info", ...auditContext(req, { result: "success", before: { name: before.data.name }, after: { name } }) });
     return res.json(saved.data);
   });
-  router.get("/system/deploy", requirePlatformAuth, async (req, res) => {
-    if (!req.platformContext.permissions.includes("platform.deploy.read") && req.platformContext.role?.key !== "admin") return res.status(403).json({ error: "Forbidden" });
+  router.get("/system/deploy", authenticateRequest, resolvePlatformContext, requirePlatformPermission("platform.deploy.read"), async (req, res) => {
     return res.json({ commitSha: process.env.VERCEL_GIT_COMMIT_SHA || null, commitMessage: process.env.VERCEL_GIT_COMMIT_MESSAGE || null, branch: process.env.VERCEL_GIT_COMMIT_REF || null, url: process.env.VERCEL_URL || null, region: process.env.VERCEL_REGION || null, environment: process.env.VERCEL_ENV || process.env.NODE_ENV || "development" });
   });
-  router.get("/system/settings", requirePlatformAuth, async (req, res) => {
-    if (!req.platformContext.permissions.includes("platform.settings.read") && req.platformContext.role?.key !== "admin") return res.status(403).json({ error: "Forbidden" });
+  router.get("/system/settings", authenticateRequest, resolvePlatformContext, requirePlatformPermission("platform.settings.read"), async (req, res) => {
     return res.json({ billing: publicBillingHealth(), publicSignup: false, authProvider: "supabase", billingProvider: "asaas", billingEnvironment: process.env.ASAAS_ENV || "sandbox", webhookConfigured: Boolean(process.env.ASAAS_WEBHOOK_TOKEN), cronConfigured: Boolean(process.env.CRON_SECRET) });
   });
-  router.get("/performance/own", requirePlatformAuth, async (req, res) => {
+  router.get("/performance/own", authenticateRequest, resolvePlatformContext, async (req, res) => {
     const db = getSupabaseAdmin2();
     const memberId = req.platformContext.platformMember.id;
     const [leads, activities, proposals, contracts] = await Promise.all([
@@ -1256,9 +1390,10 @@ function createAdminControlPlaneRouter(getSupabaseAdmin2, requirePlatformAuth) {
 
 // src/server/adminTeamsRouter.ts
 import { Router as Router5 } from "express";
-function createAdminTeamsRouter(getSupabaseAdmin2, requirePlatformAuth) {
+import { z as z3 } from "zod";
+function createAdminTeamsRouter(getSupabaseAdmin2, _old_requirePlatformAuth) {
   const router = Router5();
-  router.get("/", requirePlatformAuth, async (req, res) => {
+  router.get("/", authenticateRequest, resolvePlatformContext, requirePlatformPermission("platform.teams.read"), async (req, res) => {
     try {
       const { platformContext } = req;
       let query = getSupabaseAdmin2().from("platform_teams").select("*").order("name");
@@ -1274,13 +1409,20 @@ function createAdminTeamsRouter(getSupabaseAdmin2, requirePlatformAuth) {
       res.status(500).json({ error: e.message });
     }
   });
-  router.post("/", requirePlatformAuth, async (req, res) => {
+  const createTeamSchema = z3.object({
+    name: z3.string().min(1),
+    team_type: z3.string(),
+    channel: z3.string(),
+    description: z3.string().optional(),
+    member_lead_visibility: z3.string(),
+    member_client_visibility: z3.string(),
+    allow_self_claim: z3.boolean()
+  });
+  router.post("/", authenticateRequest, resolvePlatformContext, requirePlatformPermission("platform.teams.create"), async (req, res) => {
     try {
-      const { platformContext } = req;
-      if (platformContext.role?.key !== "admin" || !platformContext.permissions.includes("platform.teams.create")) {
-        return res.status(403).json({ error: "Forbidden" });
-      }
-      const { name, team_type, channel, description, member_lead_visibility, member_client_visibility, allow_self_claim } = req.body;
+      const input = createTeamSchema.safeParse(req.body);
+      if (!input.success) return res.status(400).json({ error: "Payload de cria\xE7\xE3o inv\xE1lido" });
+      const { name, team_type, channel, description, member_lead_visibility, member_client_visibility, allow_self_claim } = input.data;
       const slug = name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "");
       const { data, error } = await getSupabaseAdmin2().from("platform_teams").insert({
         name,
@@ -1308,7 +1450,7 @@ function createAdminTeamsRouter(getSupabaseAdmin2, requirePlatformAuth) {
       res.status(500).json({ error: e.message });
     }
   });
-  router.get("/:id", requirePlatformAuth, async (req, res) => {
+  router.get("/:id", authenticateRequest, resolvePlatformContext, requirePlatformPermission("platform.teams.read"), async (req, res) => {
     try {
       const { platformContext } = req;
       const teamId = req.params.id;
@@ -1323,7 +1465,18 @@ function createAdminTeamsRouter(getSupabaseAdmin2, requirePlatformAuth) {
       res.status(500).json({ error: e.message });
     }
   });
-  router.patch("/:id", requirePlatformAuth, async (req, res) => {
+  const updateTeamSchema = z3.object({
+    name: z3.string().optional(),
+    description: z3.string().optional(),
+    team_type: z3.string().optional(),
+    channel: z3.string().optional(),
+    status: z3.string().optional(),
+    member_lead_visibility: z3.string().optional(),
+    member_client_visibility: z3.string().optional(),
+    allow_self_claim: z3.boolean().optional(),
+    settings: z3.any().optional()
+  });
+  router.patch("/:id", authenticateRequest, resolvePlatformContext, requirePlatformPermission("platform.teams.manage"), async (req, res) => {
     try {
       const { platformContext } = req;
       const teamId = req.params.id;
@@ -1332,8 +1485,10 @@ function createAdminTeamsRouter(getSupabaseAdmin2, requirePlatformAuth) {
         isManager = platformContext.managedTeams.some((t) => t.id === teamId);
         if (!isManager) return res.status(403).json({ error: "Forbidden" });
       }
+      const input = updateTeamSchema.safeParse(req.body);
+      if (!input.success) return res.status(400).json({ error: "Payload de atualiza\xE7\xE3o inv\xE1lido" });
       const allowedFields = isManager ? ["description", "member_lead_visibility", "member_client_visibility", "allow_self_claim"] : ["name", "description", "team_type", "channel", "status", "member_lead_visibility", "member_client_visibility", "allow_self_claim", "settings"];
-      const updates = Object.fromEntries(Object.entries(req.body).filter(([key]) => allowedFields.includes(key)));
+      const updates = Object.fromEntries(Object.entries(input.data).filter(([key, val]) => allowedFields.includes(key) && val !== void 0));
       if (updates.settings && typeof updates.settings === "object") {
         for (const key of ["proposal_approval_limit_cents", "contract_approval_limit_cents"]) {
           const value = updates.settings[key];
@@ -1360,7 +1515,7 @@ function createAdminTeamsRouter(getSupabaseAdmin2, requirePlatformAuth) {
       res.status(500).json({ error: e.message });
     }
   });
-  router.get("/:id/members", requirePlatformAuth, async (req, res) => {
+  router.get("/:id/members", authenticateRequest, resolvePlatformContext, requirePlatformPermission("platform.teams.members.read"), async (req, res) => {
     try {
       const { platformContext } = req;
       const teamId = req.params.id;
@@ -1402,11 +1557,17 @@ function createAdminTeamsRouter(getSupabaseAdmin2, requirePlatformAuth) {
       res.status(500).json({ error: e.message });
     }
   });
-  router.post("/:id/members", requirePlatformAuth, async (req, res) => {
+  const teamMemberSchema = z3.object({
+    platform_member_id: z3.string().uuid(),
+    team_role: z3.string()
+  });
+  router.post("/:id/members", authenticateRequest, resolvePlatformContext, requirePlatformPermission("platform.teams.members.manage"), async (req, res) => {
     try {
       const { platformContext } = req;
       const teamId = req.params.id;
-      const { platform_member_id, team_role } = req.body;
+      const input = teamMemberSchema.safeParse(req.body);
+      if (!input.success) return res.status(400).json({ error: "Membro ou fun\xE7\xE3o inv\xE1lidos" });
+      const { platform_member_id, team_role } = input.data;
       let isManager = false;
       const hasGlobal = platformContext.role?.key === "admin";
       if (!hasGlobal) {
@@ -1440,7 +1601,7 @@ function createAdminTeamsRouter(getSupabaseAdmin2, requirePlatformAuth) {
       res.status(500).json({ error: e.message });
     }
   });
-  router.delete("/:id/members/:memberId", requirePlatformAuth, async (req, res) => {
+  router.delete("/:id/members/:memberId", authenticateRequest, resolvePlatformContext, requirePlatformPermission("platform.teams.members.manage"), async (req, res) => {
     try {
       const { platformContext } = req;
       const teamId = req.params.id;
@@ -2525,130 +2686,6 @@ import { createClient as createClient2 } from "@supabase/supabase-js";
 import dotenv from "dotenv";
 import cors from "cors";
 import { randomUUID as randomUUID2 } from "node:crypto";
-
-// src/server/tenantAuth.ts
-import { createClient } from "@supabase/supabase-js";
-var getSupabaseAdmin = () => {
-  const url = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || "";
-  const key = process.env.SUPABASE_SECRET_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY || "";
-  if (!url || !key) throw new Error("Missing server-side Supabase credentials");
-  return createClient(url, key, { auth: { autoRefreshToken: false, persistSession: false } });
-};
-var authenticateRequest = async (req, res, next) => {
-  const authHeader = req.headers.authorization;
-  if (!authHeader) return res.status(401).json({ error: "Missing authorization header" });
-  const token = authHeader.replace("Bearer ", "");
-  try {
-    const db = req.supabaseAdmin || getSupabaseAdmin();
-    const { data: { user }, error: authErr } = await db.auth.getUser(token);
-    if (authErr || !user) return res.status(401).json({ error: "Invalid or expired session" });
-    req.user = user;
-    next();
-  } catch (e) {
-    return res.status(500).json({ error: "Authentication system error" });
-  }
-};
-var resolveTenantContext = async (req, res, next) => {
-  const tenantId = req.headers["x-tenant-id"] || req.body.tenant_id;
-  if (!tenantId) {
-    return res.status(400).json({ error: "Missing tenant identification" });
-  }
-  try {
-    const user = req.user;
-    if (!user) return res.status(401).json({ error: "Authentication required before tenant resolution" });
-    const db = req.supabaseAdmin || getSupabaseAdmin();
-    const { data: membership } = await db.from("memberships").select("*, tenants(*)").eq("user_id", user.id).eq("tenant_id", tenantId).eq("status", "active").maybeSingle();
-    if (!membership) {
-      return res.status(403).json({ error: "Forbidden: No active membership in this tenant" });
-    }
-    if (membership.tenants?.status !== "active" && membership.tenants?.status !== "trial") {
-      return res.status(403).json({ error: "Forbidden: Tenant is not active" });
-    }
-    const { data: roleRefs } = await db.from("membership_roles").select("role_id").eq("membership_id", membership.id);
-    let roles = [];
-    let permissions = [];
-    if (roleRefs && roleRefs.length > 0) {
-      const roleIds = roleRefs.map((r) => r.role_id);
-      const { data: rolesData } = await db.from("roles").select("id, key").in("id", roleIds);
-      if (rolesData) roles = rolesData;
-      const { data: pRefs } = await db.from("role_permissions").select("permission_id").in("role_id", roleIds);
-      if (pRefs && pRefs.length > 0) {
-        const { data: pData } = await db.from("permissions").select("key").in("id", pRefs.map((p) => p.permission_id));
-        if (pData) permissions = pData.map((p) => p.key);
-      }
-    }
-    const { data: sRefs } = await db.from("tenant_solutions").select("solution_id").eq("tenant_id", tenantId).eq("status", "active");
-    let solutions = [];
-    if (sRefs && sRefs.length > 0) {
-      const sIds = sRefs.map((s) => s.solution_id);
-      const { data: sData } = await db.from("solutions").select("key").in("id", sIds);
-      if (sData) solutions = sData.map((s) => s.key);
-    }
-    req.tenantContext = {
-      membership,
-      tenant: membership.tenants,
-      roles,
-      permissions,
-      solutions
-    };
-    next();
-  } catch (e) {
-    return res.status(500).json({ error: "Tenant resolution error" });
-  }
-};
-var requireTenantPermission = (requiredPermission) => {
-  return (req, res, next) => {
-    const context = req.tenantContext;
-    if (!context) return res.status(500).json({ error: "Missing tenant context" });
-    if (!context.permissions.includes(requiredPermission)) {
-      return res.status(403).json({ error: `Forbidden: requires permission ${requiredPermission}` });
-    }
-    next();
-  };
-};
-var resolvePlatformContext = async (req, res, next) => {
-  try {
-    const user = req.user;
-    if (!user) return res.status(401).json({ error: "Authentication required" });
-    const db = req.supabaseAdmin || getSupabaseAdmin();
-    const { data: platformMember } = await db.from("platform_members").select("*, platform_roles(*)").eq("user_id", user.id).maybeSingle();
-    if (!platformMember) {
-      return res.status(403).json({ error: "Forbidden: Not a platform member" });
-    }
-    if (platformMember.status === "suspended") {
-      return res.status(403).json({ error: "Forbidden: Platform member suspended" });
-    }
-    const role = platformMember.platform_roles;
-    let permissions = [];
-    if (role) {
-      const { data: rolePerms } = await db.from("platform_role_permissions").select("platform_permissions(key)").eq("role_id", role.id);
-      if (rolePerms) {
-        permissions = rolePerms.map((rp) => rp.platform_permissions?.key).filter(Boolean);
-      }
-    }
-    req.platformContext = {
-      platformMember,
-      role,
-      permissions
-    };
-    next();
-  } catch (e) {
-    return res.status(500).json({ error: "Platform resolution error" });
-  }
-};
-var requirePlatformPermission = (requiredPermission) => {
-  return (req, res, next) => {
-    const context = req.platformContext;
-    if (!context) return res.status(500).json({ error: "Missing platform context" });
-    if (context.role?.key === "admin") return next();
-    if (!context.permissions.includes(requiredPermission)) {
-      return res.status(403).json({ error: `Forbidden: requires platform permission ${requiredPermission}` });
-    }
-    next();
-  };
-};
-
-// server.ts
 dotenv.config({ path: [".env.local", ".env"] });
 async function createApp() {
   initServerObservability();

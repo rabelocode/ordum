@@ -7,7 +7,7 @@ export function createAdminTeamsRouter(getSupabaseAdmin: any, _old_requirePlatfo
   const router = Router();
 
   // GET /api/admin/teams
-  router.get('/', authenticateRequest, resolvePlatformContext, async (req: any, res: any) => {
+  router.get('/', authenticateRequest, resolvePlatformContext, requirePlatformPermission('platform.teams.read'), async (req: any, res: any) => {
     try {
       const { platformContext } = req;
       let query = getSupabaseAdmin().from('platform_teams').select('*').order('name');
@@ -74,7 +74,7 @@ export function createAdminTeamsRouter(getSupabaseAdmin: any, _old_requirePlatfo
   });
 
   // GET /api/admin/teams/:id
-  router.get('/:id', authenticateRequest, resolvePlatformContext, async (req: any, res: any) => {
+  router.get('/:id', authenticateRequest, resolvePlatformContext, requirePlatformPermission('platform.teams.read'), async (req: any, res: any) => {
     try {
       const { platformContext } = req;
       const teamId = req.params.id;
@@ -105,7 +105,7 @@ export function createAdminTeamsRouter(getSupabaseAdmin: any, _old_requirePlatfo
     settings: z.any().optional()
   });
 
-  router.patch('/:id', authenticateRequest, resolvePlatformContext, async (req: any, res: any) => {
+  router.patch('/:id', authenticateRequest, resolvePlatformContext, requirePlatformPermission('platform.teams.manage'), async (req: any, res: any) => {
     try {
       const { platformContext } = req;
       const teamId = req.params.id;
@@ -163,7 +163,7 @@ export function createAdminTeamsRouter(getSupabaseAdmin: any, _old_requirePlatfo
   });
 
   // GET /api/admin/teams/:id/members
-  router.get('/:id/members', authenticateRequest, resolvePlatformContext, async (req: any, res: any) => {
+  router.get('/:id/members', authenticateRequest, resolvePlatformContext, requirePlatformPermission('platform.teams.members.read'), async (req: any, res: any) => {
     try {
       const { platformContext } = req;
       const teamId = req.params.id;
@@ -223,7 +223,7 @@ export function createAdminTeamsRouter(getSupabaseAdmin: any, _old_requirePlatfo
     team_role: z.string()
   });
 
-  router.post('/:id/members', authenticateRequest, resolvePlatformContext, async (req: any, res: any) => {
+  router.post('/:id/members', authenticateRequest, resolvePlatformContext, requirePlatformPermission('platform.teams.members.manage'), async (req: any, res: any) => {
     try {
       const { platformContext } = req;
       const teamId = req.params.id;
@@ -278,7 +278,7 @@ export function createAdminTeamsRouter(getSupabaseAdmin: any, _old_requirePlatfo
   });
 
   // DELETE /api/admin/teams/:id/members/:memberId
-  router.delete('/:id/members/:memberId', authenticateRequest, resolvePlatformContext, async (req: any, res: any) => {
+  router.delete('/:id/members/:memberId', authenticateRequest, resolvePlatformContext, requirePlatformPermission('platform.teams.members.manage'), async (req: any, res: any) => {
     try {
       const { platformContext } = req;
       const teamId = req.params.id;

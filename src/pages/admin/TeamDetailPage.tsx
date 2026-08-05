@@ -3,12 +3,10 @@ import { useAccess } from '../../core/auth/AccessContext';
 import { PlatformTeam } from '../../types/platform';
 import { ArrowLeft, Plus, Trash2, Save, Loader2 } from 'lucide-react';
 import { AddTeamMemberModal } from '../../components/admin/AddTeamMemberModal';
-import { usePlatform } from '../../core/auth/PlatformAuthProvider';
 import { DetailSkeleton } from '../../components/ui/LoadingSkeletons';
 
 export function TeamDetailPage({ teamId }: { teamId: string }) {
-  const { session } = useAccess();
-  const { platformRole } = usePlatform();
+  const { session, platformRole } = useAccess();
   const [team, setTeam] = useState<PlatformTeam | null>(null);
   const [members, setMembers] = useState<any[]>([]);
   const [activeTab, setActiveTab] = useState("VisoGeral");

@@ -65,11 +65,12 @@ export function createAdminOtherRouter(getSupabaseAdmin: any, _old_requirePlatfo
     team_ids: z.array(z.string().uuid()).optional()
   });
 
-  router.post('/staff', authenticateRequest, resolvePlatformContext, async (req: any, res: any) => {
+  router.post('/staff', authenticateRequest, resolvePlatformContext, requirePlatformPermission(['platform.staff.manage', 'platform.staff.invite_sales']), async (req: any, res: any) => {
     try {
       const { platformContext } = req;
       const callerRoleKey = platformContext.role?.key;
 
+      // Scopes de permission e business logic
       if (!platformContext.permissions.includes('platform.staff.manage') && callerRoleKey !== 'admin') {
         if (callerRoleKey !== 'manager') {
           return res.status(403).json({ error: 'Forbidden: Insufficient permissions to invite staff.' });
@@ -201,7 +202,7 @@ export function createAdminOtherRouter(getSupabaseAdmin: any, _old_requirePlatfo
     team_ids: z.array(z.string().uuid()).optional()
   });
 
-  router.patch('/staff/:id', authenticateRequest, resolvePlatformContext, async (req: any, res: any) => {
+  router.patch('/staff/:id', authenticateRequest, resolvePlatformContext, requirePlatformPermission(['platform.staff.manage', 'platform.staff.invite_sales']), async (req: any, res: any) => {
     try {
       const { platformContext } = req;
       const callerRoleKey = platformContext.role?.key;
@@ -426,7 +427,7 @@ export function createAdminOtherRouter(getSupabaseAdmin: any, _old_requirePlatfo
   });
 
   // GET /api/admin/audit
-  router.get('/audit', authenticateRequest, resolvePlatformContext, async (req: any, res: any) => {
+  router.get('/audit', authenticateRequest, resolvePlatformContext, requirePlatformPermission(['platform.audit.read', 'platform.audit.team.read']), async (req: any, res: any) => {
     try {
       const { platformContext } = req;
       

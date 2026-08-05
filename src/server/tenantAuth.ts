@@ -167,15 +167,28 @@ export const resolvePlatformContext = async (req: Request, res: Response, next: 
     }
 };
 
-export const requirePlatformPermission = (requiredPermission: string) => {
+export const requirePlatformPermission = (required: string | readonly string[]) => {
+    const requiredPermissions = typeof required === 'string' ? [required] : [...required];
+
+    if (requiredPermissions.length === 0) {
+        throw new Error('requirePlatformPermission requires at least one permission');
+    }
+
     return (req: Request, res: Response, next: NextFunction) => {
         const context = (req as any).platformContext;
-        if (!context) return res.status(500).json({ error: "Missing platform context" });
-        if (context.role?.key === 'admin') return next(); // Admin tem bypass global no backend
 
-        if (!context.permissions.includes(requiredPermission)) {
-            return res.status(403).json({ error: `Forbidden: requires platform permission ${requiredPermission}` });
+        if (!context) {
+            return res.status(500).json({ error: "Platform authorization context is unavailable" });
         }
-        next();
+
+        const allowed = requiredPermissions.some((permission) => 
+            context.permissions.includes(permission)
+        );
+
+        if (!allowed) {
+            return res.status(403).json({ error: "Forbidden: insufficient platform permission" });
+        }
+
+        return next();
     };
 };

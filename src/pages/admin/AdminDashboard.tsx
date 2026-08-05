@@ -1,7 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { AlertTriangle, ArrowDownRight, ArrowUpRight, Download, RefreshCw } from 'lucide-react';
 import { useAccess } from '../../core/auth/AccessContext';
-import { usePlatform } from '../../core/auth/PlatformAuthProvider';
 
 type Metrics = Record<string, number | string | boolean | null>;
 
@@ -50,8 +49,7 @@ function Comparison({ current, previous }: { current: unknown; previous: unknown
 }
 
 export function AdminDashboard() {
-  const { session } = useAccess();
-  const { platformCan, platformRole } = usePlatform();
+  const { session, platformRole, hasPlatformPermission: platformCan } = useAccess();
   const [payload, setPayload] = useState<{ current: Metrics | null; previous: Metrics | null; emptyReason?: string | null } | null>(null);
   const [filters, setFilters] = useState<any>({ teams: [], people: [], plans: [], solutions: [] });
   const [loading, setLoading] = useState(true);
