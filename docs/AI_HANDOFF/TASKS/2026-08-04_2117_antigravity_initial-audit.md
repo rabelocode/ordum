@@ -18,7 +18,7 @@ Realizar exclusivamente a etapa de preparação, auditoria e baseline. Sem reali
 
 # Escopo autorizado
 
-Leitura de codebase, execução condicional de status checks locais, e creation/overwrite da estrutura de docs do AI_HANDOFF e docs de planejamento base. Sem re-commits de source nem apply da BD. Autorizado push à origin exclusiva.
+Leitura de codebase, execução condicional de status checks locais, e creation/overwrite da estrutura de docs do AI_HANDOFF e docs de planejamento base. Sem re-commits de source nem apply da BD. Autorizado push à origin exclusiva (audit/ordum-recovery-baseline).
 
 # Fora do escopo
 
@@ -26,11 +26,11 @@ Implementações lógicas de código (sem alterações funcionais), queries SQL 
 
 # Estado encontrado
 
-O repositório estava na branch codex com `aed8d4f138bceee9aebba40d633416ae6f9a2635`. A `docs/ORDUM_RECOVERY_MASTER_SPEC.md` existia isolada e untracked (vazia/hash e69de29bb2d1d6434b8b29ae775ad8c2e48c5391 no snapshot lido). 
+O repositório estava na branch codex com commit `aed8d4f138bceee9aebba40d633416ae6f9a2635`. A spec principal estava em formato memory inject mas pendente de escrita real no fs, sendo injetada formalmente em disco agora de forma integral.
 
 # Diagnóstico
 
-Base instalada sólida. Código principal (App e Auth) rodando adequadamente nas validações estáticas. Módulos marcados no State confirmam Gaps (KNOWN_ISSUES).
+Base instalada existe com roteamento app shell validado em testes estáticos. Multi-Tenant Auth tem peças fundamentais, porém o Isolamento e o Schema BD real do Integrity e Admin não escalam com as UIs atuais. (GAPS mapeados no KNOWN_ISSUES). Handoff file docs foram inseridos com eficácia.
 
 # Decisões técnicas
 
