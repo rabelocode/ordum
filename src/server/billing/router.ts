@@ -38,6 +38,57 @@ function cleanError(error: unknown) {
   return message.replace(/\$aact_[A-Za-z0-9_\-]+/g, '[REDACTED]').slice(0, 500);
 }
 
+export function selectOnboardingTemplate(templates: any[], contractPlanId: string, contractSolutionIds: string[]) {
+  let selected = templates.find((t: any) => t.plan_id === contractPlanId && t.solution_id && contractSolutionIds.includes(t.solution_id));
+  if (!selected) selected = templates.find((t: any) => t.plan_id === contractPlanId && !t.solution_id);
+  if (!selected) selected = templates.find((t: any) => !t.plan_id && t.solution_id && contractSolutionIds.includes(t.solution_id));
+  if (!selected) selected = templates.find((t: any) => !t.plan_id && !t.solution_id);
+  return selected;
+}
+
+export function buildDeterministicSandboxEvent(contractId: string, amount_cents: number, external_reference: string, subscription: any) {
+  const fakePaymentId = `mock:payment:${contractId}`;
+  const fakeEventId = `mock:event:payment_confirmed:${contractId}`;
+  const fakePayload = {
+    event: 'PAYMENT_CONFIRMED',
+    payment: {
+      id: fakePaymentId,
+      customer: subscription.provider_customer_id || 'cus_mock',
+      subscription: subscription.provider_subscription_id,
+      value: amount_cents / 100,
+      netValue: amount_cents / 100,
+      status: 'CONFIRMED',
+      externalReference: external_reference,
+      confirmedDate: new Date().toISOString().split('T')[0]
+    }
+  };
+  return { fakePaymentId, fakeEventId, fakePayload };
+}
+
+export function validateSandboxEnv(envNode?: string, envVercel?: string, envAsaas?: string) {
+  return !(envNode === 'production' || envVercel === 'production' || envAsaas !== 'sandbox');
+}
+
+export async function executeProposalItemsRollback(db: any, reqUser: any, proposalId: string, itemsErrorMsg: string) {
+  const { error: delError } = await db.from('commercial_proposals').delete().eq('id', proposalId);
+  if (delError) {
+      await db.from('platform_audit_logs').insert({ actor_user_id: reqUser.id, action: 'system.consistency.error', entity_type: 'commercial_proposals', entity_id: proposalId, severity: 'critical', metadata: { reason: 'Falha tentar exclusão do pai ao reverter transação', itemsError: itemsErrorMsg, delError: delError.message }});
+      return { status: 500, error: 'Incoerência crítica: não foi possível remover a proposta após falha nos itens.' };
+  }
+  await db.from('platform_audit_logs').insert({ actor_user_id: reqUser.id, action: 'commercial.proposal.rollback', entity_type: 'commercial_proposals', entity_id: proposalId, severity: 'info', metadata: { reason: 'Sucesso ao reverter', itemsError: itemsErrorMsg }});
+  return { status: 500, error: itemsErrorMsg };
+}
+
+export async function executeContractItemsRollback(db: any, reqUser: any, contractId: string, itemsErrorMsg: string) {
+  const { error: delError } = await db.from('commercial_contracts').delete().eq('id', contractId);
+  if (delError) {
+      await db.from('platform_audit_logs').insert({ actor_user_id: reqUser.id, action: 'system.consistency.error', entity_type: 'commercial_contracts', entity_id: contractId, severity: 'critical', metadata: { reason: 'Falha tentar exclusão do pai ao reverter transação', itemsError: itemsErrorMsg, delError: delError.message }});
+      return { status: 500, error: 'Incoerência crítica: não foi possível remover o contrato após falha nos itens.' };
+  }
+  await db.from('platform_audit_logs').insert({ actor_user_id: reqUser.id, action: 'commercial.contract.rollback', entity_type: 'commercial_contracts', entity_id: contractId, severity: 'info', metadata: { reason: 'Sucesso ao reverter', itemsError: itemsErrorMsg }});
+  return { status: 500, error: itemsErrorMsg };
+}
+
 function slugDate(value?: string) {
   return value?.slice(0, 10) || new Date().toISOString().slice(0, 10);
 }
@@ -176,10 +227,7 @@ async function processPaymentEvent(db: any, eventRow: any, payload: any, provide
       const { data: cItems } = await db.from('commercial_contract_items').select('solution_id').eq('contract_id', contract.id);
       const sIds = cItems?.map((c: any) => c.solution_id) || [];
       
-      let selectedTemplate = templates.find((t: any) => t.plan_id === contract.plan_id && t.solution_id && sIds.includes(t.solution_id));
-      if (!selectedTemplate) selectedTemplate = templates.find((t: any) => t.plan_id === contract.plan_id && !t.solution_id);
-      if (!selectedTemplate) selectedTemplate = templates.find((t: any) => !t.plan_id && t.solution_id && sIds.includes(t.solution_id));
-      if (!selectedTemplate) selectedTemplate = templates.find((t: any) => !t.plan_id && !t.solution_id);
+      const selectedTemplate = selectOnboardingTemplate(templates, contract.plan_id, sIds);
 
       if (selectedTemplate) {
         const { data: existingRun } = await db.from('onboarding_runs')
@@ -722,13 +770,8 @@ export function createBillingRouters(getSupabaseAdmin: () => any) {
       }));
       const { error: itemsError } = await db.from('commercial_proposal_items').insert(itemsToInsert);
       if (itemsError) {
-         const { error: delError } = await db.from('commercial_proposals').delete().eq('id', data.id);
-         if (delError) {
-            await db.from('platform_audit_logs').insert({ actor_user_id: req.user.id, action: 'system.consistency.error', entity_type: 'commercial_proposals', entity_id: data.id, severity: 'critical', metadata: { reason: 'Falha tentar exclusão do pai ao reverter transação', itemsError: itemsError.message, delError: delError.message }});
-            return res.status(500).json({ error: 'Incoerência crítica: não foi possível remover a proposta após falha nos itens.' });
-         }
-         await db.from('platform_audit_logs').insert({ actor_user_id: req.user.id, action: 'commercial.proposal.rollback', entity_type: 'commercial_proposals', entity_id: data.id, severity: 'info', metadata: { reason: 'Sucesso ao reverter', itemsError: itemsError.message }});
-         return res.status(500).json({ error: itemsError.message });
+         const rb = await executeProposalItemsRollback(db, req.user, data.id, itemsError.message);
+         return res.status(rb.status).json({ error: rb.error });
       }
     }
 
@@ -823,13 +866,8 @@ export function createBillingRouters(getSupabaseAdmin: () => any) {
     if (proposalItems?.length) {
       const { error: cntItemsErr } = await db.from('commercial_contract_items').insert(proposalItems.map((item: any) => ({ contract_id: contract.id, solution_id: item.solution_id, limits: item.limits })));
       if (cntItemsErr) {
-        const { error: delError } = await db.from('commercial_contracts').delete().eq('id', contract.id);
-        if (delError) {
-           await db.from('platform_audit_logs').insert({ actor_user_id: req.user.id, action: 'system.consistency.error', entity_type: 'commercial_contracts', entity_id: contract.id, severity: 'critical', metadata: { reason: 'Falha tentar exclusão do pai ao reverter transação', itemsError: cntItemsErr.message, delError: delError.message }});
-           return res.status(500).json({ error: 'Incoerência crítica: não foi possível remover o contrato após falha nos itens.' });
-        }
-        await db.from('platform_audit_logs').insert({ actor_user_id: req.user.id, action: 'commercial.contract.rollback', entity_type: 'commercial_contracts', entity_id: contract.id, severity: 'info', metadata: { reason: 'Sucesso ao reverter', itemsError: cntItemsErr.message }});
-        return res.status(500).json({ error: cntItemsErr.message });
+        const rb = await executeContractItemsRollback(db, req.user, contract.id, cntItemsErr.message);
+        return res.status(rb.status).json({ error: rb.error });
       }
     }
     // Removido: A geração de contrato não altera mais a proposta silenciosamente
@@ -898,7 +936,7 @@ export function createBillingRouters(getSupabaseAdmin: () => any) {
   });
 
   adminRouter.post('/commercial/contracts/:id/mock-sandbox-payment', authenticateRequest, resolvePlatformContext, requirePlatformPermission('platform.billing.webhooks.manage'), async (req: any, res: any) => {
-    if (process.env.NODE_ENV === 'production' || process.env.VERCEL_ENV === 'production' || process.env.ASAAS_ENV !== 'sandbox') {
+    if (!validateSandboxEnv(process.env.NODE_ENV, process.env.VERCEL_ENV, process.env.ASAAS_ENV)) {
       return res.status(403).json({ error: 'Sandbox mock disponivel apenas em dev/staging.' });
     }
     const db = getSupabaseAdmin();
@@ -910,27 +948,13 @@ export function createBillingRouters(getSupabaseAdmin: () => any) {
     const { data: subscription } = await db.from('billing_subscriptions').select('*').eq('contract_id', contract.id).maybeSingle();
     if (!subscription) return res.status(400).json({ error: 'Assinatura nao encontrada.' });
     
-    const fakePaymentId = `mock:payment:${contract.id}`;
-    const fakeEventId = `mock:event:payment_confirmed:${contract.id}`;
+    const { fakePaymentId, fakeEventId, fakePayload } = buildDeterministicSandboxEvent(contract.id, contract.amount_cents, contract.external_reference, subscription);
 
     const { data: existingEvent } = await db.from('billing_webhook_events').select('*').eq('provider_event_id', fakeEventId).maybeSingle();
     
     let webhookEvent = existingEvent;
     
     if (!webhookEvent) {
-      const fakePayload = {
-        event: 'PAYMENT_CONFIRMED',
-        payment: {
-          id: fakePaymentId,
-          customer: subscription.provider_customer_id || 'cus_mock',
-          subscription: subscription.provider_subscription_id,
-          value: contract.amount_cents / 100,
-          netValue: contract.amount_cents / 100,
-          status: 'CONFIRMED',
-          externalReference: contract.external_reference,
-          confirmedDate: new Date().toISOString().split('T')[0]
-        }
-      };
       const { data: newWebhook, error: whErr } = await db.from('billing_webhook_events').insert({
         event_type: 'PAYMENT_CONFIRMED',
         provider: 'asaas',
