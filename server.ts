@@ -6,6 +6,7 @@ import { createAdminOtherRouter } from './src/server/adminOtherRouter';
 import { createAdminControlPlaneRouter } from './src/server/adminControlPlaneRouter';
 import { createAdminTeamsRouter } from './src/server/adminTeamsRouter';
 import { createBillingRouters } from './src/server/billing/router';
+import { createIntegrityRouter } from './src/server/integrityRouter';
 import { createClient } from '@supabase/supabase-js';
 import dotenv from 'dotenv';
 import cors from 'cors';
@@ -349,6 +350,8 @@ export async function createApp() {
   app.use('/api/webhooks', billingRouters.publicRouter);
   app.use('/api/admin', billingRouters.adminRouter);
   app.use('/api/internal/billing', billingRouters.internalRouter);
+  
+  app.use('/api/workspace/integrity', createIntegrityRouter(getSupabaseAdmin));
 
 
   app.get("/api/admin/stats", requirePlatformAuth, async (req, res) => {
