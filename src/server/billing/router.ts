@@ -33,6 +33,105 @@ export function webhookTokenMatches(actual: string | undefined, expected: string
   return left.length === right.length && timingSafeEqual(left, right);
 }
 
+export async function acceptCommercialProposalCore(req: any, res: any, db: any) {
+  const existing = await db.from('commercial_proposals').select('*').eq('id', req.params.id).maybeSingle();
+  if (existing.error || !existing.data) return res.status(404).json({ error: 'Proposta não encontrada.' });
+  
+  if (existing.data.status === 'accepted') return res.status(200).json({ success: true, message: 'Proposta já aceita.' });
+  if (existing.data.status === 'rejected' || existing.data.status === 'superseded') return res.status(400).json({ error: 'Status atual não permite aceite.' });
+  if (existing.data.status !== 'approved') return res.status(400).json({ error: 'A proposta precisa ser aprovada antes do aceite.' });
+
+  if (existing.data.valid_until && new Date(existing.data.valid_until) < new Date()) {
+    return res.status(400).json({ error: 'Proposta expirada.' });
+  }
+
+  const reason = typeof req.body?.reason === 'string' ? req.body.reason.trim() : (typeof req.body?.approval_notes === 'string' ? req.body.approval_notes.trim() : '');
+  if (!reason) return res.status(400).json({ error: 'A justificativa do aceite é obrigatória.' });
+
+  const transitioned = await db.rpc('admin_transition_control_plane', {
+    p_entity_type: 'proposal',
+    p_entity_id: existing.data.id,
+    p_to_status: 'accepted',
+    p_actor_user_id: req.user?.id || 'admin',
+    p_reason: reason,
+    p_team_id: existing.data.team_id || null,
+    p_request_id: req.requestId || null,
+    p_metadata: { ip: req.ip, user_agent: req.headers?.['user-agent'] },
+  });
+  if (transitioned.error) return res.status(409).json({ error: transitioned.error.message });
+
+  return res.status(200).json({ success: true, status: 'accepted' });
+}
+
+export async function createContractFromProposalCore(req: any, res: any, db: any, rollbackContractItemsFn: any) {
+  const { data: proposal, error } = await db.from('commercial_proposals')
+    .select('*, marketing_leads(*), billing_plans(*)').eq('id', req.params.id).single();
+  if (error || !proposal) return res.status(404).json({ error: 'Proposta não encontrada.' });
+  if (proposal.status !== 'accepted') return res.status(409).json({ error: 'A proposta precisa estar aceita para gerar contrato.' });
+  
+  const lead = proposal.marketing_leads || { company: 'mock', email: 'mock', name: 'mock', phone: 'mock' };
+  const { data: contract, error: contractError } = await db.from('commercial_contracts').insert({
+    proposal_id: proposal.id, lead_id: proposal.lead_id, plan_id: proposal.plan_id,
+    team_id: proposal.team_id, owner_platform_member_id: proposal.owner_platform_member_id,
+    customer_name: lead.company, customer_email: lead.email,
+    customer_tax_id: req.body?.customer_tax_id || null, customer_phone: req.body?.customer_phone || lead.phone,
+    owner_name: lead.name, owner_email: lead.email, status: 'pending_approval',
+    amount_cents: proposal.amount_cents, currency: proposal.currency, cycle: proposal.cycle,
+    billing_type: proposal.billing_type || 'UNDEFINED', grace_days: proposal.billing_plans?.grace_days ?? 5,
+    created_by_user_id: req.user?.id || 'sys',
+  }).select().single();
+  
+  if (contractError) return res.status(contractError.code === '23505' ? 409 : 400).json({ error: contractError.code === '23505' ? 'Esta proposta já possui contrato.' : contractError.message });
+  const { data: proposalItems } = await db.from('commercial_proposal_items').select('solution_id,limits').eq('proposal_id', proposal.id);
+  if (proposalItems?.length) {
+    const { error: cntItemsErr } = await db.from('commercial_contract_items').insert(proposalItems.map((item: any) => ({ contract_id: contract.id, solution_id: item.solution_id, limits: item.limits })));
+    if (cntItemsErr) {
+      const rb = await rollbackContractItemsFn(db, req.user || { id: 'sys' }, contract.id, cntItemsErr.message);
+      return res.status(rb.status).json({ error: rb.error });
+    }
+  }
+  await db.from('platform_audit_logs').insert({ actor_user_id: req.user?.id || 'sys', action: 'commercial.contract.created_from_proposal', entity_type: 'commercial_contracts', entity_id: contract.id, team_id: proposal.team_id, severity: 'info', metadata: { proposal_id: proposal.id } });
+  return res.status(201).json(contract);
+}
+
+export async function mockSandboxPaymentCore(req: any, res: any, db: any, localProcessStoredEvent: any) {
+  if (!validateSandboxEnv(process.env.NODE_ENV, process.env.VERCEL_ENV, process.env.ASAAS_ENV)) {
+    return res.status(403).json({ error: 'Sandbox mock disponivel apenas em dev/staging.' });
+  }
+  const { data: contract } = await db.from('commercial_contracts').select('*').eq('id', req.params.id).single();
+  if (!contract || contract.status !== 'pending_payment') return res.status(400).json({ error: 'Contrato invalido ou nao aguarda pagamento.' });
+  
+  const { data: subscription } = await db.from('billing_subscriptions').select('*').eq('contract_id', contract.id).maybeSingle();
+  if (!subscription) return res.status(400).json({ error: 'Assinatura nao encontrada.' });
+  
+  const { fakePaymentId, fakeEventId, fakePayload } = buildDeterministicSandboxEvent(contract.id, contract.amount_cents, contract.external_reference, subscription);
+  const { data: existingEvent } = await db.from('billing_webhook_events').select('*').eq('provider_event_id', fakeEventId).maybeSingle();
+  
+  let webhookEvent = existingEvent;
+  if (!webhookEvent) {
+    const { data: newWebhook, error: whErr } = await db.from('billing_webhook_events').insert({
+      event_type: 'PAYMENT_CONFIRMED', provider: 'asaas', provider_event_id: fakeEventId, payload: fakePayload, status: 'pending'
+    }).select().single();
+    if (whErr) return res.status(500).json({ error: 'Falha ao injetar evento sandbox: ' + whErr.message });
+    webhookEvent = newWebhook;
+  }
+
+  if (webhookEvent && webhookEvent.status === 'pending') {
+    try {
+      const processResult = await localProcessStoredEvent(db, webhookEvent);
+      await db.from('billing_webhook_events').update({ status: processResult, processed_at: new Date().toISOString(), last_error: null }).eq('id', webhookEvent.id);
+      await db.from('platform_audit_logs').insert({ actor_user_id: req.user?.id || 'admin', action: 'billing.sandbox_payment.processed', entity_type: 'billing_webhook_events', entity_id: webhookEvent.id, severity: 'info', metadata: { contract_id: contract.id, subscription_id: subscription.id, provider_event_id: fakeEventId, result: processResult }});
+    } catch (err: any) {
+      await db.from('billing_webhook_events').update({ status: 'failed', last_error: err.message }).eq('id', webhookEvent.id);
+      await db.from('platform_audit_logs').insert({ actor_user_id: req.user?.id || 'admin', action: 'billing.sandbox_payment.failed', entity_type: 'billing_webhook_events', entity_id: webhookEvent.id, severity: 'error', metadata: { contract_id: contract.id, subscription_id: subscription.id, provider_event_id: fakeEventId, result: 'failed', error: err.message }});
+      return res.status(500).json({ error: err.message });
+    }
+  } else {
+    await db.from('platform_audit_logs').insert({ actor_user_id: req.user?.id || 'admin', action: 'billing.sandbox_payment.reused', entity_type: 'billing_webhook_events', entity_id: webhookEvent?.id, severity: 'info', metadata: { contract_id: contract.id, subscription_id: subscription.id, provider_event_id: fakeEventId, result: 'ignored_by_idempotency' }});
+  }
+  return res.status(200).json({ success: true, simulated: true });
+}
+
 function cleanError(error: unknown) {
   const message = error instanceof Error ? error.message : 'Falha desconhecida';
   return message.replace(/\$aact_[A-Za-z0-9_\-]+/g, '[REDACTED]').slice(0, 500);
@@ -703,7 +802,7 @@ export function createBillingRouters(getSupabaseAdmin: () => any) {
   adminRouter.post('/commercial/proposals', authenticateRequest, resolvePlatformContext, requirePlatformPermission('platform.commercial.manage'), async (req: any, res: any) => {
     const input = req.body;
     if (!input.lead_id || !input.plan_id || !input.cycle || !input.billing_type) return res.status(400).json({ error: 'Lead, plano, ciclo e tipo de cobrança são obrigatórios.' });
-    if (!Array.isArray(input.solution_ids)) return res.status(400).json({ error: 'solution_ids deve ser um array.' });
+    if (input.solution_ids !== undefined && input.solution_ids !== null && !Array.isArray(input.solution_ids)) return res.status(400).json({ error: 'solution_ids deve ser um array se informado.' });
     const db = getSupabaseAdmin();
     const assignmentResult = await db.from('platform_lead_assignments').select('*').eq('lead_id', input.lead_id).maybeSingle();
     const assignment = assignmentResult.data;
@@ -727,14 +826,19 @@ export function createBillingRouters(getSupabaseAdmin: () => any) {
     const activePrice = plan.billing_plan_prices?.find((p: any) => p.active && p.cycle === input.cycle && p.billing_type === input.billing_type);
     if (!activePrice) return res.status(400).json({ error: 'Preço base não encontrado ou inativo para as configurações escolhidas.' });
     
-    const planSolutionIds = plan.billing_plan_solutions.map((item: any) => item.solution_id);
-    for (const sol of input.solution_ids) {
+    const planSolutionIds = (plan.billing_plan_solutions || []).map((item: any) => item.solution_id);
+    let chosenSolutionIds: string[] = Array.isArray(input.solution_ids) && input.solution_ids.length > 0 ? input.solution_ids : planSolutionIds;
+
+    for (const sol of chosenSolutionIds) {
       if (!planSolutionIds.includes(sol)) {
          return res.status(400).json({ error: 'solution_not_in_plan', message: `A solução ${sol} não está incluída no plano base.` });
       }
     }
     
-    const requestedSolutions = plan.billing_plan_solutions.filter((item: any) => input.solution_ids.includes(item.solution_id));
+    const requestedSolutions = (plan.billing_plan_solutions || []).filter((item: any) => chosenSolutionIds.includes(item.solution_id));
+    if ((plan.billing_plan_solutions || []).length > 0 && requestedSolutions.length === 0) {
+       return res.status(400).json({ error: 'Não é possível criar proposta sem itens quando o plano possui módulos.' });
+    }
     
     let subtotal = activePrice.amount_cents;
     const discount = Number(input.discount_cents) || 0;
@@ -823,56 +927,19 @@ export function createBillingRouters(getSupabaseAdmin: () => any) {
   adminRouter.post('/commercial/proposals/:id/accept', authenticateRequest, resolvePlatformContext, requirePlatformPermission('platform.commercial.manage'), async (req: any, res: any) => {
     const db = getSupabaseAdmin();
     const existing = await db.from('commercial_proposals').select('*').eq('id', req.params.id).maybeSingle();
-    if (existing.error || !existing.data) return res.status(404).json({ error: 'Proposta não encontrada.' });
+    if (!existing.data) return res.status(404).json({ error: 'Proposta não encontrada.' });
     if (!canReadAssignedResource(req.platformContext, existing.data, 'member_lead_visibility')) return res.status(403).json({ error: 'Proposta fora do seu escopo.' });
-    
-    if (existing.data.status === 'accepted') return res.json({ success: true, message: 'Proposta já aceita.' });
-    if (existing.data.status === 'rejected' || existing.data.status === 'superseded') return res.status(400).json({ error: 'Status atual não permite aceite.' });
-    if (existing.data.status !== 'approved') return res.status(400).json({ error: 'A proposta precisa ser aprovada antes do aceite.' });
-
-    if (existing.data.valid_until && new Date(existing.data.valid_until) < new Date()) {
-      return res.status(400).json({ error: 'Proposta expirada.' });
-    }
-
-    const { error: updateErr } = await db.from('commercial_proposals').update({ status: 'accepted' }).eq('id', existing.data.id);
-    if (updateErr) return res.status(500).json({ error: updateErr.message });
-    
-    await db.from('platform_audit_logs').insert({ actor_user_id: req.user.id, action: 'commercial.proposal.accepted', entity_type: 'commercial_proposals', entity_id: existing.data.id, team_id: existing.data.team_id, severity: 'info', ...auditContext(req, { result: 'success' }) });
-    return res.json({ success: true, status: 'accepted' });
+    return acceptCommercialProposalCore(req, res, db);
   });
 
   adminRouter.post('/commercial/proposals/:id/create-contract', authenticateRequest, resolvePlatformContext, requirePlatformPermission('platform.commercial.manage'), async (req: any, res: any) => {
     const db = getSupabaseAdmin();
-    const { data: proposal, error } = await db.from('commercial_proposals')
-      .select('*, marketing_leads(*), billing_plans(*)').eq('id', req.params.id).single();
-    if (error || !proposal) return res.status(404).json({ error: 'Proposta não encontrada.' });
-    if (proposal.status !== 'approved') return res.status(409).json({ error: 'A proposta precisa estar aprovada.' });
+    const { data: proposal } = await db.from('commercial_proposals').select('*').eq('id', req.params.id).single();
+    if (!proposal) return res.status(404).json({ error: 'Proposta não encontrada.' });
     if (req.platformContext.role.key !== 'admin' && !canReadAssignedResource(req.platformContext, proposal, 'member_lead_visibility')) {
       return res.status(403).json({ error: 'Proposta fora do seu escopo.' });
     }
-    const lead = proposal.marketing_leads;
-    const { data: contract, error: contractError } = await db.from('commercial_contracts').insert({
-      proposal_id: proposal.id, lead_id: proposal.lead_id, plan_id: proposal.plan_id,
-      team_id: proposal.team_id, owner_platform_member_id: proposal.owner_platform_member_id,
-      customer_name: lead.company, customer_email: lead.email,
-      customer_tax_id: req.body.customer_tax_id || null, customer_phone: req.body.customer_phone || lead.phone,
-      owner_name: lead.name, owner_email: lead.email, status: 'pending_approval',
-      amount_cents: proposal.amount_cents, currency: proposal.currency, cycle: proposal.cycle,
-      billing_type: proposal.billing_type || 'UNDEFINED', grace_days: proposal.billing_plans?.grace_days ?? 5,
-      created_by_user_id: req.user.id,
-    }).select().single();
-    if (contractError) return res.status(contractError.code === '23505' ? 409 : 400).json({ error: contractError.code === '23505' ? 'Esta proposta já possui contrato.' : contractError.message });
-    const { data: proposalItems } = await db.from('commercial_proposal_items').select('solution_id,limits').eq('proposal_id', proposal.id);
-    if (proposalItems?.length) {
-      const { error: cntItemsErr } = await db.from('commercial_contract_items').insert(proposalItems.map((item: any) => ({ contract_id: contract.id, solution_id: item.solution_id, limits: item.limits })));
-      if (cntItemsErr) {
-        const rb = await executeContractItemsRollback(db, req.user, contract.id, cntItemsErr.message);
-        return res.status(rb.status).json({ error: rb.error });
-      }
-    }
-    // Removido: A geração de contrato não altera mais a proposta silenciosamente
-    await db.from('platform_audit_logs').insert({ actor_user_id: req.user.id, action: 'commercial.contract.created_from_proposal', entity_type: 'commercial_contracts', entity_id: contract.id, team_id: proposal.team_id, severity: 'info', metadata: { proposal_id: proposal.id } });
-    return res.status(201).json(contract);
+    return createContractFromProposalCore(req, res, db, executeContractItemsRollback);
   });
 
   adminRouter.get('/commercial/contracts', authenticateRequest, resolvePlatformContext, requirePlatformPermission('platform.commercial.read'), async (req: any, res: any) => {
@@ -919,80 +986,17 @@ export function createBillingRouters(getSupabaseAdmin: () => any) {
   });
 
   adminRouter.post('/commercial/contracts/:id/accept', authenticateRequest, resolvePlatformContext, requirePlatformPermission('platform.commercial.manage'), async (req: any, res: any) => {
-    const db = getSupabaseAdmin();
-    const { data: contract, error: err } = await db.from('commercial_contracts').select('*').eq('id', req.params.id).single();
-    if (err || !contract) return res.status(404).json({ error: 'Contrato não encontrado.' });
-    if (contract.status !== 'approved') return res.status(409).json({ error: 'Contrato precisa estar aprovado antes do aceite final.' });
-    if (req.platformContext.role.key !== 'admin' && !canReadAssignedResource(req.platformContext, contract, 'member_client_visibility')) {
-      return res.status(403).json({ error: 'Contrato fora do escopo.' });
-    }
-    // "Implementar endpoint explícito de aceite. Registrar timestamp, ator... Não chamar de assinatura digital certificada."
-    const metadata = { ip: req.ip, user_agent: req.headers['user-agent'], accepted_by: req.user.id, timestamp: new Date().toISOString() };
-    const { error: updateErr } = await db.from('commercial_contracts').update({ status: 'accepted', metadata }).eq('id', contract.id);
-    if (updateErr) return res.status(400).json({ error: updateErr.message });
-    
-    await db.from('platform_audit_logs').insert({ actor_user_id: req.user.id, action: 'commercial.contract.accepted', entity_type: 'commercial_contracts', entity_id: contract.id, team_id: contract.team_id, severity: 'info', ...auditContext(req, { result: 'success', metadata }) });
-    return res.json({ success: true, status: 'accepted' });
+    return res.status(405).json({ error: 'Contratos não utilizam status accepted. Fluxo válido: pending_approval -> approved -> pending_payment -> active.' });
   });
 
   adminRouter.post('/commercial/contracts/:id/mock-sandbox-payment', authenticateRequest, resolvePlatformContext, requirePlatformPermission('platform.billing.webhooks.manage'), async (req: any, res: any) => {
-    if (!validateSandboxEnv(process.env.NODE_ENV, process.env.VERCEL_ENV, process.env.ASAAS_ENV)) {
-      return res.status(403).json({ error: 'Sandbox mock disponivel apenas em dev/staging.' });
-    }
     const db = getSupabaseAdmin();
     const { data: contract } = await db.from('commercial_contracts').select('*').eq('id', req.params.id).single();
-    if (!contract || contract.status !== 'pending_payment') return res.status(400).json({ error: 'Contrato invalido ou nao aguarda pagamento.' });
-    if (req.platformContext.role.key !== 'admin' && !canReadAssignedResource(req.platformContext, contract, 'member_client_visibility')) {
+    if (contract && req.platformContext.role.key !== 'admin' && !canReadAssignedResource(req.platformContext, contract, 'member_client_visibility')) {
       return res.status(403).json({ error: 'Contrato fora do escopo.' });
     }
-    const { data: subscription } = await db.from('billing_subscriptions').select('*').eq('contract_id', contract.id).maybeSingle();
-    if (!subscription) return res.status(400).json({ error: 'Assinatura nao encontrada.' });
-    
-    const { fakePaymentId, fakeEventId, fakePayload } = buildDeterministicSandboxEvent(contract.id, contract.amount_cents, contract.external_reference, subscription);
-
-    const { data: existingEvent } = await db.from('billing_webhook_events').select('*').eq('provider_event_id', fakeEventId).maybeSingle();
-    
-    let webhookEvent = existingEvent;
-    
-    if (!webhookEvent) {
-      const { data: newWebhook, error: whErr } = await db.from('billing_webhook_events').insert({
-        event_type: 'PAYMENT_CONFIRMED',
-        provider: 'asaas',
-        provider_event_id: fakeEventId,
-        payload: fakePayload,
-        status: 'pending'
-      }).select().single();
-      if (whErr) return res.status(500).json({ error: 'Falha ao injetar evento sandbox: ' + whErr.message });
-      webhookEvent = newWebhook;
-    }
-
-    if (webhookEvent && webhookEvent.status === 'pending') {
-      const { processStoredEvent } = await import('./router.js');
-      try {
-        const processResult = await processStoredEvent(db, webhookEvent);
-        await db.from('billing_webhook_events').update({
-          status: processResult,
-          processed_at: new Date().toISOString(),
-          last_error: null
-        }).eq('id', webhookEvent.id);
-        
-        await db.from('platform_audit_logs').insert({ actor_user_id: req.user.id, action: 'billing.sandbox_payment.processed', entity_type: 'billing_webhook_events', entity_id: webhookEvent.id, severity: 'info', metadata: { contract_id: contract.id, subscription_id: subscription.id, provider_event_id: fakeEventId, result: processResult }});
-        
-      } catch (err: any) {
-        await db.from('billing_webhook_events').update({
-          status: 'failed',
-          last_error: err.message
-        }).eq('id', webhookEvent.id);
-        
-        await db.from('platform_audit_logs').insert({ actor_user_id: req.user.id, action: 'billing.sandbox_payment.failed', entity_type: 'billing_webhook_events', entity_id: webhookEvent.id, severity: 'error', metadata: { contract_id: contract.id, subscription_id: subscription.id, provider_event_id: fakeEventId, result: 'failed', error: err.message }});
-        
-        return res.status(500).json({ error: err.message });
-      }
-    } else {
-        await db.from('platform_audit_logs').insert({ actor_user_id: req.user.id, action: 'billing.sandbox_payment.reused', entity_type: 'billing_webhook_events', entity_id: webhookEvent.id, severity: 'info', metadata: { contract_id: contract.id, subscription_id: subscription.id, provider_event_id: fakeEventId, result: 'ignored_by_idempotency' }});
-    }
-    
-    return res.json({ success: true, message: 'Pago mock processado (idempotente) com sucesso.' });
+    const { processStoredEvent } = await import('./router.js');
+    return mockSandboxPaymentCore(req, res, db, processStoredEvent);
   });
 
   adminRouter.post('/commercial/contracts/:id/start-billing', authenticateRequest, resolvePlatformContext, requirePlatformPermission('platform.billing.manage'), async (req: any, res: any) => {
@@ -1037,7 +1041,16 @@ export function createBillingRouters(getSupabaseAdmin: () => any) {
         cycle: contract.cycle, billing_type: contract.billing_type, amount_cents: contract.amount_cents, next_due_date: nextDueDate,
       }).select().single();
       if (savedSubscription.error) throw savedSubscription.error;
-      await db.from('commercial_contracts').update({ status: 'pending_payment' }).eq('id', contract.id);
+      await db.rpc('admin_transition_control_plane', {
+        p_entity_type: 'contract',
+        p_entity_id: contract.id,
+        p_to_status: 'pending_payment',
+        p_actor_user_id: req.user.id,
+        p_reason: 'Cobrança iniciada no Sandbox',
+        p_team_id: contract.team_id || null,
+        p_tenant_id: contract.tenant_id || null,
+        p_request_id: req.requestId || null,
+      });
       await db.from('platform_audit_logs').insert({ actor_user_id: req.user.id, action: 'billing.subscription.created', entity_type: 'billing_subscriptions', entity_id: savedSubscription.data.id, team_id: contract.team_id, severity: 'info' });
       return res.status(201).json(savedSubscription.data);
     } catch (error) {

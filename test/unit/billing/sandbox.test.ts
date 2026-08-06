@@ -285,7 +285,7 @@ describe('Billing Sandbox & Lifecycle - Exhaustive Core Tests', () => {
             let triedToUpdate = false;
             const customDb: any = { ...mockDb, from: (table: string) => ({
                  ...mockDb.from(),
-                 select: () => ({ eq: () => ({ single: async () => ({ data: { status: 'approved' } }) }) }),
+                 select: () => ({ eq: () => ({ single: async () => ({ data: { status: 'accepted' } }) }) }),
                  insert: () => ({ select: () => ({ single: async () => ({ data: { id: 'c1' } }) }) }),
                  update: (payload: any) => { if(table==='commercial_proposals' && payload?.status === 'accepted') triedToUpdate = true; return mockDb; }
             })};
@@ -299,7 +299,7 @@ describe('Billing Sandbox & Lifecycle - Exhaustive Core Tests', () => {
 
         it('segundo contrato para a mesma proposta retorna 409', async () => {
             const errDb = { from: () => ({ 
-                select: () => ({ eq: () => ({ single: async () => ({ data: { status: 'approved' } }) }) }),
+                select: () => ({ eq: () => ({ single: async () => ({ data: { status: 'accepted' } }) }) }),
                 insert: () => ({ select: () => ({ single: async () => ({ error: { code: '23505' } }) }) }) 
             }) };
             let resCode = 0; let jsonResponse: any;

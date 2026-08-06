@@ -65,7 +65,7 @@ var init_operational = __esm({
 
 // src/server/tenantAuth.ts
 import { createClient } from "@supabase/supabase-js";
-var getSupabaseAdmin, authenticateRequest, resolveTenantContext, requireTenantPermission, resolvePlatformContext, requirePlatformPermission;
+var getSupabaseAdmin, authenticateRequest, resolveTenantContext, requireTenantPermission, requireTenantSolution, resolvePlatformContext, requirePlatformPermission;
 var init_tenantAuth = __esm({
   "src/server/tenantAuth.ts"() {
     getSupabaseAdmin = () => {
@@ -142,6 +142,16 @@ var init_tenantAuth = __esm({
         if (!context) return res.status(500).json({ error: "Missing tenant context" });
         if (!context.permissions.includes(requiredPermission)) {
           return res.status(403).json({ error: `Forbidden: requires permission ${requiredPermission}` });
+        }
+        next();
+      };
+    };
+    requireTenantSolution = (requiredSolution) => {
+      return (req, res, next) => {
+        const context = req.tenantContext;
+        if (!context) return res.status(500).json({ error: "Missing tenant context" });
+        if (!context.solutions.includes(requiredSolution)) {
+          return res.status(403).json({ error: `Forbidden: requires active solution ${requiredSolution}` });
         }
         next();
       };
@@ -548,10 +558,18 @@ var init_domain = __esm({
 // src/server/billing/router.ts
 var router_exports = {};
 __export(router_exports, {
+  acceptCommercialProposalCore: () => acceptCommercialProposalCore,
+  buildDeterministicSandboxEvent: () => buildDeterministicSandboxEvent,
   createBillingRouters: () => createBillingRouters,
+  createContractFromProposalCore: () => createContractFromProposalCore,
+  executeContractItemsRollback: () => executeContractItemsRollback,
+  executeProposalItemsRollback: () => executeProposalItemsRollback,
+  mockSandboxPaymentCore: () => mockSandboxPaymentCore,
   processPendingWebhookEvents: () => processPendingWebhookEvents,
   processStoredEvent: () => processStoredEvent,
   runBillingReconciliation: () => runBillingReconciliation,
+  selectOnboardingTemplate: () => selectOnboardingTemplate,
+  validateSandboxEnv: () => validateSandboxEnv,
   webhookTokenMatches: () => webhookTokenMatches
 });
 import { createHash, timingSafeEqual } from "node:crypto";
@@ -563,9 +581,153 @@ function webhookTokenMatches(actual, expected) {
   const right = Buffer.from(expected);
   return left.length === right.length && timingSafeEqual(left, right);
 }
+async function acceptCommercialProposalCore(req, res, db) {
+  const existing = await db.from("commercial_proposals").select("*").eq("id", req.params.id).maybeSingle();
+  if (existing.error || !existing.data) return res.status(404).json({ error: "Proposta n\xE3o encontrada." });
+  if (existing.data.status === "accepted") return res.status(200).json({ success: true, message: "Proposta j\xE1 aceita." });
+  if (existing.data.status === "rejected" || existing.data.status === "superseded") return res.status(400).json({ error: "Status atual n\xE3o permite aceite." });
+  if (existing.data.status !== "approved") return res.status(400).json({ error: "A proposta precisa ser aprovada antes do aceite." });
+  if (existing.data.valid_until && new Date(existing.data.valid_until) < /* @__PURE__ */ new Date()) {
+    return res.status(400).json({ error: "Proposta expirada." });
+  }
+  const reason = typeof req.body?.reason === "string" ? req.body.reason.trim() : typeof req.body?.approval_notes === "string" ? req.body.approval_notes.trim() : "";
+  if (!reason) return res.status(400).json({ error: "A justificativa do aceite \xE9 obrigat\xF3ria." });
+  const transitioned = await db.rpc("admin_transition_control_plane", {
+    p_entity_type: "proposal",
+    p_entity_id: existing.data.id,
+    p_to_status: "accepted",
+    p_actor_user_id: req.user?.id || "admin",
+    p_reason: reason,
+    p_team_id: existing.data.team_id || null,
+    p_request_id: req.requestId || null,
+    p_metadata: { ip: req.ip, user_agent: req.headers?.["user-agent"] }
+  });
+  if (transitioned.error) return res.status(409).json({ error: transitioned.error.message });
+  return res.status(200).json({ success: true, status: "accepted" });
+}
+async function createContractFromProposalCore(req, res, db, rollbackContractItemsFn) {
+  const { data: proposal, error } = await db.from("commercial_proposals").select("*, marketing_leads(*), billing_plans(*)").eq("id", req.params.id).single();
+  if (error || !proposal) return res.status(404).json({ error: "Proposta n\xE3o encontrada." });
+  if (proposal.status !== "accepted") return res.status(409).json({ error: "A proposta precisa estar aceita para gerar contrato." });
+  const lead = proposal.marketing_leads || { company: "mock", email: "mock", name: "mock", phone: "mock" };
+  const { data: contract, error: contractError } = await db.from("commercial_contracts").insert({
+    proposal_id: proposal.id,
+    lead_id: proposal.lead_id,
+    plan_id: proposal.plan_id,
+    team_id: proposal.team_id,
+    owner_platform_member_id: proposal.owner_platform_member_id,
+    customer_name: lead.company,
+    customer_email: lead.email,
+    customer_tax_id: req.body?.customer_tax_id || null,
+    customer_phone: req.body?.customer_phone || lead.phone,
+    owner_name: lead.name,
+    owner_email: lead.email,
+    status: "pending_approval",
+    amount_cents: proposal.amount_cents,
+    currency: proposal.currency,
+    cycle: proposal.cycle,
+    billing_type: proposal.billing_type || "UNDEFINED",
+    grace_days: proposal.billing_plans?.grace_days ?? 5,
+    created_by_user_id: req.user?.id || "sys"
+  }).select().single();
+  if (contractError) return res.status(contractError.code === "23505" ? 409 : 400).json({ error: contractError.code === "23505" ? "Esta proposta j\xE1 possui contrato." : contractError.message });
+  const { data: proposalItems } = await db.from("commercial_proposal_items").select("solution_id,limits").eq("proposal_id", proposal.id);
+  if (proposalItems?.length) {
+    const { error: cntItemsErr } = await db.from("commercial_contract_items").insert(proposalItems.map((item) => ({ contract_id: contract.id, solution_id: item.solution_id, limits: item.limits })));
+    if (cntItemsErr) {
+      const rb = await rollbackContractItemsFn(db, req.user || { id: "sys" }, contract.id, cntItemsErr.message);
+      return res.status(rb.status).json({ error: rb.error });
+    }
+  }
+  await db.from("platform_audit_logs").insert({ actor_user_id: req.user?.id || "sys", action: "commercial.contract.created_from_proposal", entity_type: "commercial_contracts", entity_id: contract.id, team_id: proposal.team_id, severity: "info", metadata: { proposal_id: proposal.id } });
+  return res.status(201).json(contract);
+}
+async function mockSandboxPaymentCore(req, res, db, localProcessStoredEvent) {
+  if (!validateSandboxEnv(process.env.NODE_ENV, process.env.VERCEL_ENV, process.env.ASAAS_ENV)) {
+    return res.status(403).json({ error: "Sandbox mock disponivel apenas em dev/staging." });
+  }
+  const { data: contract } = await db.from("commercial_contracts").select("*").eq("id", req.params.id).single();
+  if (!contract || contract.status !== "pending_payment") return res.status(400).json({ error: "Contrato invalido ou nao aguarda pagamento." });
+  const { data: subscription } = await db.from("billing_subscriptions").select("*").eq("contract_id", contract.id).maybeSingle();
+  if (!subscription) return res.status(400).json({ error: "Assinatura nao encontrada." });
+  const { fakePaymentId, fakeEventId, fakePayload } = buildDeterministicSandboxEvent(contract.id, contract.amount_cents, contract.external_reference, subscription);
+  const { data: existingEvent } = await db.from("billing_webhook_events").select("*").eq("provider_event_id", fakeEventId).maybeSingle();
+  let webhookEvent = existingEvent;
+  if (!webhookEvent) {
+    const { data: newWebhook, error: whErr } = await db.from("billing_webhook_events").insert({
+      event_type: "PAYMENT_CONFIRMED",
+      provider: "asaas",
+      provider_event_id: fakeEventId,
+      payload: fakePayload,
+      status: "pending"
+    }).select().single();
+    if (whErr) return res.status(500).json({ error: "Falha ao injetar evento sandbox: " + whErr.message });
+    webhookEvent = newWebhook;
+  }
+  if (webhookEvent && webhookEvent.status === "pending") {
+    try {
+      const processResult = await localProcessStoredEvent(db, webhookEvent);
+      await db.from("billing_webhook_events").update({ status: processResult, processed_at: (/* @__PURE__ */ new Date()).toISOString(), last_error: null }).eq("id", webhookEvent.id);
+      await db.from("platform_audit_logs").insert({ actor_user_id: req.user?.id || "admin", action: "billing.sandbox_payment.processed", entity_type: "billing_webhook_events", entity_id: webhookEvent.id, severity: "info", metadata: { contract_id: contract.id, subscription_id: subscription.id, provider_event_id: fakeEventId, result: processResult } });
+    } catch (err) {
+      await db.from("billing_webhook_events").update({ status: "failed", last_error: err.message }).eq("id", webhookEvent.id);
+      await db.from("platform_audit_logs").insert({ actor_user_id: req.user?.id || "admin", action: "billing.sandbox_payment.failed", entity_type: "billing_webhook_events", entity_id: webhookEvent.id, severity: "error", metadata: { contract_id: contract.id, subscription_id: subscription.id, provider_event_id: fakeEventId, result: "failed", error: err.message } });
+      return res.status(500).json({ error: err.message });
+    }
+  } else {
+    await db.from("platform_audit_logs").insert({ actor_user_id: req.user?.id || "admin", action: "billing.sandbox_payment.reused", entity_type: "billing_webhook_events", entity_id: webhookEvent?.id, severity: "info", metadata: { contract_id: contract.id, subscription_id: subscription.id, provider_event_id: fakeEventId, result: "ignored_by_idempotency" } });
+  }
+  return res.status(200).json({ success: true, simulated: true });
+}
 function cleanError(error) {
   const message = error instanceof Error ? error.message : "Falha desconhecida";
   return message.replace(/\$aact_[A-Za-z0-9_\-]+/g, "[REDACTED]").slice(0, 500);
+}
+function selectOnboardingTemplate(templates, contractPlanId, contractSolutionIds) {
+  let selected = templates.find((t) => t.plan_id === contractPlanId && t.solution_id && contractSolutionIds.includes(t.solution_id));
+  if (!selected) selected = templates.find((t) => t.plan_id === contractPlanId && !t.solution_id);
+  if (!selected) selected = templates.find((t) => !t.plan_id && t.solution_id && contractSolutionIds.includes(t.solution_id));
+  if (!selected) selected = templates.find((t) => !t.plan_id && !t.solution_id);
+  return selected;
+}
+function buildDeterministicSandboxEvent(contractId, amount_cents, external_reference, subscription) {
+  const fakePaymentId = `mock:payment:${contractId}`;
+  const fakeEventId = `mock:event:payment_confirmed:${contractId}`;
+  const fakePayload = {
+    event: "PAYMENT_CONFIRMED",
+    payment: {
+      id: fakePaymentId,
+      customer: subscription.provider_customer_id || "cus_mock",
+      subscription: subscription.provider_subscription_id,
+      value: amount_cents / 100,
+      netValue: amount_cents / 100,
+      status: "CONFIRMED",
+      externalReference: external_reference,
+      confirmedDate: (/* @__PURE__ */ new Date()).toISOString().split("T")[0]
+    }
+  };
+  return { fakePaymentId, fakeEventId, fakePayload };
+}
+function validateSandboxEnv(envNode, envVercel, envAsaas) {
+  return !(envNode === "production" || envVercel === "production" || envAsaas !== "sandbox");
+}
+async function executeProposalItemsRollback(db, reqUser, proposalId, itemsErrorMsg) {
+  const { error: delError } = await db.from("commercial_proposals").delete().eq("id", proposalId);
+  if (delError) {
+    await db.from("platform_audit_logs").insert({ actor_user_id: reqUser.id, action: "system.consistency.error", entity_type: "commercial_proposals", entity_id: proposalId, severity: "critical", metadata: { reason: "Falha tentar exclus\xE3o do pai ao reverter transa\xE7\xE3o", itemsError: itemsErrorMsg, delError: delError.message } });
+    return { status: 500, error: "Incoer\xEAncia cr\xEDtica: n\xE3o foi poss\xEDvel remover a proposta ap\xF3s falha nos itens." };
+  }
+  await db.from("platform_audit_logs").insert({ actor_user_id: reqUser.id, action: "commercial.proposal.rollback", entity_type: "commercial_proposals", entity_id: proposalId, severity: "info", metadata: { reason: "Sucesso ao reverter", itemsError: itemsErrorMsg } });
+  return { status: 500, error: itemsErrorMsg };
+}
+async function executeContractItemsRollback(db, reqUser, contractId, itemsErrorMsg) {
+  const { error: delError } = await db.from("commercial_contracts").delete().eq("id", contractId);
+  if (delError) {
+    await db.from("platform_audit_logs").insert({ actor_user_id: reqUser.id, action: "system.consistency.error", entity_type: "commercial_contracts", entity_id: contractId, severity: "critical", metadata: { reason: "Falha tentar exclus\xE3o do pai ao reverter transa\xE7\xE3o", itemsError: itemsErrorMsg, delError: delError.message } });
+    return { status: 500, error: "Incoer\xEAncia cr\xEDtica: n\xE3o foi poss\xEDvel remover o contrato ap\xF3s falha nos itens." };
+  }
+  await db.from("platform_audit_logs").insert({ actor_user_id: reqUser.id, action: "commercial.contract.rollback", entity_type: "commercial_contracts", entity_id: contractId, severity: "info", metadata: { reason: "Sucesso ao reverter", itemsError: itemsErrorMsg } });
+  return { status: 500, error: itemsErrorMsg };
 }
 function slugDate(value) {
   return value?.slice(0, 10) || (/* @__PURE__ */ new Date()).toISOString().slice(0, 10);
@@ -662,10 +824,7 @@ async function processPaymentEvent(db, eventRow, payload, provider) {
     if (templates && templates.length > 0) {
       const { data: cItems } = await db.from("commercial_contract_items").select("solution_id").eq("contract_id", contract.id);
       const sIds = cItems?.map((c) => c.solution_id) || [];
-      let selectedTemplate = templates.find((t) => t.plan_id === contract.plan_id && t.solution_id && sIds.includes(t.solution_id));
-      if (!selectedTemplate) selectedTemplate = templates.find((t) => t.plan_id === contract.plan_id && !t.solution_id);
-      if (!selectedTemplate) selectedTemplate = templates.find((t) => !t.plan_id && t.solution_id && sIds.includes(t.solution_id));
-      if (!selectedTemplate) selectedTemplate = templates.find((t) => !t.plan_id && !t.solution_id);
+      const selectedTemplate = selectOnboardingTemplate(templates, contract.plan_id, sIds);
       if (selectedTemplate) {
         const { data: existingRun } = await db.from("onboarding_runs").select("id").eq("tenant_id", tenantId).eq("template_id", selectedTemplate.id).maybeSingle();
         if (existingRun) {
@@ -1124,7 +1283,7 @@ function createBillingRouters(getSupabaseAdmin2) {
   adminRouter.post("/commercial/proposals", authenticateRequest, resolvePlatformContext, requirePlatformPermission("platform.commercial.manage"), async (req, res) => {
     const input = req.body;
     if (!input.lead_id || !input.plan_id || !input.cycle || !input.billing_type) return res.status(400).json({ error: "Lead, plano, ciclo e tipo de cobran\xE7a s\xE3o obrigat\xF3rios." });
-    if (!Array.isArray(input.solution_ids)) return res.status(400).json({ error: "solution_ids deve ser um array." });
+    if (input.solution_ids !== void 0 && input.solution_ids !== null && !Array.isArray(input.solution_ids)) return res.status(400).json({ error: "solution_ids deve ser um array se informado." });
     const db = getSupabaseAdmin2();
     const assignmentResult = await db.from("platform_lead_assignments").select("*").eq("lead_id", input.lead_id).maybeSingle();
     const assignment = assignmentResult.data;
@@ -1143,13 +1302,17 @@ function createBillingRouters(getSupabaseAdmin2) {
     if (planError || !plan) return res.status(404).json({ error: "Plano n\xE3o encontrado." });
     const activePrice = plan.billing_plan_prices?.find((p) => p.active && p.cycle === input.cycle && p.billing_type === input.billing_type);
     if (!activePrice) return res.status(400).json({ error: "Pre\xE7o base n\xE3o encontrado ou inativo para as configura\xE7\xF5es escolhidas." });
-    const planSolutionIds = plan.billing_plan_solutions.map((item) => item.solution_id);
-    for (const sol of input.solution_ids) {
+    const planSolutionIds = (plan.billing_plan_solutions || []).map((item) => item.solution_id);
+    let chosenSolutionIds = Array.isArray(input.solution_ids) && input.solution_ids.length > 0 ? input.solution_ids : planSolutionIds;
+    for (const sol of chosenSolutionIds) {
       if (!planSolutionIds.includes(sol)) {
         return res.status(400).json({ error: "solution_not_in_plan", message: `A solu\xE7\xE3o ${sol} n\xE3o est\xE1 inclu\xEDda no plano base.` });
       }
     }
-    const requestedSolutions = plan.billing_plan_solutions.filter((item) => input.solution_ids.includes(item.solution_id));
+    const requestedSolutions = (plan.billing_plan_solutions || []).filter((item) => chosenSolutionIds.includes(item.solution_id));
+    if ((plan.billing_plan_solutions || []).length > 0 && requestedSolutions.length === 0) {
+      return res.status(400).json({ error: "N\xE3o \xE9 poss\xEDvel criar proposta sem itens quando o plano possui m\xF3dulos." });
+    }
     let subtotal = activePrice.amount_cents;
     const discount = Number(input.discount_cents) || 0;
     if (discount < 0) return res.status(400).json({ error: "Desconto n\xE3o pode ser negativo" });
@@ -1187,13 +1350,8 @@ function createBillingRouters(getSupabaseAdmin2) {
       }));
       const { error: itemsError } = await db.from("commercial_proposal_items").insert(itemsToInsert);
       if (itemsError) {
-        const { error: delError } = await db.from("commercial_proposals").delete().eq("id", data.id);
-        if (delError) {
-          await db.from("platform_audit_logs").insert({ actor_user_id: req.user.id, action: "system.consistency.error", entity_type: "commercial_proposals", entity_id: data.id, severity: "critical", metadata: { reason: "Falha tentar exclus\xE3o do pai ao reverter transa\xE7\xE3o", itemsError: itemsError.message, delError: delError.message } });
-          return res.status(500).json({ error: "Incoer\xEAncia cr\xEDtica: n\xE3o foi poss\xEDvel remover a proposta ap\xF3s falha nos itens." });
-        }
-        await db.from("platform_audit_logs").insert({ actor_user_id: req.user.id, action: "commercial.proposal.rollback", entity_type: "commercial_proposals", entity_id: data.id, severity: "info", metadata: { reason: "Sucesso ao reverter", itemsError: itemsError.message } });
-        return res.status(500).json({ error: itemsError.message });
+        const rb = await executeProposalItemsRollback(db, req.user, data.id, itemsError.message);
+        return res.status(rb.status).json({ error: rb.error });
       }
     }
     await db.from("platform_audit_logs").insert({ actor_user_id: req.user.id, action: "commercial.proposal.created", entity_type: "commercial_proposals", entity_id: data.id, team_id: data.team_id, severity: "info", ...auditContext(req, { result: "success", after: { amount_cents: data.amount_cents, subtotal, discount, solution_count: requestedSolutions.length } }) });
@@ -1247,64 +1405,18 @@ function createBillingRouters(getSupabaseAdmin2) {
   adminRouter.post("/commercial/proposals/:id/accept", authenticateRequest, resolvePlatformContext, requirePlatformPermission("platform.commercial.manage"), async (req, res) => {
     const db = getSupabaseAdmin2();
     const existing = await db.from("commercial_proposals").select("*").eq("id", req.params.id).maybeSingle();
-    if (existing.error || !existing.data) return res.status(404).json({ error: "Proposta n\xE3o encontrada." });
+    if (!existing.data) return res.status(404).json({ error: "Proposta n\xE3o encontrada." });
     if (!canReadAssignedResource(req.platformContext, existing.data, "member_lead_visibility")) return res.status(403).json({ error: "Proposta fora do seu escopo." });
-    if (existing.data.status === "accepted") return res.json({ success: true, message: "Proposta j\xE1 aceita." });
-    if (existing.data.status === "rejected" || existing.data.status === "superseded") return res.status(400).json({ error: "Status atual n\xE3o permite aceite." });
-    if (existing.data.status !== "approved") return res.status(400).json({ error: "A proposta precisa ser aprovada antes do aceite." });
-    if (existing.data.valid_until && new Date(existing.data.valid_until) < /* @__PURE__ */ new Date()) {
-      return res.status(400).json({ error: "Proposta expirada." });
-    }
-    const { error: updateErr } = await db.from("commercial_proposals").update({ status: "accepted" }).eq("id", existing.data.id);
-    if (updateErr) return res.status(500).json({ error: updateErr.message });
-    await db.from("platform_audit_logs").insert({ actor_user_id: req.user.id, action: "commercial.proposal.accepted", entity_type: "commercial_proposals", entity_id: existing.data.id, team_id: existing.data.team_id, severity: "info", ...auditContext(req, { result: "success" }) });
-    return res.json({ success: true, status: "accepted" });
+    return acceptCommercialProposalCore(req, res, db);
   });
   adminRouter.post("/commercial/proposals/:id/create-contract", authenticateRequest, resolvePlatformContext, requirePlatformPermission("platform.commercial.manage"), async (req, res) => {
     const db = getSupabaseAdmin2();
-    const { data: proposal, error } = await db.from("commercial_proposals").select("*, marketing_leads(*), billing_plans(*)").eq("id", req.params.id).single();
-    if (error || !proposal) return res.status(404).json({ error: "Proposta n\xE3o encontrada." });
-    if (proposal.status !== "approved") return res.status(409).json({ error: "A proposta precisa estar aprovada." });
+    const { data: proposal } = await db.from("commercial_proposals").select("*").eq("id", req.params.id).single();
+    if (!proposal) return res.status(404).json({ error: "Proposta n\xE3o encontrada." });
     if (req.platformContext.role.key !== "admin" && !canReadAssignedResource(req.platformContext, proposal, "member_lead_visibility")) {
       return res.status(403).json({ error: "Proposta fora do seu escopo." });
     }
-    const lead = proposal.marketing_leads;
-    const { data: contract, error: contractError } = await db.from("commercial_contracts").insert({
-      proposal_id: proposal.id,
-      lead_id: proposal.lead_id,
-      plan_id: proposal.plan_id,
-      team_id: proposal.team_id,
-      owner_platform_member_id: proposal.owner_platform_member_id,
-      customer_name: lead.company,
-      customer_email: lead.email,
-      customer_tax_id: req.body.customer_tax_id || null,
-      customer_phone: req.body.customer_phone || lead.phone,
-      owner_name: lead.name,
-      owner_email: lead.email,
-      status: "pending_approval",
-      amount_cents: proposal.amount_cents,
-      currency: proposal.currency,
-      cycle: proposal.cycle,
-      billing_type: proposal.billing_type || "UNDEFINED",
-      grace_days: proposal.billing_plans?.grace_days ?? 5,
-      created_by_user_id: req.user.id
-    }).select().single();
-    if (contractError) return res.status(contractError.code === "23505" ? 409 : 400).json({ error: contractError.code === "23505" ? "Esta proposta j\xE1 possui contrato." : contractError.message });
-    const { data: proposalItems } = await db.from("commercial_proposal_items").select("solution_id,limits").eq("proposal_id", proposal.id);
-    if (proposalItems?.length) {
-      const { error: cntItemsErr } = await db.from("commercial_contract_items").insert(proposalItems.map((item) => ({ contract_id: contract.id, solution_id: item.solution_id, limits: item.limits })));
-      if (cntItemsErr) {
-        const { error: delError } = await db.from("commercial_contracts").delete().eq("id", contract.id);
-        if (delError) {
-          await db.from("platform_audit_logs").insert({ actor_user_id: req.user.id, action: "system.consistency.error", entity_type: "commercial_contracts", entity_id: contract.id, severity: "critical", metadata: { reason: "Falha tentar exclus\xE3o do pai ao reverter transa\xE7\xE3o", itemsError: cntItemsErr.message, delError: delError.message } });
-          return res.status(500).json({ error: "Incoer\xEAncia cr\xEDtica: n\xE3o foi poss\xEDvel remover o contrato ap\xF3s falha nos itens." });
-        }
-        await db.from("platform_audit_logs").insert({ actor_user_id: req.user.id, action: "commercial.contract.rollback", entity_type: "commercial_contracts", entity_id: contract.id, severity: "info", metadata: { reason: "Sucesso ao reverter", itemsError: cntItemsErr.message } });
-        return res.status(500).json({ error: cntItemsErr.message });
-      }
-    }
-    await db.from("platform_audit_logs").insert({ actor_user_id: req.user.id, action: "commercial.contract.created_from_proposal", entity_type: "commercial_contracts", entity_id: contract.id, team_id: proposal.team_id, severity: "info", metadata: { proposal_id: proposal.id } });
-    return res.status(201).json(contract);
+    return createContractFromProposalCore(req, res, db, executeContractItemsRollback);
   });
   adminRouter.get("/commercial/contracts", authenticateRequest, resolvePlatformContext, requirePlatformPermission("platform.commercial.read"), async (req, res) => {
     let query = getSupabaseAdmin2().from("commercial_contracts").select("*, billing_plans(name,code,version), commercial_contract_items(*, solutions(id,key,name)), billing_subscriptions(id,status,provider_subscription_id), tenant_billing_state(access_status,paid_through,grace_ends_at)").order("created_at", { ascending: false });
@@ -1351,81 +1463,16 @@ function createBillingRouters(getSupabaseAdmin2) {
     return res.json(saved.data);
   });
   adminRouter.post("/commercial/contracts/:id/accept", authenticateRequest, resolvePlatformContext, requirePlatformPermission("platform.commercial.manage"), async (req, res) => {
-    const db = getSupabaseAdmin2();
-    const { data: contract, error: err } = await db.from("commercial_contracts").select("*").eq("id", req.params.id).single();
-    if (err || !contract) return res.status(404).json({ error: "Contrato n\xE3o encontrado." });
-    if (contract.status !== "approved") return res.status(409).json({ error: "Contrato precisa estar aprovado antes do aceite final." });
-    if (req.platformContext.role.key !== "admin" && !canReadAssignedResource(req.platformContext, contract, "member_client_visibility")) {
-      return res.status(403).json({ error: "Contrato fora do escopo." });
-    }
-    const metadata = { ip: req.ip, user_agent: req.headers["user-agent"], accepted_by: req.user.id, timestamp: (/* @__PURE__ */ new Date()).toISOString() };
-    const { error: updateErr } = await db.from("commercial_contracts").update({ status: "accepted", metadata }).eq("id", contract.id);
-    if (updateErr) return res.status(400).json({ error: updateErr.message });
-    await db.from("platform_audit_logs").insert({ actor_user_id: req.user.id, action: "commercial.contract.accepted", entity_type: "commercial_contracts", entity_id: contract.id, team_id: contract.team_id, severity: "info", ...auditContext(req, { result: "success", metadata }) });
-    return res.json({ success: true, status: "accepted" });
+    return res.status(405).json({ error: "Contratos n\xE3o utilizam status accepted. Fluxo v\xE1lido: pending_approval -> approved -> pending_payment -> active." });
   });
   adminRouter.post("/commercial/contracts/:id/mock-sandbox-payment", authenticateRequest, resolvePlatformContext, requirePlatformPermission("platform.billing.webhooks.manage"), async (req, res) => {
-    if (process.env.NODE_ENV === "production" || process.env.VERCEL_ENV === "production" || process.env.ASAAS_ENV !== "sandbox") {
-      return res.status(403).json({ error: "Sandbox mock disponivel apenas em dev/staging." });
-    }
     const db = getSupabaseAdmin2();
     const { data: contract } = await db.from("commercial_contracts").select("*").eq("id", req.params.id).single();
-    if (!contract || contract.status !== "pending_payment") return res.status(400).json({ error: "Contrato invalido ou nao aguarda pagamento." });
-    if (req.platformContext.role.key !== "admin" && !canReadAssignedResource(req.platformContext, contract, "member_client_visibility")) {
+    if (contract && req.platformContext.role.key !== "admin" && !canReadAssignedResource(req.platformContext, contract, "member_client_visibility")) {
       return res.status(403).json({ error: "Contrato fora do escopo." });
     }
-    const { data: subscription } = await db.from("billing_subscriptions").select("*").eq("contract_id", contract.id).maybeSingle();
-    if (!subscription) return res.status(400).json({ error: "Assinatura nao encontrada." });
-    const fakePaymentId = `mock:payment:${contract.id}`;
-    const fakeEventId = `mock:event:payment_confirmed:${contract.id}`;
-    const { data: existingEvent } = await db.from("billing_webhook_events").select("*").eq("provider_event_id", fakeEventId).maybeSingle();
-    let webhookEvent = existingEvent;
-    if (!webhookEvent) {
-      const fakePayload = {
-        event: "PAYMENT_CONFIRMED",
-        payment: {
-          id: fakePaymentId,
-          customer: subscription.provider_customer_id || "cus_mock",
-          subscription: subscription.provider_subscription_id,
-          value: contract.amount_cents / 100,
-          netValue: contract.amount_cents / 100,
-          status: "CONFIRMED",
-          externalReference: contract.external_reference,
-          confirmedDate: (/* @__PURE__ */ new Date()).toISOString().split("T")[0]
-        }
-      };
-      const { data: newWebhook, error: whErr } = await db.from("billing_webhook_events").insert({
-        event_type: "PAYMENT_CONFIRMED",
-        provider: "asaas",
-        provider_event_id: fakeEventId,
-        payload: fakePayload,
-        status: "pending"
-      }).select().single();
-      if (whErr) return res.status(500).json({ error: "Falha ao injetar evento sandbox: " + whErr.message });
-      webhookEvent = newWebhook;
-    }
-    if (webhookEvent && webhookEvent.status === "pending") {
-      const { processStoredEvent: processStoredEvent2 } = await Promise.resolve().then(() => (init_router(), router_exports));
-      try {
-        const processResult = await processStoredEvent2(db, webhookEvent);
-        await db.from("billing_webhook_events").update({
-          status: processResult,
-          processed_at: (/* @__PURE__ */ new Date()).toISOString(),
-          last_error: null
-        }).eq("id", webhookEvent.id);
-        await db.from("platform_audit_logs").insert({ actor_user_id: req.user.id, action: "billing.sandbox_payment.processed", entity_type: "billing_webhook_events", entity_id: webhookEvent.id, severity: "info", metadata: { contract_id: contract.id, subscription_id: subscription.id, provider_event_id: fakeEventId, result: processResult } });
-      } catch (err) {
-        await db.from("billing_webhook_events").update({
-          status: "failed",
-          last_error: err.message
-        }).eq("id", webhookEvent.id);
-        await db.from("platform_audit_logs").insert({ actor_user_id: req.user.id, action: "billing.sandbox_payment.failed", entity_type: "billing_webhook_events", entity_id: webhookEvent.id, severity: "error", metadata: { contract_id: contract.id, subscription_id: subscription.id, provider_event_id: fakeEventId, result: "failed", error: err.message } });
-        return res.status(500).json({ error: err.message });
-      }
-    } else {
-      await db.from("platform_audit_logs").insert({ actor_user_id: req.user.id, action: "billing.sandbox_payment.reused", entity_type: "billing_webhook_events", entity_id: webhookEvent.id, severity: "info", metadata: { contract_id: contract.id, subscription_id: subscription.id, provider_event_id: fakeEventId, result: "ignored_by_idempotency" } });
-    }
-    return res.json({ success: true, message: "Pago mock processado (idempotente) com sucesso." });
+    const { processStoredEvent: processStoredEvent2 } = await Promise.resolve().then(() => (init_router(), router_exports));
+    return mockSandboxPaymentCore(req, res, db, processStoredEvent2);
   });
   adminRouter.post("/commercial/contracts/:id/start-billing", authenticateRequest, resolvePlatformContext, requirePlatformPermission("platform.billing.manage"), async (req, res) => {
     try {
@@ -1478,7 +1525,16 @@ function createBillingRouters(getSupabaseAdmin2) {
         next_due_date: nextDueDate
       }).select().single();
       if (savedSubscription.error) throw savedSubscription.error;
-      await db.from("commercial_contracts").update({ status: "pending_payment" }).eq("id", contract.id);
+      await db.rpc("admin_transition_control_plane", {
+        p_entity_type: "contract",
+        p_entity_id: contract.id,
+        p_to_status: "pending_payment",
+        p_actor_user_id: req.user.id,
+        p_reason: "Cobran\xE7a iniciada no Sandbox",
+        p_team_id: contract.team_id || null,
+        p_tenant_id: contract.tenant_id || null,
+        p_request_id: req.requestId || null
+      });
       await db.from("platform_audit_logs").insert({ actor_user_id: req.user.id, action: "billing.subscription.created", entity_type: "billing_subscriptions", entity_id: savedSubscription.data.id, team_id: contract.team_id, severity: "info" });
       return res.status(201).json(savedSubscription.data);
     } catch (error) {
@@ -1568,15 +1624,30 @@ var init_router = __esm({
 });
 
 // server.ts
-import express from "express";
+import express2 from "express";
 import path from "path";
+
+// src/server/adminLeadsRouter.ts
+import { Router } from "express";
+import { z } from "zod";
+
+// src/domain/transitions.ts
+var LEAD_TRANSITIONS = {
+  new: ["contacted", "rejected"],
+  contacted: ["qualified", "rejected"],
+  qualified: ["approved", "rejected"],
+  approved: ["converted"],
+  rejected: ["new"],
+  converted: ["contacted"]
+};
+function getLeadNextStatuses(currentStatus) {
+  return LEAD_TRANSITIONS[currentStatus] || [];
+}
 
 // src/server/adminLeadsRouter.ts
 init_authorization();
 init_operational();
 init_tenantAuth();
-import { Router } from "express";
-import { z } from "zod";
 function createAdminLeadsRouter(getSupabaseAdmin2, _old_requirePlatformAuth) {
   const router = Router();
   router.get("/", authenticateRequest, resolvePlatformContext, requirePlatformPermission("platform.leads.read"), async (req, res) => {
@@ -1704,6 +1775,38 @@ function createAdminLeadsRouter(getSupabaseAdmin2, _old_requirePlatformAuth) {
         ...auditContext(req, { result: "success", before: { status: lead.status, priority: lead.priority }, after: updates })
       });
       return res.json(saved.data);
+    } catch (error) {
+      return res.status(500).json({ error: error.message });
+    }
+  });
+  const transitionLeadSchema = z.object({
+    to_status: z.string().min(1),
+    reason: z.string().min(1)
+  });
+  router.post("/:id/transition", authenticateRequest, resolvePlatformContext, requirePlatformPermission(["platform.leads.assign", "platform.leads.claim", "platform.commercial.manage"]), async (req, res) => {
+    try {
+      const input = transitionLeadSchema.safeParse(req.body);
+      if (!input.success) return res.status(400).json({ error: "Status de destino e motivo s\xE3o obrigat\xF3rios." });
+      const { to_status, reason } = input.data;
+      const db = getSupabaseAdmin2();
+      const { data: lead, error: leadError } = await db.from("marketing_leads").select("*, platform_lead_assignments(*)").eq("id", req.params.id).maybeSingle();
+      if (leadError || !lead) return res.status(404).json({ error: "Lead n\xE3o encontrado." });
+      const assignment = lead.platform_lead_assignments?.[0];
+      if (req.platformContext.role?.key !== "admin" && !canReadAssignedResource(req.platformContext, assignment, "member_lead_visibility")) {
+        return res.status(403).json({ error: "Lead fora do seu escopo." });
+      }
+      const transitioned = await db.rpc("admin_transition_control_plane", {
+        p_entity_type: "lead",
+        p_entity_id: lead.id,
+        p_to_status: to_status,
+        p_actor_user_id: req.user.id,
+        p_reason: reason.trim(),
+        p_team_id: assignment?.team_id || null,
+        p_request_id: req.requestId || null
+      });
+      if (transitioned.error) return res.status(409).json({ error: transitioned.error.message });
+      const saved = await db.from("marketing_leads").select("*, platform_lead_assignments(*)").eq("id", lead.id).single();
+      return res.json({ ...saved.data, allowed_next_statuses: getLeadNextStatuses(saved.data.status) });
     } catch (error) {
       return res.status(500).json({ error: error.message });
     }
@@ -1881,10 +1984,17 @@ function createAdminClientsRouter(getSupabaseAdmin2) {
         visibleTenantIds2 = [...new Set((assignmentResult.data || []).map((item) => String(item.tenant_id)))];
         if (!visibleTenantIds2.length) return res.json(paginated ? pageResult([], 0, page, pageSize) : []);
       }
-      let query = getSupabaseAdmin2().from("tenants").select("*, tenant_solutions(*), platform_client_assignments(*, platform_teams(name), platform_members(user_id, platform_roles(key, name))), tenant_billing_state(*), tenant_domains(*), memberships(id,status,user_id,employment_level), departments(id,name,active)", { count: "exact" }).in("status", ["active", "trial", "suspended"]).order("created_at", { ascending: false });
+      let query = getSupabaseAdmin2().from("tenants").select("*, tenant_solutions(*, solutions(key,name)), platform_client_assignments(*, platform_teams(name), platform_members(user_id, platform_roles(key, name))), tenant_billing_state(*), tenant_domains(*), memberships(id,status,user_id,employment_level), departments(id,name,active)", { count: "exact" }).order("created_at", { ascending: false });
       if (visibleTenantIds2) query = query.in("id", visibleTenantIds2);
-      if (typeof req.query.status === "string" && req.query.status) query = query.eq("status", req.query.status);
-      if (typeof req.query.search === "string" && req.query.search.trim()) query = query.ilike("name", `%${req.query.search.trim().slice(0, 100)}%`);
+      if (typeof req.query.status === "string" && req.query.status) {
+        query = query.eq("status", req.query.status);
+      } else {
+        query = query.in("status", ["active", "trial", "suspended", "inactive"]);
+      }
+      if (typeof req.query.search === "string" && req.query.search.trim()) {
+        const term = req.query.search.trim().replace(/[%(),]/g, "").slice(0, 100);
+        query = query.or(`name.ilike.%${term}%,slug.ilike.%${term}%`);
+      }
       if (paginated) query = query.range(from, to);
       const { data, error, count } = await query;
       if (error) throw error;
@@ -1972,24 +2082,23 @@ function createAdminClientsRouter(getSupabaseAdmin2) {
   });
   router.post("/:id/suspend", authenticateRequest, resolvePlatformContext, requirePlatformPermission("platform.clients.manage"), async (req, res) => {
     try {
-      const { platformContext } = req;
       const clientId = req.params.id;
       const parse = z2.object({ reason: z2.string().min(5) }).safeParse(req.body);
       if (!parse.success) return res.status(400).json({ error: "Motivo da suspens\xE3o \xE9 obrigat\xF3rio." });
       const db = getSupabaseAdmin2();
       const existing = await db.from("tenants").select("status, lifecycle_status").eq("id", clientId).single();
-      if (existing.error) return res.status(404).json({ error: "Cliente n\xE3o encontrado." });
+      if (existing.error || !existing.data) return res.status(404).json({ error: "Cliente n\xE3o encontrado." });
       if (existing.data.status === "suspended") return res.status(400).json({ error: "Cliente j\xE1 est\xE1 suspenso." });
-      const updated = await db.from("tenants").update({ status: "suspended", lifecycle_status: "churn", updated_at: (/* @__PURE__ */ new Date()).toISOString() }).eq("id", clientId).select().single();
-      if (updated.error) throw updated.error;
-      await db.from("platform_audit_logs").insert({
-        actor_user_id: req.user.id,
-        action: "client.suspended",
-        entity_type: "tenants",
-        entity_id: clientId,
-        severity: "high",
-        ...auditContext(req, { result: "success", reason: parse.data.reason, before: existing.data, after: { status: "suspended", lifecycle_status: "churn" } })
+      const transitioned = await db.rpc("admin_transition_control_plane", {
+        p_entity_type: "tenant",
+        p_entity_id: clientId,
+        p_to_status: "suspended",
+        p_actor_user_id: req.user.id,
+        p_reason: parse.data.reason.trim(),
+        p_request_id: req.requestId || null
       });
+      if (transitioned.error) return res.status(409).json({ error: transitioned.error.message });
+      const updated = await db.from("tenants").select("*").eq("id", clientId).single();
       res.json({ success: true, tenant: updated.data });
     } catch (e) {
       res.status(500).json({ error: e.message });
@@ -1997,24 +2106,23 @@ function createAdminClientsRouter(getSupabaseAdmin2) {
   });
   router.post("/:id/reactivate", authenticateRequest, resolvePlatformContext, requirePlatformPermission("platform.clients.manage"), async (req, res) => {
     try {
-      const { platformContext } = req;
       const clientId = req.params.id;
       const parse = z2.object({ reason: z2.string().min(5) }).safeParse(req.body);
       if (!parse.success) return res.status(400).json({ error: "Motivo da reativa\xE7\xE3o \xE9 obrigat\xF3rio." });
       const db = getSupabaseAdmin2();
       const existing = await db.from("tenants").select("status, lifecycle_status").eq("id", clientId).single();
-      if (existing.error) return res.status(404).json({ error: "Cliente n\xE3o encontrado." });
+      if (existing.error || !existing.data) return res.status(404).json({ error: "Cliente n\xE3o encontrado." });
       if (existing.data.status === "active") return res.status(400).json({ error: "Cliente j\xE1 est\xE1 ativo." });
-      const updated = await db.from("tenants").update({ status: "active", lifecycle_status: "active", updated_at: (/* @__PURE__ */ new Date()).toISOString() }).eq("id", clientId).select().single();
-      if (updated.error) throw updated.error;
-      await db.from("platform_audit_logs").insert({
-        actor_user_id: req.user.id,
-        action: "client.reactivated",
-        entity_type: "tenants",
-        entity_id: clientId,
-        severity: "info",
-        ...auditContext(req, { result: "success", reason: parse.data.reason, before: existing.data, after: { status: "active", lifecycle_status: "active" } })
+      const transitioned = await db.rpc("admin_transition_control_plane", {
+        p_entity_type: "tenant",
+        p_entity_id: clientId,
+        p_to_status: "active",
+        p_actor_user_id: req.user.id,
+        p_reason: parse.data.reason.trim(),
+        p_request_id: req.requestId || null
       });
+      if (transitioned.error) return res.status(409).json({ error: transitioned.error.message });
+      const updated = await db.from("tenants").select("*").eq("id", clientId).single();
       res.json({ success: true, tenant: updated.data });
     } catch (e) {
       res.status(500).json({ error: e.message });
@@ -3010,6 +3118,194 @@ function createAdminTeamsRouter(getSupabaseAdmin2, _old_requirePlatformAuth) {
 
 // server.ts
 init_router();
+
+// src/server/integrityRouter.ts
+init_tenantAuth();
+import express from "express";
+import { z as z5 } from "zod";
+var stateTransitionSchema = z5.object({
+  action: z5.enum(["received", "triage", "in_review", "waiting", "resolved", "archived"]),
+  note: z5.string().optional()
+});
+var assignmentSchema = z5.object({
+  membershipId: z5.string().uuid()
+});
+var messageSchema = z5.object({
+  body: z5.string().min(1, "Mensagem vazia").max(5e3),
+  visible_to_reporter: z5.boolean().default(false)
+});
+var listQuerySchema = z5.object({
+  status: z5.string().optional(),
+  risk_level: z5.string().optional(),
+  category_id: z5.string().uuid().optional(),
+  channel_id: z5.string().uuid().optional(),
+  assigned_to: z5.string().uuid().optional(),
+  days_open_min: z5.string().regex(/^\d+$/).transform(Number).optional()
+}).catchall(z5.any());
+function createIntegrityRouter(getSupabaseAdmin2, authOverrides) {
+  const router = express.Router();
+  const auth = authOverrides || { authenticateRequest, resolveTenantContext, requireTenantSolution, requireTenantPermission };
+  router.use(auth.authenticateRequest);
+  router.use(auth.resolveTenantContext);
+  router.use(auth.requireTenantSolution("integrity"));
+  const asyncHandler = (fn) => (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
+  router.get("/cases", auth.requireTenantPermission("integrity.cases.read"), asyncHandler(async (req, res) => {
+    const { tenantContext } = req;
+    const db = getSupabaseAdmin2();
+    const parsedQuery = listQuerySchema.safeParse(req.query);
+    const q = parsedQuery.success ? parsedQuery.data : {};
+    let query = db.from("integrity_reports").select(`
+        id, created_at, status, risk_level, protocol, 
+        integrity_categories(name), 
+        integrity_channels(name),
+        integrity_case_assignments(membership_id)
+      `).eq("tenant_id", tenantContext.tenant.id);
+    if (q.status) query = query.eq("status", q.status);
+    if (q.risk_level) query = query.eq("risk_level", q.risk_level);
+    if (q.category_id) query = query.eq("category_id", q.category_id);
+    if (q.channel_id) query = query.eq("channel_id", q.channel_id);
+    const { data: cases, error } = await query.order("created_at", { ascending: false });
+    if (error) return res.status(500).json({ error: error.message });
+    let filteredCases = cases || [];
+    if (q.assigned_to) {
+      filteredCases = filteredCases.filter((c) => c.integrity_case_assignments?.some((a) => a.membership_id === q.assigned_to));
+    }
+    if (q.days_open_min !== void 0) {
+      const cutoff = new Date(Date.now() - q.days_open_min * 864e5);
+      filteredCases = filteredCases.filter((c) => new Date(c.created_at) <= cutoff);
+    }
+    res.json({ success: true, cases: filteredCases });
+  }));
+  const getTenantReport = async (db, tenantId, reportId) => {
+    const { data, error } = await db.from("integrity_reports").select("id, status").eq("id", reportId).eq("tenant_id", tenantId).maybeSingle();
+    return { report: data, error };
+  };
+  router.get("/cases/:id", auth.requireTenantPermission("integrity.cases.read"), asyncHandler(async (req, res) => {
+    const { tenantContext } = req;
+    const { id } = req.params;
+    const db = getSupabaseAdmin2();
+    const { data: report, error } = await db.from("integrity_reports").select("*, integrity_categories(name), integrity_channels(name), integrity_attachments(file_id, uploaded_by_type), integrity_case_assignments(membership_id)").eq("id", id).eq("tenant_id", tenantContext.tenant.id).maybeSingle();
+    if (error) return res.status(500).json({ error: error.message });
+    if (!report) return res.status(404).json({ error: "Caso n\xE3o encontrado" });
+    res.json({ success: true, report });
+  }));
+  router.get("/cases/:id/timeline", auth.requireTenantPermission("integrity.cases.read"), asyncHandler(async (req, res) => {
+    const { tenantContext } = req;
+    const { id } = req.params;
+    const db = getSupabaseAdmin2();
+    const { report } = await getTenantReport(db, tenantContext.tenant.id, id);
+    if (!report) return res.status(404).json({ error: "Caso n\xE3o encontrado" });
+    const { data: events, error } = await db.from("integrity_case_events").select(`*`).eq("report_id", id).order("created_at", { ascending: false });
+    if (error) return res.status(500).json({ error: error.message });
+    res.json({ success: true, events });
+  }));
+  router.post("/cases/:id/events", auth.requireTenantPermission("integrity.cases.manage"), asyncHandler(async (req, res) => {
+    const { tenantContext } = req;
+    const { id } = req.params;
+    const db = getSupabaseAdmin2();
+    const parsed = stateTransitionSchema.safeParse(req.body);
+    if (!parsed.success) return res.status(400).json({ error: "Payload inv\xE1lido", issues: parsed.error.issues });
+    const { report } = await getTenantReport(db, tenantContext.tenant.id, id);
+    if (!report) return res.status(404).json({ error: "Caso n\xE3o encontrado" });
+    const fromStatus = report.status;
+    const toStatus = parsed.data.action;
+    const validStates = ["received", "triage", "in_review", "waiting", "resolved", "archived"];
+    if (!validStates.includes(toStatus)) {
+      return res.status(400).json({ error: "Status de transi\xE7\xE3o inv\xE1lido" });
+    }
+    const { error: updError } = await db.from("integrity_reports").update({ status: toStatus, updated_at: (/* @__PURE__ */ new Date()).toISOString() }).eq("id", id);
+    if (updError) return res.status(500).json({ error: "Erro ao transicionar status" });
+    await db.from("integrity_case_events").insert({
+      report_id: id,
+      event_type: "status_changed",
+      from_status: fromStatus,
+      to_status: toStatus,
+      note: parsed.data.note || null,
+      actor_membership_id: tenantContext.membership.id,
+      metadata: {}
+    });
+    res.json({ success: true, status: toStatus });
+  }));
+  router.post("/cases/:id/assignments", auth.requireTenantPermission("integrity.cases.manage"), asyncHandler(async (req, res) => {
+    const { tenantContext } = req;
+    const { id } = req.params;
+    const db = getSupabaseAdmin2();
+    const parsed = assignmentSchema.safeParse(req.body);
+    if (!parsed.success) return res.status(400).json({ error: "Payload inv\xE1lido", issues: parsed.error.issues });
+    const { report } = await getTenantReport(db, tenantContext.tenant.id, id);
+    if (!report) return res.status(404).json({ error: "Caso n\xE3o encontrado" });
+    const { data: targetMembership, error: targetErr } = await db.from("memberships").select("id, status").eq("id", parsed.data.membershipId).eq("tenant_id", tenantContext.tenant.id).maybeSingle();
+    if (targetErr || !targetMembership) return res.status(400).json({ error: "Membro n\xE3o encontrado no tenant" });
+    if (targetMembership.status !== "active") return res.status(400).json({ error: "Membro inativo ou n\xE3o eleg\xEDvel" });
+    const { data: existing } = await db.from("integrity_case_assignments").select("*").eq("report_id", id).eq("membership_id", parsed.data.membershipId).maybeSingle();
+    if (!existing) {
+      await db.from("integrity_case_assignments").insert({
+        report_id: id,
+        membership_id: parsed.data.membershipId,
+        assigned_by_membership_id: tenantContext.membership.id
+      });
+      await db.from("integrity_case_events").insert({
+        report_id: id,
+        event_type: "assigned",
+        actor_membership_id: tenantContext.membership.id,
+        metadata: { assigned_membership: parsed.data.membershipId }
+      });
+    }
+    res.json({ success: true });
+  }));
+  router.delete("/cases/:id/assignments/:membershipId", auth.requireTenantPermission("integrity.cases.manage"), asyncHandler(async (req, res) => {
+    const { tenantContext } = req;
+    const { id, membershipId } = req.params;
+    const db = getSupabaseAdmin2();
+    const { report } = await getTenantReport(db, tenantContext.tenant.id, id);
+    if (!report) return res.status(404).json({ error: "Caso n\xE3o encontrado" });
+    await db.from("integrity_case_assignments").delete().eq("report_id", id).eq("membership_id", membershipId);
+    await db.from("integrity_case_events").insert({
+      report_id: id,
+      event_type: "unassigned",
+      actor_membership_id: tenantContext.membership.id,
+      metadata: { unassigned_membership: membershipId }
+    });
+    res.json({ success: true });
+  }));
+  router.get("/cases/:id/messages", auth.requireTenantPermission("integrity.cases.read"), asyncHandler(async (req, res) => {
+    const { tenantContext } = req;
+    const { id } = req.params;
+    const db = getSupabaseAdmin2();
+    const { report } = await getTenantReport(db, tenantContext.tenant.id, id);
+    if (!report) return res.status(404).json({ error: "Caso n\xE3o encontrado" });
+    const { data: messages, error } = await db.from("integrity_report_messages").select("*").eq("report_id", id).order("created_at", { ascending: true });
+    if (error) return res.status(500).json({ error: error.message });
+    res.json({ success: true, messages });
+  }));
+  router.post("/cases/:id/messages", auth.requireTenantPermission("integrity.cases.manage"), asyncHandler(async (req, res) => {
+    const { tenantContext } = req;
+    const { id } = req.params;
+    const db = getSupabaseAdmin2();
+    const parsed = messageSchema.safeParse(req.body);
+    if (!parsed.success) return res.status(400).json({ error: "Payload inv\xE1lido", issues: parsed.error.issues });
+    const { report } = await getTenantReport(db, tenantContext.tenant.id, id);
+    if (!report) return res.status(404).json({ error: "Caso n\xE3o encontrado" });
+    const { error: msgErr } = await db.from("integrity_report_messages").insert({
+      report_id: id,
+      body: parsed.data.body,
+      visible_to_reporter: parsed.data.visible_to_reporter,
+      author_type: "case_manager",
+      author_membership_id: tenantContext.membership.id
+    });
+    if (msgErr) return res.status(500).json({ error: "Erro ao registrar mensagem" });
+    await db.from("integrity_case_events").insert({
+      report_id: id,
+      event_type: "message_posted",
+      actor_membership_id: tenantContext.membership.id,
+      metadata: { visible_to_reporter: parsed.data.visible_to_reporter }
+    });
+    res.json({ success: true });
+  }));
+  return router;
+}
+
+// server.ts
 init_authorization();
 import { createClient as createClient2 } from "@supabase/supabase-js";
 import dotenv from "dotenv";
@@ -3019,7 +3315,7 @@ init_tenantAuth();
 dotenv.config({ path: [".env.local", ".env"] });
 async function createApp() {
   initServerObservability();
-  const app = express();
+  const app = express2();
   app.disable("x-powered-by");
   app.use((req, res, next) => {
     const requestId = req.header("x-request-id") || randomUUID2();
@@ -3032,7 +3328,7 @@ async function createApp() {
     if (req.path.startsWith("/api/")) res.setHeader("cache-control", "no-store");
     next();
   });
-  app.use(express.json({ limit: "512kb" }));
+  app.use(express2.json({ limit: "512kb" }));
   app.use((error, req, res, next) => {
     if (error instanceof SyntaxError && Object.prototype.hasOwnProperty.call(error, "body")) {
       return res.status(400).json({ error: "Invalid JSON body", requestId: req.requestId });
@@ -3281,6 +3577,7 @@ async function createApp() {
   app.use("/api/webhooks", billingRouters.publicRouter);
   app.use("/api/admin", billingRouters.adminRouter);
   app.use("/api/internal/billing", billingRouters.internalRouter);
+  app.use("/api/workspace/integrity", createIntegrityRouter(getSupabaseAdmin2));
   app.get("/api/admin/stats", requirePlatformAuth, async (req, res) => {
     try {
       const { platformContext } = req;
@@ -3394,7 +3691,7 @@ async function createApp() {
     app.use(vite.middlewares);
   } else {
     const distPath = path.join(process.cwd(), "dist");
-    app.use(express.static(distPath));
+    app.use(express2.static(distPath));
     app.get("*all", (req, res) => {
       res.sendFile(path.join(distPath, "index.html"));
     });

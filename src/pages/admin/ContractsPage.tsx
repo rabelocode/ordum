@@ -1,30 +1,28 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { CheckCircle2, FileSignature, Plus, RefreshCw, Search, WalletCards, X } from 'lucide-react';
+import { CheckCircle2, FileSignature, Plus, RefreshCw, Search, WalletCards, X, Loader2 } from 'lucide-react';
 import { useAccess } from '../../core/auth/AccessContext';
 import { ListSkeleton } from '../../components/ui/LoadingSkeletons';
-
-const STATUS_LABEL: Record<string, string> = {
-  draft: 'Rascunho', pending_approval: 'Aguardando aprovação', approved: 'Aprovado',
-  pending_payment: 'Aguardando pagamento', active: 'Ativo', past_due: 'Em atraso',
-  suspended: 'Suspenso', cancelled: 'Cancelado', expired: 'Expirado',
-};
+import { CONTRACT_STATUS_LABELS } from '../../domain/transitions';
 
 const money = new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' });
 
 export function ContractsPage() {
   const { session, hasPlatformPermission } = useAccess();
   const [contracts, setContracts] = useState<any[]>([]);
-  const [leads, setLeads] = useState<any[]>([]);
-  const [plans, setPlans] = useState<any[]>([]);
-  const [catalog, setCatalog] = useState<{ teams: any[]; solutions: any[] }>({ teams: [], solutions: [] });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [query, setQuery] = useState('');
-  const [status, setStatus] = useState('all');
-  const [showForm, setShowForm] = useState(false);
-  const [saving, setSaving] = useState(false);
-  const [form, setForm] = useState({ lead_id: '', plan_id: '', team_id: '', customer_tax_id: '', customer_phone: '' });
+  const [statusFilter, setStatusFilter] = useState('all');
+  const [isActioning, setIsActioning] = useState(false);
+
+  // Approval Modal State
+  const [approveModalContractId, setApproveModalContractId] = useState<string | null>(null);
+  const [approvalReason, setApprovalReason] = useState('');
+
+  // Start Billing Modal State
+  const [startBillingContractId, setStartBillingContractId] = useState<string | null>(null);
+  const [nextDueDate, setNextDueDate] = useState(new Date().toISOString().slice(0, 10));
 
   const api = useCallback(async (path: string, init?: RequestInit) => {
     if (!session) throw new Error('Sessão ausente.');
@@ -42,14 +40,8 @@ export function ContractsPage() {
     setLoading(true);
     setError(null);
     try {
-      const [contractData, leadData, planData, catalogData] = await Promise.all([
-        api('/api/admin/commercial/contracts'), api('/api/admin/leads'),
-        api('/api/admin/billing/plans'), api('/api/admin/commercial/catalog'),
-      ]);
+      const contractData = await api('/api/admin/commercial/contracts');
       setContracts(contractData);
-      setLeads(leadData);
-      setPlans(planData.filter((plan: any) => plan.active));
-      setCatalog(catalogData);
     } catch (loadError) {
       setError(loadError instanceof Error ? loadError.message : 'Falha ao carregar contratos.');
     } finally {
@@ -61,98 +53,249 @@ export function ContractsPage() {
 
   const filtered = useMemo(() => contracts.filter((contract) => {
     const text = `${contract.customer_name} ${contract.customer_email} ${contract.contract_number}`.toLowerCase();
-    return text.includes(query.toLowerCase()) && (status === 'all' || contract.status === status);
-  }), [contracts, query, status]);
+    return text.includes(query.toLowerCase()) && (statusFilter === 'all' || contract.status === statusFilter);
+  }), [contracts, query, statusFilter]);
 
-  const selectedLead = leads.find((lead) => lead.id === form.lead_id);
-  const selectedPlan = plans.find((plan) => plan.id === form.plan_id);
-  const selectedPrice = selectedPlan?.billing_plan_prices?.find((price: any) => price.active);
-
-  async function createContract(event: React.FormEvent) {
-    event.preventDefault();
-    if (!selectedLead || !selectedPlan || !selectedPrice) return setError('Selecione lead e plano com preço ativo.');
-    setSaving(true); setError(null); setNotice(null);
+  async function handleApproveSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    if (!approveModalContractId || !approvalReason.trim()) return;
+    setError(null);
+    setNotice(null);
+    setIsActioning(true);
     try {
-      await api('/api/admin/commercial/contracts', {
+      await api(`/api/admin/commercial/contracts/${approveModalContractId}/approve`, {
         method: 'POST',
-        body: JSON.stringify({
-          lead_id: selectedLead.id,
-          plan_id: selectedPlan.id,
-          team_id: form.team_id || selectedLead.assignment?.team_id || null,
-          owner_platform_member_id: selectedLead.assignment?.owner_platform_member_id || null,
-          customer_name: selectedLead.company,
-          customer_email: selectedLead.email,
-          customer_tax_id: form.customer_tax_id,
-          customer_phone: form.customer_phone || selectedLead.phone,
-          owner_name: selectedLead.name,
-          owner_email: selectedLead.email,
-          amount_cents: selectedPrice.amount_cents,
-          cycle: selectedPrice.cycle,
-          billing_type: selectedPrice.billing_type,
-          grace_days: selectedPlan.grace_days,
-          solution_ids: selectedPlan.billing_plan_solutions.map((item: any) => item.solution_id),
-        }),
+        body: JSON.stringify({ reason: approvalReason.trim() }),
       });
-      setNotice('Contrato criado e enviado para aprovação. Nenhum tenant ou cobrança foi criado.');
-      setShowForm(false);
-      setForm({ lead_id: '', plan_id: '', team_id: '', customer_tax_id: '', customer_phone: '' });
+      setNotice('Contrato aprovado com sucesso.');
+      setApproveModalContractId(null);
+      setApprovalReason('');
       await load();
-    } catch (saveError) { setError(saveError instanceof Error ? saveError.message : 'Falha ao criar contrato.'); }
-    finally { setSaving(false); }
+    } catch (actionError) {
+      setError(actionError instanceof Error ? actionError.message : 'Falha ao aprovar contrato.');
+    } finally {
+      setIsActioning(false);
+    }
   }
 
-  async function approve(id: string) {
-    if (!window.confirm('Aprovar este contrato e suas condições comerciais?')) return;
+  async function handleStartBillingSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    if (!startBillingContractId || !nextDueDate) return;
+    setError(null);
+    setNotice(null);
+    setIsActioning(true);
     try {
-      await api(`/api/admin/commercial/contracts/${id}/approve`, { method: 'POST' });
-      setNotice('Contrato aprovado. A cobrança continua bloqueada até o início explícito no Sandbox.');
+      await api(`/api/admin/commercial/contracts/${startBillingContractId}/start-billing`, {
+        method: 'POST',
+        body: JSON.stringify({ next_due_date: nextDueDate }),
+      });
+      setNotice('Assinatura Sandbox criada. Acesso aguarda webhook financeiro.');
+      setStartBillingContractId(null);
       await load();
-    } catch (actionError) { setError(actionError instanceof Error ? actionError.message : 'Falha ao aprovar.'); }
-  }
-
-  async function startBilling(id: string) {
-    const nextDueDate = window.prompt('Primeiro vencimento (AAAA-MM-DD):', new Date().toISOString().slice(0, 10));
-    if (!nextDueDate) return;
-    if (!window.confirm('Criar cliente e assinatura no Asaas Sandbox? Esta ação não usa produção.')) return;
-    try {
-      await api(`/api/admin/commercial/contracts/${id}/start-billing`, { method: 'POST', body: JSON.stringify({ next_due_date: nextDueDate }) });
-      setNotice('Assinatura Sandbox criada. O acesso só será liberado após webhook financeiro confirmado.');
-      await load();
-    } catch (actionError) { setError(actionError instanceof Error ? actionError.message : 'Falha ao iniciar cobrança.'); }
+    } catch (actionError) {
+      setError(actionError instanceof Error ? actionError.message : 'Falha ao iniciar cobrança.');
+    } finally {
+      setIsActioning(false);
+    }
   }
 
   async function mockSandboxPayment(id: string) {
-    if (!window.confirm('DEV ONLY: Simular Webhook Asaas de Pagamento Confirmado e provisionar?')) return;
+    setError(null);
+    setNotice(null);
+    setIsActioning(true);
     try {
       await api(`/api/admin/commercial/contracts/${id}/mock-sandbox-payment`, { method: 'POST' });
       setNotice('Pagamento Confirmado no Sandbox. Provisionamento inicializado.');
       await load();
-    } catch (actionError) { setError(actionError instanceof Error ? actionError.message : 'Falha no mock Sandbox.'); }
+    } catch (actionError) {
+      setError(actionError instanceof Error ? actionError.message : 'Falha no mock Sandbox.');
+    } finally {
+      setIsActioning(false);
+    }
   }
 
   return (
     <div className="max-w-7xl mx-auto space-y-6">
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-        <div><h1 className="text-3xl font-bold text-[#202322]">Contratos</h1><p className="text-sm text-[#626866] mt-1">Aprovação comercial, cobrança e liberação auditável.</p></div>
-        {hasPlatformPermission('platform.commercial.manage') && <a href="#/admin/propostas" className="inline-flex items-center justify-center gap-2 rounded-xl bg-[#B66E45] px-4 py-2.5 text-sm font-bold text-white"><Plus className="w-4 h-4" /> Nova proposta</a>}
+        <div>
+          <h1 className="text-3xl font-bold text-[#202322]">Contratos</h1>
+          <p className="text-sm text-[#626866] mt-1">Aprovação comercial, cobrança e liberação auditável.</p>
+        </div>
+        {hasPlatformPermission('platform.commercial.manage') && (
+          <a href="#/admin/propostas" className="inline-flex items-center justify-center gap-2 rounded-xl bg-[#B66E45] px-4 py-2.5 text-sm font-bold text-white hover:bg-[#A05C38] transition-colors">
+            <Plus className="w-4 h-4" /> Nova proposta
+          </a>
+        )}
       </div>
 
-      {error && <div role="alert" className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{error}</div>}
-      {notice && <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700">{notice}</div>}
+      {error && <div role="alert" className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 font-medium">{error}</div>}
+      {notice && <div role="status" className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700 font-medium">{notice}</div>}
 
       <div className="bg-white rounded-2xl border border-[#DDD8CF]/70 shadow-sm overflow-hidden">
         <div className="p-4 border-b border-[#DDD8CF]/60 flex flex-col sm:flex-row gap-3">
-          <label className="relative flex-1"><Search className="absolute left-3 top-2.5 w-4 h-4 text-gray-400" /><span className="sr-only">Buscar</span><input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Buscar empresa, e-mail ou número" className="w-full rounded-xl border border-[#DDD8CF] pl-9 pr-3 py-2 text-sm" /></label>
-          <select value={status} onChange={(e) => setStatus(e.target.value)} className="rounded-xl border border-[#DDD8CF] px-3 py-2 text-sm"><option value="all">Todos os status</option>{Object.entries(STATUS_LABEL).map(([key, label]) => <option key={key} value={key}>{label}</option>)}</select>
-          <button onClick={load} aria-label="Atualizar" className="rounded-xl border border-[#DDD8CF] p-2 text-gray-600"><RefreshCw className="w-5 h-5" /></button>
+          <label className="relative flex-1">
+            <Search className="absolute left-3 top-2.5 w-4 h-4 text-gray-400" />
+            <span className="sr-only">Buscar</span>
+            <input
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder="Buscar empresa, e-mail ou número"
+              className="w-full rounded-xl border border-[#DDD8CF] pl-9 pr-3 py-2 text-sm"
+            />
+          </label>
+          <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)} className="rounded-xl border border-[#DDD8CF] px-3 py-2 text-sm">
+            <option value="all">Todos os status</option>
+            {Object.entries(CONTRACT_STATUS_LABELS).map(([key, label]) => (
+              <option key={key} value={key}>{label}</option>
+            ))}
+          </select>
+          <button onClick={load} aria-label="Atualizar" disabled={isActioning} className="rounded-xl border border-[#DDD8CF] p-2 text-gray-600 hover:bg-gray-50">
+            <RefreshCw className={`w-5 h-5 ${loading ? 'animate-spin' : ''}`} />
+          </button>
         </div>
-        {loading ? <ListSkeleton rows={6} /> : filtered.length === 0 ? (
-          <div className="p-12 text-center"><FileSignature className="w-10 h-10 mx-auto text-[#B66E45] mb-3" /><p className="font-semibold text-[#202322]">Nenhum contrato encontrado</p><p className="text-sm text-gray-500 mt-1">Crie um contrato a partir de um lead qualificado.</p></div>
-        ) : <div className="overflow-x-auto"><table className="w-full text-sm"><thead className="bg-[#F6F5F2] text-left text-xs uppercase tracking-wide text-[#626866]"><tr><th className="px-5 py-3">Contrato</th><th className="px-5 py-3">Plano</th><th className="px-5 py-3">Valor</th><th className="px-5 py-3">Estado</th><th className="px-5 py-3 text-right">Ações</th></tr></thead><tbody className="divide-y divide-[#DDD8CF]/50">{filtered.map((contract) => <tr key={contract.id}><td className="px-5 py-4"><div className="font-semibold text-[#202322]">#{contract.contract_number} · {contract.customer_name}</div><div className="text-xs text-gray-500">{contract.customer_email}</div></td><td className="px-5 py-4">{contract.billing_plans?.name || 'Personalizado'}</td><td className="px-5 py-4 font-semibold">{money.format(contract.amount_cents / 100)}<div className="text-xs font-normal text-gray-500">{contract.cycle}</div></td><td className="px-5 py-4"><span className="rounded-full bg-[#F1E5DD] px-2.5 py-1 text-xs font-semibold text-[#8B4E2F]">{STATUS_LABEL[contract.status] || contract.status}</span>{contract.tenant_billing_state?.access_status && <div className="text-xs text-gray-500 mt-1">Acesso: {contract.tenant_billing_state.access_status}</div>}</td><td className="px-5 py-4"><div className="flex justify-end flex-wrap gap-2">{contract.status === 'pending_approval' && hasPlatformPermission('platform.commercial.approve') && <button onClick={() => approve(contract.id)} className="inline-flex items-center gap-1 rounded-lg border border-emerald-200 px-3 py-1.5 text-xs font-semibold text-emerald-700"><CheckCircle2 className="w-3.5 h-3.5" /> Aprovar</button>}{contract.status === 'approved' && hasPlatformPermission('platform.billing.manage') && <button onClick={() => startBilling(contract.id)} className="inline-flex items-center gap-1 rounded-lg bg-[#202322] px-3 py-1.5 text-xs font-semibold text-white"><WalletCards className="w-3.5 h-3.5" /> Iniciar Sandbox</button>}{contract.status === 'pending_payment' && window.location.hostname === 'localhost' && <button onClick={() => mockSandboxPayment(contract.id)} className="inline-flex items-center gap-1 rounded-lg bg-orange-100 text-orange-800 px-3 py-1.5 text-xs font-semibold">Mock Webhook Confirmed</button>}</div></td></tr>)}</tbody></table></div>}
+
+        {loading ? (
+          <ListSkeleton rows={6} />
+        ) : filtered.length === 0 ? (
+          <div className="p-12 text-center">
+            <FileSignature className="w-10 h-10 mx-auto text-[#B66E45] mb-3" />
+            <p className="font-semibold text-[#202322]">Nenhum contrato encontrado</p>
+            <p className="text-sm text-gray-500 mt-1">Contratos são gerados a partir de propostas aceitas.</p>
+          </div>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead className="bg-[#F6F5F2] text-left text-xs uppercase tracking-wide text-[#626866]">
+                <tr>
+                  <th className="px-5 py-3">Contrato</th>
+                  <th className="px-5 py-3">Plano</th>
+                  <th className="px-5 py-3">Valor</th>
+                  <th className="px-5 py-3">Estado</th>
+                  <th className="px-5 py-3 text-right">Ações</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-[#DDD8CF]/50">
+                {filtered.map((contract) => (
+                  <tr key={contract.id}>
+                    <td className="px-5 py-4">
+                      <div className="font-semibold text-[#202322]">#{contract.contract_number} · {contract.customer_name}</div>
+                      <div className="text-xs text-gray-500">{contract.customer_email}</div>
+                    </td>
+                    <td className="px-5 py-4">{contract.billing_plans?.name || 'Personalizado'}</td>
+                    <td className="px-5 py-4 font-semibold">
+                      {money.format(contract.amount_cents / 100)}
+                      <div className="text-xs font-normal text-gray-500">{contract.cycle}</div>
+                    </td>
+                    <td className="px-5 py-4">
+                      <span className="rounded-full bg-[#F1E5DD] px-2.5 py-1 text-xs font-semibold text-[#8B4E2F]">
+                        {CONTRACT_STATUS_LABELS[contract.status] || contract.status}
+                      </span>
+                      {contract.tenant_billing_state?.access_status && (
+                        <div className="text-xs text-gray-500 mt-1">Acesso: {contract.tenant_billing_state.access_status}</div>
+                      )}
+                    </td>
+                    <td className="px-5 py-4">
+                      <div className="flex justify-end flex-wrap gap-2">
+                        {contract.status === 'pending_approval' && hasPlatformPermission('platform.commercial.approve') && (
+                          <button
+                            disabled={isActioning}
+                            onClick={() => { setApproveModalContractId(contract.id); setApprovalReason(''); }}
+                            className="inline-flex items-center gap-1 rounded-lg border border-emerald-200 px-3 py-1.5 text-xs font-semibold text-emerald-700 hover:bg-emerald-50 disabled:opacity-50"
+                          >
+                            <CheckCircle2 className="w-3.5 h-3.5" /> Aprovar
+                          </button>
+                        )}
+                        {contract.status === 'approved' && hasPlatformPermission('platform.billing.manage') && (
+                          <button
+                            disabled={isActioning}
+                            onClick={() => setStartBillingContractId(contract.id)}
+                            className="inline-flex items-center gap-1 rounded-lg bg-[#202322] px-3 py-1.5 text-xs font-semibold text-white hover:bg-black disabled:opacity-50"
+                          >
+                            <WalletCards className="w-3.5 h-3.5" /> Iniciar Sandbox
+                          </button>
+                        )}
+                        {contract.status === 'pending_payment' && window.location.hostname === 'localhost' && (
+                          <button
+                            disabled={isActioning}
+                            onClick={() => mockSandboxPayment(contract.id)}
+                            className="inline-flex items-center gap-1 rounded-lg bg-orange-100 text-orange-800 px-3 py-1.5 text-xs font-semibold hover:bg-orange-200 disabled:opacity-50"
+                          >
+                            Mock Webhook Confirmed
+                          </button>
+                        )}
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
       </div>
 
-      {showForm && <div className="fixed inset-0 z-50 bg-black/50 p-4 flex items-center justify-center"><form onSubmit={createContract} className="w-full max-w-2xl max-h-[90vh] overflow-y-auto rounded-2xl bg-white p-6 shadow-2xl space-y-4"><div className="flex items-center justify-between"><div><h2 className="text-xl font-bold text-[#202322]">Novo contrato</h2><p className="text-xs text-gray-500">O tenant só nasce após pagamento confirmado.</p></div><button type="button" onClick={() => setShowForm(false)} aria-label="Fechar"><X className="w-5 h-5" /></button></div><label className="block text-sm font-medium">Lead<select required value={form.lead_id} onChange={(e) => setForm({ ...form, lead_id: e.target.value, team_id: leads.find((lead) => lead.id === e.target.value)?.assignment?.team_id || '' })} className="mt-1 w-full rounded-xl border border-[#DDD8CF] p-2.5"><option value="">Selecione</option>{leads.map((lead) => <option key={lead.id} value={lead.id}>{lead.company} · {lead.name}</option>)}</select></label><label className="block text-sm font-medium">Plano e versão<select required value={form.plan_id} onChange={(e) => setForm({ ...form, plan_id: e.target.value })} className="mt-1 w-full rounded-xl border border-[#DDD8CF] p-2.5"><option value="">Selecione</option>{plans.map((plan) => <option key={plan.id} value={plan.id}>{plan.name} v{plan.version}{plan.billing_plan_prices?.[0] ? ` · ${money.format(plan.billing_plan_prices[0].amount_cents / 100)}` : ''}</option>)}</select></label><label className="block text-sm font-medium">Equipe<select value={form.team_id} onChange={(e) => setForm({ ...form, team_id: e.target.value })} className="mt-1 w-full rounded-xl border border-[#DDD8CF] p-2.5"><option value="">Sem equipe</option>{catalog.teams.map((team) => <option key={team.id} value={team.id}>{team.name}</option>)}</select></label><div className="grid sm:grid-cols-2 gap-4"><label className="block text-sm font-medium">CPF/CNPJ<input value={form.customer_tax_id} onChange={(e) => setForm({ ...form, customer_tax_id: e.target.value })} placeholder="Obrigatório para cobrança" className="mt-1 w-full rounded-xl border border-[#DDD8CF] p-2.5" /></label><label className="block text-sm font-medium">Telefone<input value={form.customer_phone} onChange={(e) => setForm({ ...form, customer_phone: e.target.value })} className="mt-1 w-full rounded-xl border border-[#DDD8CF] p-2.5" /></label></div>{selectedPlan && <div className="rounded-xl bg-[#F6F5F2] p-4 text-sm"><strong>{selectedPlan.name}</strong><div className="mt-1 text-gray-600">{selectedPlan.billing_plan_solutions.map((item: any) => item.solutions?.name).filter(Boolean).join(', ') || 'Sem soluções configuradas'}</div></div>}<div className="flex justify-end gap-3 pt-2"><button type="button" onClick={() => setShowForm(false)} className="rounded-xl border border-[#DDD8CF] px-4 py-2 text-sm">Cancelar</button><button disabled={saving} className="rounded-xl bg-[#B66E45] px-4 py-2 text-sm font-bold text-white disabled:opacity-60">{saving ? 'Salvando...' : 'Criar para aprovação'}</button></div></form></div>}
+      {/* Modal Aprovação de Contrato */}
+      {approveModalContractId && (
+        <div className="fixed inset-0 z-50 bg-black/50 p-4 flex items-center justify-center">
+          <form onSubmit={handleApproveSubmit} className="w-full max-w-md rounded-2xl bg-white p-6 shadow-2xl space-y-4">
+            <div className="flex items-center justify-between">
+              <h3 className="text-lg font-bold text-[#202322]">Aprovar Contrato</h3>
+              <button type="button" onClick={() => setApproveModalContractId(null)} aria-label="Fechar"><X className="w-5 h-5" /></button>
+            </div>
+            <label className="block text-sm font-medium text-gray-700">
+              Justificativa / Motivo da Aprovação *
+              <textarea
+                required
+                rows={3}
+                value={approvalReason}
+                onChange={e => setApprovalReason(e.target.value)}
+                placeholder="Informe a justificativa da aprovação do contrato..."
+                className="mt-1 w-full rounded-xl border border-[#DDD8CF] p-2.5 text-sm"
+              />
+            </label>
+            <div className="flex justify-end gap-3 pt-2">
+              <button type="button" onClick={() => setApproveModalContractId(null)} className="rounded-xl border px-4 py-2 text-sm">
+                Cancelar
+              </button>
+              <button disabled={isActioning || !approvalReason.trim()} className="rounded-xl bg-emerald-700 px-4 py-2 text-sm font-bold text-white disabled:opacity-50">
+                {isActioning ? <Loader2 className="w-4 h-4 animate-spin" /> : 'Confirmar Aprovação'}
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
+
+      {/* Modal Iniciar Sandbox Billing */}
+      {startBillingContractId && (
+        <div className="fixed inset-0 z-50 bg-black/50 p-4 flex items-center justify-center">
+          <form onSubmit={handleStartBillingSubmit} className="w-full max-w-md rounded-2xl bg-white p-6 shadow-2xl space-y-4">
+            <div className="flex items-center justify-between">
+              <h3 className="text-lg font-bold text-[#202322]">Iniciar Billing Sandbox</h3>
+              <button type="button" onClick={() => setStartBillingContractId(null)} aria-label="Fechar"><X className="w-5 h-5" /></button>
+            </div>
+            <p className="text-sm text-gray-600">
+              Esta ação criará a assinatura no Asaas Sandbox. O acesso só é liberado após confirmação do webhook de pagamento.
+            </p>
+            <label className="block text-sm font-medium text-gray-700">
+              Data do Primeiro Vencimento (AAAA-MM-DD) *
+              <input
+                required
+                type="date"
+                value={nextDueDate}
+                onChange={e => setNextDueDate(e.target.value)}
+                className="mt-1 w-full rounded-xl border border-[#DDD8CF] p-2.5 text-sm"
+              />
+            </label>
+            <div className="flex justify-end gap-3 pt-2">
+              <button type="button" onClick={() => setStartBillingContractId(null)} className="rounded-xl border px-4 py-2 text-sm">
+                Cancelar
+              </button>
+              <button disabled={isActioning || !nextDueDate} className="rounded-xl bg-[#202322] px-4 py-2 text-sm font-bold text-white disabled:opacity-50">
+                {isActioning ? <Loader2 className="w-4 h-4 animate-spin" /> : 'Iniciar Sandbox'}
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
     </div>
   );
 }
-

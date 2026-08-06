@@ -1,11 +1,13 @@
 import { Router } from 'express';
 import { z } from 'zod';
+import { getLeadNextStatuses } from '../domain/transitions.js';
 import { canReadAssignedResource } from './authorization';
 import { auditContext, pageResult, parsePagination } from './operational';
 import { authenticateRequest, resolvePlatformContext, requirePlatformPermission } from './tenantAuth';
 
 export function createAdminLeadsRouter(getSupabaseAdmin: any, _old_requirePlatformAuth: any) {
   const router = Router();
+
 
   // GET /api/admin/leads
   router.get('/', authenticateRequest, resolvePlatformContext, requirePlatformPermission('platform.leads.read'), async (req: any, res: any) => {
@@ -159,6 +161,41 @@ export function createAdminLeadsRouter(getSupabaseAdmin: any, _old_requirePlatfo
         ...auditContext(req, { result: 'success', before: { status: lead.status, priority: lead.priority }, after: updates }),
       });
       return res.json(saved.data);
+    } catch (error: any) {
+      return res.status(500).json({ error: error.message });
+    }
+  });
+
+  const transitionLeadSchema = z.object({
+    to_status: z.string().min(1),
+    reason: z.string().min(1)
+  });
+
+  router.post('/:id/transition', authenticateRequest, resolvePlatformContext, requirePlatformPermission(['platform.leads.assign', 'platform.leads.claim', 'platform.commercial.manage']), async (req: any, res: any) => {
+    try {
+      const input = transitionLeadSchema.safeParse(req.body);
+      if (!input.success) return res.status(400).json({ error: 'Status de destino e motivo são obrigatórios.' });
+      const { to_status, reason } = input.data;
+      const db = getSupabaseAdmin();
+      const { data: lead, error: leadError } = await db.from('marketing_leads')
+        .select('*, platform_lead_assignments(*)').eq('id', req.params.id).maybeSingle();
+      if (leadError || !lead) return res.status(404).json({ error: 'Lead não encontrado.' });
+      const assignment = lead.platform_lead_assignments?.[0];
+      if (req.platformContext.role?.key !== 'admin' && !canReadAssignedResource(req.platformContext, assignment, 'member_lead_visibility')) {
+        return res.status(403).json({ error: 'Lead fora do seu escopo.' });
+      }
+      const transitioned = await db.rpc('admin_transition_control_plane', {
+        p_entity_type: 'lead',
+        p_entity_id: lead.id,
+        p_to_status: to_status,
+        p_actor_user_id: req.user.id,
+        p_reason: reason.trim(),
+        p_team_id: assignment?.team_id || null,
+        p_request_id: req.requestId || null,
+      });
+      if (transitioned.error) return res.status(409).json({ error: transitioned.error.message });
+      const saved = await db.from('marketing_leads').select('*, platform_lead_assignments(*)').eq('id', lead.id).single();
+      return res.json({ ...saved.data, allowed_next_statuses: getLeadNextStatuses(saved.data.status) });
     } catch (error: any) {
       return res.status(500).json({ error: error.message });
     }

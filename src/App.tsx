@@ -84,39 +84,39 @@ export default function App() {
   }, [currentRoute]);
 
   const renderContent = () => {
-    const route = currentRoute;
+    const [pathname] = currentRoute.split("?");
 
-    if (route === "/") {
+    if (pathname === "/") {
       return <PublicSite />;
     }
-    if (route.startsWith("/login")) {
+    if (pathname.startsWith("/login")) {
       return <LoginPage />;
     }
-    if (route === "/auth/reset-password") {
+    if (pathname === "/auth/reset-password") {
       return <ResetPasswordPage />;
     }
-    if (route === "/auth/accept-invite") {
+    if (pathname === "/auth/accept-invite") {
       return <AcceptInvitePage />;
     }
-    if (route === "/select-organization") {
+    if (pathname === "/select-organization") {
       return <SelectOrganizationPage />;
     }
-    if (route === "/entrar") {
+    if (pathname === "/entrar") {
       return <TenantDiscoveryPage />;
     }
-    if (route.startsWith("/canal/")) {
-      const slug = route.split("/")[2];
+    if (pathname.startsWith("/canal/")) {
+      const slug = pathname.split("/")[2];
       return <IntegrityChannelPage slug={slug} />;
     }
-    if (route.startsWith("/carreiras/")) {
-      const slug = route.split("/")[2];
+    if (pathname.startsWith("/carreiras/")) {
+      const slug = pathname.split("/")[2];
       return <CareerSitePage slug={slug} />;
     }
-    if (route.startsWith("/acesso/")) {
-      const slug = route.split("/")[2];
+    if (pathname.startsWith("/acesso/")) {
+      const slug = pathname.split("/")[2];
       return <TenantLoginPage slug={slug} />;
     }
-    if (route.startsWith("/workspace")) {
+    if (pathname.startsWith("/workspace")) {
       return (
         <RequireAuth>
           <RequireTenant>
@@ -127,68 +127,66 @@ export default function App() {
         </RequireAuth>
       );
     }
-    if (route.startsWith("/admin")) {
+    if (pathname.startsWith("/admin")) {
       let adminContent = <AdminDashboard />;
       
-      if (route === "/admin/empresas") {
+      if (pathname === "/admin/empresas") {
         adminContent = <CompaniesPage />;
-      } else if (route.startsWith("/admin/empresas/")) {
-        const tenantId = route.split("/")[3];
+      } else if (pathname.startsWith("/admin/empresas/")) {
+        const tenantId = pathname.split("/")[3];
         adminContent = <CompanyDetailPage tenantId={tenantId} />;
-      } else if (route === "/admin/equipes") {
+      } else if (pathname === "/admin/equipes") {
         adminContent = <TeamsPage />;
-      } else if (route.startsWith("/admin/equipes/")) {
-        const teamId = route.split("/")[3];
+      } else if (pathname.startsWith("/admin/equipes/")) {
+        const teamId = pathname.split("/")[3];
         adminContent = <TeamDetailPage teamId={teamId} />;
-      } else if (route === "/admin/consultores") {
+      } else if (pathname === "/admin/consultores") {
         adminContent = <ConsultantsPage />;
-      } else if (route === "/admin/leads") {
+      } else if (pathname === "/admin/leads") {
         adminContent = <LeadsPage />;
-      } else if (route === "/admin/auditoria") {
+      } else if (pathname === "/admin/auditoria") {
         adminContent = <AuditPage />;
-      } else if (route === "/admin/sistema") {
+      } else if (pathname === "/admin/sistema") {
         adminContent = <SystemHealthPage />;
-      } else if (route === "/admin/contratos") {
+      } else if (pathname === "/admin/contratos") {
         adminContent = <ContractsPage />;
-      } else if (route === "/admin/propostas") {
+      } else if (pathname === "/admin/propostas") {
         adminContent = <ProposalsPage />;
-      } else if (route === "/admin/planos") {
+      } else if (pathname === "/admin/planos") {
         adminContent = <PlansPage />;
-      } else if (route === "/admin/financeiro") {
+      } else if (pathname === "/admin/financeiro") {
         adminContent = <BillingPage />;
-      } else if (route === "/admin/demos") {
+      } else if (pathname === "/admin/demos") {
         adminContent = <DemosPage />;
-      } else if (route === "/admin/onboarding") {
+      } else if (pathname === "/admin/onboarding") {
         adminContent = <ControlPlaneModulePage module="onboarding" />;
-      } else if (route === "/admin/customer-success") {
+      } else if (pathname === "/admin/customer-success") {
         adminContent = <ControlPlaneModulePage module="success" />;
-      } else if (route === "/admin/suporte") {
+      } else if (pathname === "/admin/suporte") {
         adminContent = <ControlPlaneModulePage module="support" />;
-      } else if (route === "/admin/privacidade") {
+      } else if (pathname === "/admin/privacidade") {
         adminContent = <ControlPlaneModulePage module="privacy" />;
-      } else if (route === "/admin/metas") {
+      } else if (pathname === "/admin/metas") {
         adminContent = <ControlPlaneModulePage module="targets" />;
-      } else if (route === "/admin/operacoes") {
+      } else if (pathname === "/admin/operacoes") {
         adminContent = <ControlPlaneModulePage module="operations" />;
-      } else if (route === "/admin/acessos") {
+      } else if (pathname === "/admin/acessos") {
         adminContent = <AccessControlPage />;
       } else if (
-        route === "/admin/desempenho" ||
-        route === "/admin/solucoes" ||
-        
-        
-        route === "/admin/deployments" ||
-        route === "/admin/configuracoes" ||
-        route === "/admin/engenharia"
+        pathname === "/admin/desempenho" ||
+        pathname === "/admin/solucoes" ||
+        pathname === "/admin/deployments" ||
+        pathname === "/admin/configuracoes" ||
+        pathname === "/admin/engenharia"
       ) {
-        adminContent = <PlaceholderAdminPage title={route} />;
+        adminContent = <PlaceholderAdminPage title={pathname} />;
       }
 
       return (
         <RequireAuth>
           <RequirePlatformPermission permission="platform.access">
             <Suspense fallback={<SuspenseFallback />}>
-              <OrdumAdminLayout currentPath={"#" + route}>
+              <OrdumAdminLayout currentPath={"#" + currentRoute}>
                 {adminContent}
               </OrdumAdminLayout>
             </Suspense>

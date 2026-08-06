@@ -30,12 +30,18 @@ export function createAdminClientsRouter(getSupabaseAdmin: any) {
 
       let query = getSupabaseAdmin()
         .from('tenants')
-        .select('*, tenant_solutions(*), platform_client_assignments(*, platform_teams(name), platform_members(user_id, platform_roles(key, name))), tenant_billing_state(*), tenant_domains(*), memberships(id,status,user_id,employment_level), departments(id,name,active)', { count: 'exact' })
-        .in('status', ['active', 'trial', 'suspended'])
+        .select('*, tenant_solutions(*, solutions(key,name)), platform_client_assignments(*, platform_teams(name), platform_members(user_id, platform_roles(key, name))), tenant_billing_state(*), tenant_domains(*), memberships(id,status,user_id,employment_level), departments(id,name,active)', { count: 'exact' })
         .order('created_at', { ascending: false });
       if (visibleTenantIds) query = query.in('id', visibleTenantIds);
-      if (typeof req.query.status === 'string' && req.query.status) query = query.eq('status', req.query.status);
-      if (typeof req.query.search === 'string' && req.query.search.trim()) query = query.ilike('name', `%${req.query.search.trim().slice(0, 100)}%`);
+      if (typeof req.query.status === 'string' && req.query.status) {
+        query = query.eq('status', req.query.status);
+      } else {
+        query = query.in('status', ['active', 'trial', 'suspended', 'inactive']);
+      }
+      if (typeof req.query.search === 'string' && req.query.search.trim()) {
+        const term = req.query.search.trim().replace(/[%(),]/g, '').slice(0, 100);
+        query = query.or(`name.ilike.%${term}%,slug.ilike.%${term}%`);
+      }
       if (paginated) query = query.range(from, to);
 
       const { data, error, count } = await query;
@@ -83,7 +89,6 @@ export function createAdminClientsRouter(getSupabaseAdmin: any) {
         if (u) owner = { email: u.email, name: u.user_metadata?.full_name };
       }
       
-      // Checking permissions (similar to list)
       if (platformContext.role?.key !== 'admin') {
         if (!canReadAssignedResource(platformContext, assignment, 'member_client_visibility')) return res.status(403).json({ error: 'Forbidden' });
       }
@@ -158,27 +163,26 @@ export function createAdminClientsRouter(getSupabaseAdmin: any) {
   // POST /api/admin/clients/:id/suspend
   router.post('/:id/suspend', authenticateRequest, resolvePlatformContext, requirePlatformPermission('platform.clients.manage'), async (req: any, res: any) => {
     try {
-      const { platformContext } = req;
       const clientId = req.params.id;
       const parse = z.object({ reason: z.string().min(5) }).safeParse(req.body);
       if (!parse.success) return res.status(400).json({ error: 'Motivo da suspensão é obrigatório.' });
       
       const db = getSupabaseAdmin();
       const existing = await db.from('tenants').select('status, lifecycle_status').eq('id', clientId).single();
-      if (existing.error) return res.status(404).json({ error: 'Cliente não encontrado.' });
+      if (existing.error || !existing.data) return res.status(404).json({ error: 'Cliente não encontrado.' });
       if (existing.data.status === 'suspended') return res.status(400).json({ error: 'Cliente já está suspenso.' });
 
-      const updated = await db.from('tenants').update({ status: 'suspended', lifecycle_status: 'churn', updated_at: new Date().toISOString() }).eq('id', clientId).select().single();
-      if (updated.error) throw updated.error;
-      
-      await db.from('platform_audit_logs').insert({
-        actor_user_id: req.user.id,
-        action: 'client.suspended',
-        entity_type: 'tenants',
-        entity_id: clientId,
-        severity: 'high',
-        ...auditContext(req, { result: 'success', reason: parse.data.reason, before: existing.data, after: { status: 'suspended', lifecycle_status: 'churn' } })
+      const transitioned = await db.rpc('admin_transition_control_plane', {
+        p_entity_type: 'tenant',
+        p_entity_id: clientId,
+        p_to_status: 'suspended',
+        p_actor_user_id: req.user.id,
+        p_reason: parse.data.reason.trim(),
+        p_request_id: req.requestId || null,
       });
+      if (transitioned.error) return res.status(409).json({ error: transitioned.error.message });
+
+      const updated = await db.from('tenants').select('*').eq('id', clientId).single();
       res.json({ success: true, tenant: updated.data });
     } catch (e: any) {
       res.status(500).json({ error: e.message });
@@ -188,27 +192,26 @@ export function createAdminClientsRouter(getSupabaseAdmin: any) {
   // POST /api/admin/clients/:id/reactivate
   router.post('/:id/reactivate', authenticateRequest, resolvePlatformContext, requirePlatformPermission('platform.clients.manage'), async (req: any, res: any) => {
     try {
-      const { platformContext } = req;
       const clientId = req.params.id;
       const parse = z.object({ reason: z.string().min(5) }).safeParse(req.body);
       if (!parse.success) return res.status(400).json({ error: 'Motivo da reativação é obrigatório.' });
       
       const db = getSupabaseAdmin();
       const existing = await db.from('tenants').select('status, lifecycle_status').eq('id', clientId).single();
-      if (existing.error) return res.status(404).json({ error: 'Cliente não encontrado.' });
+      if (existing.error || !existing.data) return res.status(404).json({ error: 'Cliente não encontrado.' });
       if (existing.data.status === 'active') return res.status(400).json({ error: 'Cliente já está ativo.' });
 
-      const updated = await db.from('tenants').update({ status: 'active', lifecycle_status: 'active', updated_at: new Date().toISOString() }).eq('id', clientId).select().single();
-      if (updated.error) throw updated.error;
-      
-      await db.from('platform_audit_logs').insert({
-        actor_user_id: req.user.id,
-        action: 'client.reactivated',
-        entity_type: 'tenants',
-        entity_id: clientId,
-        severity: 'info',
-        ...auditContext(req, { result: 'success', reason: parse.data.reason, before: existing.data, after: { status: 'active', lifecycle_status: 'active' } })
+      const transitioned = await db.rpc('admin_transition_control_plane', {
+        p_entity_type: 'tenant',
+        p_entity_id: clientId,
+        p_to_status: 'active',
+        p_actor_user_id: req.user.id,
+        p_reason: parse.data.reason.trim(),
+        p_request_id: req.requestId || null,
       });
+      if (transitioned.error) return res.status(409).json({ error: transitioned.error.message });
+
+      const updated = await db.from('tenants').select('*').eq('id', clientId).single();
       res.json({ success: true, tenant: updated.data });
     } catch (e: any) {
       res.status(500).json({ error: e.message });
