@@ -667,15 +667,20 @@ async function processPaymentEvent(db, eventRow, payload, provider) {
       if (!selectedTemplate) selectedTemplate = templates.find((t) => !t.plan_id && t.solution_id && sIds.includes(t.solution_id));
       if (!selectedTemplate) selectedTemplate = templates.find((t) => !t.plan_id && !t.solution_id);
       if (selectedTemplate) {
-        const { error: runErr } = await db.rpc("admin_start_onboarding", {
-          p_tenant_id: tenantId,
-          p_template_id: selectedTemplate.id,
-          p_owner_platform_member_id: contract.owner_platform_member_id,
-          p_actor_user_id: owner.id
-        });
-        if (runErr) {
-          await db.from("platform_audit_logs").insert({ actor_user_id: owner.id, action: "onboarding.run.failed", entity_type: "tenants", entity_id: tenantId, severity: "error", metadata: { error: runErr.message, template_id: selectedTemplate.id } });
-          throw new Error("Falha cr\xEDtica ao iniciar o onboarding autom\xE1tio ap\xF3s pagamento: " + runErr.message);
+        const { data: existingRun } = await db.from("onboarding_runs").select("id").eq("tenant_id", tenantId).eq("template_id", selectedTemplate.id).maybeSingle();
+        if (existingRun) {
+          await db.from("platform_audit_logs").insert({ actor_user_id: owner.id, action: "onboarding.run.ignored", entity_type: "tenants", entity_id: tenantId, severity: "info", metadata: { reason: "Idempotency: run already exists for this tenant and template" } });
+        } else {
+          const { error: runErr } = await db.rpc("admin_start_onboarding", {
+            p_tenant_id: tenantId,
+            p_template_id: selectedTemplate.id,
+            p_owner_platform_member_id: contract.owner_platform_member_id,
+            p_actor_user_id: owner.id
+          });
+          if (runErr) {
+            await db.from("platform_audit_logs").insert({ actor_user_id: owner.id, action: "onboarding.run.failed", entity_type: "tenants", entity_id: tenantId, severity: "error", metadata: { error: runErr.message, template_id: selectedTemplate.id } });
+            throw new Error("Falha cr\xEDtica ao iniciar o onboarding autom\xE1tio ap\xF3s pagamento: " + runErr.message);
+          }
         }
       }
     }
@@ -1182,8 +1187,13 @@ function createBillingRouters(getSupabaseAdmin2) {
       }));
       const { error: itemsError } = await db.from("commercial_proposal_items").insert(itemsToInsert);
       if (itemsError) {
-        await db.from("commercial_proposals").delete().eq("id", data.id);
-        return res.status(500).json({ error: "Falha ao gravar m\xF3dulos da proposta. Transa\xE7\xE3o revertida." });
+        const { error: delError } = await db.from("commercial_proposals").delete().eq("id", data.id);
+        if (delError) {
+          await db.from("platform_audit_logs").insert({ actor_user_id: req.user.id, action: "system.consistency.error", entity_type: "commercial_proposals", entity_id: data.id, severity: "critical", metadata: { reason: "Falha tentar exclus\xE3o do pai ao reverter transa\xE7\xE3o", itemsError: itemsError.message, delError: delError.message } });
+          return res.status(500).json({ error: "Incoer\xEAncia cr\xEDtica: n\xE3o foi poss\xEDvel remover a proposta ap\xF3s falha nos itens." });
+        }
+        await db.from("platform_audit_logs").insert({ actor_user_id: req.user.id, action: "commercial.proposal.rollback", entity_type: "commercial_proposals", entity_id: data.id, severity: "info", metadata: { reason: "Sucesso ao reverter", itemsError: itemsError.message } });
+        return res.status(500).json({ error: itemsError.message });
       }
     }
     await db.from("platform_audit_logs").insert({ actor_user_id: req.user.id, action: "commercial.proposal.created", entity_type: "commercial_proposals", entity_id: data.id, team_id: data.team_id, severity: "info", ...auditContext(req, { result: "success", after: { amount_cents: data.amount_cents, subtotal, discount, solution_count: requestedSolutions.length } }) });
@@ -1284,8 +1294,13 @@ function createBillingRouters(getSupabaseAdmin2) {
     if (proposalItems?.length) {
       const { error: cntItemsErr } = await db.from("commercial_contract_items").insert(proposalItems.map((item) => ({ contract_id: contract.id, solution_id: item.solution_id, limits: item.limits })));
       if (cntItemsErr) {
-        await db.from("commercial_contracts").delete().eq("id", contract.id);
-        return res.status(500).json({ error: "Erro ao gravar itens do contrato. Transa\xE7\xE3o revertida." });
+        const { error: delError } = await db.from("commercial_contracts").delete().eq("id", contract.id);
+        if (delError) {
+          await db.from("platform_audit_logs").insert({ actor_user_id: req.user.id, action: "system.consistency.error", entity_type: "commercial_contracts", entity_id: contract.id, severity: "critical", metadata: { reason: "Falha tentar exclus\xE3o do pai ao reverter transa\xE7\xE3o", itemsError: cntItemsErr.message, delError: delError.message } });
+          return res.status(500).json({ error: "Incoer\xEAncia cr\xEDtica: n\xE3o foi poss\xEDvel remover o contrato ap\xF3s falha nos itens." });
+        }
+        await db.from("platform_audit_logs").insert({ actor_user_id: req.user.id, action: "commercial.contract.rollback", entity_type: "commercial_contracts", entity_id: contract.id, severity: "info", metadata: { reason: "Sucesso ao reverter", itemsError: cntItemsErr.message } });
+        return res.status(500).json({ error: cntItemsErr.message });
       }
     }
     await db.from("platform_audit_logs").insert({ actor_user_id: req.user.id, action: "commercial.contract.created_from_proposal", entity_type: "commercial_contracts", entity_id: contract.id, team_id: proposal.team_id, severity: "info", metadata: { proposal_id: proposal.id } });
@@ -1398,13 +1413,17 @@ function createBillingRouters(getSupabaseAdmin2) {
           processed_at: (/* @__PURE__ */ new Date()).toISOString(),
           last_error: null
         }).eq("id", webhookEvent.id);
+        await db.from("platform_audit_logs").insert({ actor_user_id: req.user.id, action: "billing.sandbox_payment.processed", entity_type: "billing_webhook_events", entity_id: webhookEvent.id, severity: "info", metadata: { contract_id: contract.id, subscription_id: subscription.id, provider_event_id: fakeEventId, result: processResult } });
       } catch (err) {
         await db.from("billing_webhook_events").update({
           status: "failed",
           last_error: err.message
         }).eq("id", webhookEvent.id);
+        await db.from("platform_audit_logs").insert({ actor_user_id: req.user.id, action: "billing.sandbox_payment.failed", entity_type: "billing_webhook_events", entity_id: webhookEvent.id, severity: "error", metadata: { contract_id: contract.id, subscription_id: subscription.id, provider_event_id: fakeEventId, result: "failed", error: err.message } });
         return res.status(500).json({ error: err.message });
       }
+    } else {
+      await db.from("platform_audit_logs").insert({ actor_user_id: req.user.id, action: "billing.sandbox_payment.reused", entity_type: "billing_webhook_events", entity_id: webhookEvent.id, severity: "info", metadata: { contract_id: contract.id, subscription_id: subscription.id, provider_event_id: fakeEventId, result: "ignored_by_idempotency" } });
     }
     return res.json({ success: true, message: "Pago mock processado (idempotente) com sucesso." });
   });
