@@ -40,20 +40,26 @@ export function getBillingConfig(env: NodeJS.ProcessEnv = process.env): BillingC
 export function publicBillingHealth(env: NodeJS.ProcessEnv = process.env) {
   try {
     const config = getBillingConfig(env);
+    const sandboxMockAvailable = (env.ASAAS_ENV || 'sandbox') === 'sandbox' &&
+      (env.VERCEL_ENV ? (env.VERCEL_ENV === 'preview' || env.VERCEL_ENV === 'development') : env.NODE_ENV !== 'production');
     return {
       provider: config.provider,
       environment: config.environment,
       enabled: config.enabled,
       configured: Boolean(config.apiKey && config.webhookToken),
       webhookUrlConfigured: Boolean(config.webhookUrl),
+      sandboxMockAvailable,
     };
   } catch (error) {
+    const sandboxMockAvailable = (env.ASAAS_ENV || 'sandbox') === 'sandbox' &&
+      (env.VERCEL_ENV ? (env.VERCEL_ENV === 'preview' || env.VERCEL_ENV === 'development') : env.NODE_ENV !== 'production');
     return {
       provider: 'asaas',
       environment: env.ASAAS_ENV || 'sandbox',
       enabled: env.BILLING_ENABLED === 'true',
       configured: false,
       webhookUrlConfigured: Boolean(env.ASAAS_WEBHOOK_URL),
+      sandboxMockAvailable,
       error: error instanceof Error ? error.message : 'Configuração inválida',
     };
   }

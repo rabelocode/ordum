@@ -1,8 +1,9 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { CheckCircle2, FileSignature, Plus, RefreshCw, Search, WalletCards, X, Loader2 } from 'lucide-react';
+import { CheckCircle2, FileSignature, Plus, RefreshCw, Search, WalletCards, X, Loader2, Edit, AlertTriangle } from 'lucide-react';
 import { useAccess } from '../../core/auth/AccessContext';
 import { ListSkeleton } from '../../components/ui/LoadingSkeletons';
 import { CONTRACT_STATUS_LABELS } from '../../domain/transitions';
+import { isValidTaxId, maskTaxId } from '../../domain/cpf-cnpj';
 
 const money = new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' });
 
@@ -15,6 +16,7 @@ export function ContractsPage() {
   const [query, setQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState('all');
   const [isActioning, setIsActioning] = useState(false);
+  const [sandboxMockAvailable, setSandboxMockAvailable] = useState(false);
 
   // Approval Modal State
   const [approveModalContractId, setApproveModalContractId] = useState<string | null>(null);
@@ -23,6 +25,15 @@ export function ContractsPage() {
   // Start Billing Modal State
   const [startBillingContractId, setStartBillingContractId] = useState<string | null>(null);
   const [nextDueDate, setNextDueDate] = useState(new Date().toISOString().slice(0, 10));
+
+  // Fiscal Edit Modal State
+  const [fiscalModalContract, setFiscalModalContract] = useState<any | null>(null);
+  const [fiscalForm, setFiscalForm] = useState({
+    customer_tax_id: '',
+    customer_phone: '',
+    customer_name: '',
+    customer_email: '',
+  });
 
   const api = useCallback(async (path: string, init?: RequestInit) => {
     if (!session) throw new Error('Sessão ausente.');
@@ -42,12 +53,18 @@ export function ContractsPage() {
     try {
       const contractData = await api('/api/admin/commercial/contracts');
       setContracts(contractData);
+
+      // Requisito 5: Carregar capability de diagnostics separadamente
+      if (hasPlatformPermission('platform.billing.manage')) {
+        const diag = await api('/api/admin/billing/diagnostics').catch(() => null);
+        if (diag) setSandboxMockAvailable(Boolean(diag.sandboxMockAvailable));
+      }
     } catch (loadError) {
       setError(loadError instanceof Error ? loadError.message : 'Falha ao carregar contratos.');
     } finally {
       setLoading(false);
     }
-  }, [api, session]);
+  }, [api, session, hasPlatformPermission]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -94,6 +111,27 @@ export function ContractsPage() {
       await load();
     } catch (actionError) {
       setError(actionError instanceof Error ? actionError.message : 'Falha ao iniciar cobrança.');
+    } finally {
+      setIsActioning(false);
+    }
+  }
+
+  async function handleFiscalSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    if (!fiscalModalContract) return;
+    setError(null);
+    setNotice(null);
+    setIsActioning(true);
+    try {
+      await api(`/api/admin/commercial/contracts/${fiscalModalContract.id}/fiscal`, {
+        method: 'PATCH',
+        body: JSON.stringify(fiscalForm),
+      });
+      setNotice('Dados fiscais do contrato atualizados com sucesso.');
+      setFiscalModalContract(null);
+      await load();
+    } catch (actionError) {
+      setError(actionError instanceof Error ? actionError.message : 'Falha ao atualizar dados fiscais.');
     } finally {
       setIsActioning(false);
     }
@@ -167,71 +205,160 @@ export function ContractsPage() {
             <table className="w-full text-sm">
               <thead className="bg-[#F6F5F2] text-left text-xs uppercase tracking-wide text-[#626866]">
                 <tr>
-                  <th className="px-5 py-3">Contrato</th>
-                  <th className="px-5 py-3">Plano</th>
-                  <th className="px-5 py-3">Valor</th>
+                  <th className="px-5 py-3">Contrato / Cliente</th>
+                  <th className="px-5 py-3">Dados Fiscais</th>
+                  <th className="px-5 py-3">Plano / Valor</th>
                   <th className="px-5 py-3">Estado</th>
                   <th className="px-5 py-3 text-right">Ações</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-[#DDD8CF]/50">
-                {filtered.map((contract) => (
-                  <tr key={contract.id}>
-                    <td className="px-5 py-4">
-                      <div className="font-semibold text-[#202322]">#{contract.contract_number} · {contract.customer_name}</div>
-                      <div className="text-xs text-gray-500">{contract.customer_email}</div>
-                    </td>
-                    <td className="px-5 py-4">{contract.billing_plans?.name || 'Personalizado'}</td>
-                    <td className="px-5 py-4 font-semibold">
-                      {money.format(contract.amount_cents / 100)}
-                      <div className="text-xs font-normal text-gray-500">{contract.cycle}</div>
-                    </td>
-                    <td className="px-5 py-4">
-                      <span className="rounded-full bg-[#F1E5DD] px-2.5 py-1 text-xs font-semibold text-[#8B4E2F]">
-                        {CONTRACT_STATUS_LABELS[contract.status] || contract.status}
-                      </span>
-                      {contract.tenant_billing_state?.access_status && (
-                        <div className="text-xs text-gray-500 mt-1">Acesso: {contract.tenant_billing_state.access_status}</div>
-                      )}
-                    </td>
-                    <td className="px-5 py-4">
-                      <div className="flex justify-end flex-wrap gap-2">
-                        {contract.status === 'pending_approval' && hasPlatformPermission('platform.commercial.approve') && (
+                {filtered.map((contract) => {
+                  const hasValidTaxId = Boolean(contract.customer_tax_id && isValidTaxId(contract.customer_tax_id));
+                  const canEditFiscal = (contract.status === 'pending_approval' || contract.status === 'approved') &&
+                    !contract.billing_subscriptions?.length;
+
+                  return (
+                    <tr key={contract.id}>
+                      <td className="px-5 py-4">
+                        <div className="font-semibold text-[#202322]">#{contract.contract_number} · {contract.customer_name}</div>
+                        <div className="text-xs text-gray-500">{contract.customer_email}</div>
+                      </td>
+                      <td className="px-5 py-4">
+                        {hasValidTaxId ? (
+                          <div className="text-xs font-mono text-gray-700">{maskTaxId(contract.customer_tax_id)}</div>
+                        ) : (
+                          <div className="inline-flex items-center gap-1 text-xs text-amber-700 font-semibold bg-amber-50 px-2 py-0.5 rounded border border-amber-200">
+                            <AlertTriangle className="w-3.5 h-3.5" /> CPF/CNPJ Ausente
+                          </div>
+                        )}
+                        {canEditFiscal && hasPlatformPermission('platform.commercial.manage') && (
                           <button
-                            disabled={isActioning}
-                            onClick={() => { setApproveModalContractId(contract.id); setApprovalReason(''); }}
-                            className="inline-flex items-center gap-1 rounded-lg border border-emerald-200 px-3 py-1.5 text-xs font-semibold text-emerald-700 hover:bg-emerald-50 disabled:opacity-50"
+                            onClick={() => {
+                              setFiscalModalContract(contract);
+                              setFiscalForm({
+                                customer_tax_id: contract.customer_tax_id || '',
+                                customer_phone: contract.customer_phone || '',
+                                customer_name: contract.customer_name || '',
+                                customer_email: contract.customer_email || '',
+                              });
+                            }}
+                            className="mt-1 text-xs text-[#B66E45] hover:underline flex items-center gap-1"
                           >
-                            <CheckCircle2 className="w-3.5 h-3.5" /> Aprovar
+                            <Edit className="w-3 h-3" /> Editar fiscal
                           </button>
                         )}
-                        {contract.status === 'approved' && hasPlatformPermission('platform.billing.manage') && (
-                          <button
-                            disabled={isActioning}
-                            onClick={() => setStartBillingContractId(contract.id)}
-                            className="inline-flex items-center gap-1 rounded-lg bg-[#202322] px-3 py-1.5 text-xs font-semibold text-white hover:bg-black disabled:opacity-50"
-                          >
-                            <WalletCards className="w-3.5 h-3.5" /> Iniciar Sandbox
-                          </button>
+                      </td>
+                      <td className="px-5 py-4">
+                        <div className="font-semibold text-[#202322]">{money.format(contract.amount_cents / 100)}</div>
+                        <div className="text-xs text-gray-500">{contract.billing_plans?.name || 'Personalizado'} ({contract.cycle})</div>
+                      </td>
+                      <td className="px-5 py-4">
+                        <span className="rounded-full bg-[#F1E5DD] px-2.5 py-1 text-xs font-semibold text-[#8B4E2F]">
+                          {CONTRACT_STATUS_LABELS[contract.status] || contract.status}
+                        </span>
+                        {contract.tenant_billing_state?.access_status && (
+                          <div className="text-xs text-gray-500 mt-1">Acesso: {contract.tenant_billing_state.access_status}</div>
                         )}
-                        {contract.status === 'pending_payment' && window.location.hostname === 'localhost' && (
-                          <button
-                            disabled={isActioning}
-                            onClick={() => mockSandboxPayment(contract.id)}
-                            className="inline-flex items-center gap-1 rounded-lg bg-orange-100 text-orange-800 px-3 py-1.5 text-xs font-semibold hover:bg-orange-200 disabled:opacity-50"
-                          >
-                            Mock Webhook Confirmed
-                          </button>
-                        )}
-                      </div>
-                    </td>
-                  </tr>
-                ))}
+                      </td>
+                      <td className="px-5 py-4">
+                        <div className="flex justify-end flex-wrap gap-2">
+                          {contract.status === 'pending_approval' && hasPlatformPermission('platform.commercial.approve') && (
+                            <button
+                              disabled={isActioning || !hasValidTaxId}
+                              title={!hasValidTaxId ? "Preencha o CPF/CNPJ antes de aprovar" : ""}
+                              onClick={() => { setApproveModalContractId(contract.id); setApprovalReason(''); }}
+                              className="inline-flex items-center gap-1 rounded-lg border border-emerald-200 px-3 py-1.5 text-xs font-semibold text-emerald-700 hover:bg-emerald-50 disabled:opacity-50"
+                            >
+                              <CheckCircle2 className="w-3.5 h-3.5" /> Aprovar
+                            </button>
+                          )}
+                          {contract.status === 'approved' && hasPlatformPermission('platform.billing.manage') && (
+                            <button
+                              disabled={isActioning || !hasValidTaxId}
+                              title={!hasValidTaxId ? "Preencha o CPF/CNPJ antes de iniciar cobrança" : ""}
+                              onClick={() => setStartBillingContractId(contract.id)}
+                              className="inline-flex items-center gap-1 rounded-lg bg-[#202322] px-3 py-1.5 text-xs font-semibold text-white hover:bg-black disabled:opacity-50"
+                            >
+                              <WalletCards className="w-3.5 h-3.5" /> Iniciar Sandbox
+                            </button>
+                          )}
+                          {/* Requisito 5: Requer sandboxMockAvailable e permissão platform.billing.webhooks.manage */}
+                          {contract.status === 'pending_payment' && sandboxMockAvailable && hasPlatformPermission('platform.billing.webhooks.manage') && (
+                            <button
+                              disabled={isActioning}
+                              onClick={() => mockSandboxPayment(contract.id)}
+                              className="inline-flex items-center gap-1 rounded-lg bg-orange-100 text-orange-800 px-3 py-1.5 text-xs font-semibold hover:bg-orange-200 disabled:opacity-50"
+                            >
+                              Simular pagamento Sandbox
+                            </button>
+                          )}
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>
         )}
       </div>
+
+      {/* Modal Editar Dados Fiscais */}
+      {fiscalModalContract && (
+        <div className="fixed inset-0 z-50 bg-black/50 p-4 flex items-center justify-center">
+          <form onSubmit={handleFiscalSubmit} className="w-full max-w-md rounded-2xl bg-white p-6 shadow-2xl space-y-4">
+            <div className="flex items-center justify-between">
+              <h3 className="text-lg font-bold text-[#202322]">Dados Fiscais do Contrato</h3>
+              <button type="button" onClick={() => setFiscalModalContract(null)} aria-label="Fechar"><X className="w-5 h-5" /></button>
+            </div>
+            <label className="block text-sm font-medium text-gray-700">
+              CPF / CNPJ *
+              <input
+                required
+                value={fiscalForm.customer_tax_id}
+                onChange={e => setFiscalForm({ ...fiscalForm, customer_tax_id: e.target.value })}
+                placeholder="000.000.000-00 ou 00.000.000/0001-00"
+                className="mt-1 w-full rounded-xl border border-[#DDD8CF] p-2.5 text-sm font-mono"
+              />
+            </label>
+            <label className="block text-sm font-medium text-gray-700">
+              Nome / Razão Social
+              <input
+                value={fiscalForm.customer_name}
+                onChange={e => setFiscalForm({ ...fiscalForm, customer_name: e.target.value })}
+                className="mt-1 w-full rounded-xl border border-[#DDD8CF] p-2.5 text-sm"
+              />
+            </label>
+            <label className="block text-sm font-medium text-gray-700">
+              E-mail Financeiro
+              <input
+                type="email"
+                value={fiscalForm.customer_email}
+                onChange={e => setFiscalForm({ ...fiscalForm, customer_email: e.target.value })}
+                className="mt-1 w-full rounded-xl border border-[#DDD8CF] p-2.5 text-sm"
+              />
+            </label>
+            <label className="block text-sm font-medium text-gray-700">
+              Telefone Comercial (com DDD)
+              <input
+                value={fiscalForm.customer_phone}
+                onChange={e => setFiscalForm({ ...fiscalForm, customer_phone: e.target.value })}
+                placeholder="(11) 99999-9999"
+                className="mt-1 w-full rounded-xl border border-[#DDD8CF] p-2.5 text-sm"
+              />
+            </label>
+            <div className="flex justify-end gap-3 pt-2">
+              <button type="button" onClick={() => setFiscalModalContract(null)} className="rounded-xl border px-4 py-2 text-sm">
+                Cancelar
+              </button>
+              <button disabled={isActioning || !isValidTaxId(fiscalForm.customer_tax_id)} className="rounded-xl bg-[#B66E45] px-4 py-2 text-sm font-bold text-white disabled:opacity-50">
+                {isActioning ? <Loader2 className="w-4 h-4 animate-spin" /> : 'Salvar Dados Fiscais'}
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
 
       {/* Modal Aprovação de Contrato */}
       {approveModalContractId && (

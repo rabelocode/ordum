@@ -235,20 +235,24 @@ function getBillingConfig(env = process.env) {
 function publicBillingHealth(env = process.env) {
   try {
     const config = getBillingConfig(env);
+    const sandboxMockAvailable = (env.ASAAS_ENV || "sandbox") === "sandbox" && (env.VERCEL_ENV ? env.VERCEL_ENV === "preview" || env.VERCEL_ENV === "development" : env.NODE_ENV !== "production");
     return {
       provider: config.provider,
       environment: config.environment,
       enabled: config.enabled,
       configured: Boolean(config.apiKey && config.webhookToken),
-      webhookUrlConfigured: Boolean(config.webhookUrl)
+      webhookUrlConfigured: Boolean(config.webhookUrl),
+      sandboxMockAvailable
     };
   } catch (error) {
+    const sandboxMockAvailable = (env.ASAAS_ENV || "sandbox") === "sandbox" && (env.VERCEL_ENV ? env.VERCEL_ENV === "preview" || env.VERCEL_ENV === "development" : env.NODE_ENV !== "production");
     return {
       provider: "asaas",
       environment: env.ASAAS_ENV || "sandbox",
       enabled: env.BILLING_ENABLED === "true",
       configured: false,
       webhookUrlConfigured: Boolean(env.ASAAS_WEBHOOK_URL),
+      sandboxMockAvailable,
       error: error instanceof Error ? error.message : "Configura\xE7\xE3o inv\xE1lida"
     };
   }
@@ -555,6 +559,71 @@ var init_domain = __esm({
   }
 });
 
+// src/domain/cpf-cnpj.ts
+var cpf_cnpj_exports = {};
+__export(cpf_cnpj_exports, {
+  isValidTaxId: () => isValidTaxId,
+  maskTaxId: () => maskTaxId,
+  normalizeTaxId: () => normalizeTaxId,
+  taxIdLast4: () => taxIdLast4,
+  validateCnpj: () => validateCnpj,
+  validateCpf: () => validateCpf
+});
+function normalizeTaxId(raw) {
+  return raw.replace(/\D/g, "");
+}
+function validateCpf(digits) {
+  if (digits.length !== 11) return false;
+  if (/^(\d)\1{10}$/.test(digits)) return false;
+  let sum = 0;
+  for (let i = 0; i < 9; i++) sum += parseInt(digits[i], 10) * (10 - i);
+  let rem = sum * 10 % 11;
+  if (rem === 10) rem = 0;
+  if (rem !== parseInt(digits[9], 10)) return false;
+  sum = 0;
+  for (let i = 0; i < 10; i++) sum += parseInt(digits[i], 10) * (11 - i);
+  rem = sum * 10 % 11;
+  if (rem === 10) rem = 0;
+  if (rem !== parseInt(digits[10], 10)) return false;
+  return true;
+}
+function validateCnpj(digits) {
+  if (digits.length !== 14) return false;
+  if (/^(\d)\1{13}$/.test(digits)) return false;
+  const w1 = [5, 4, 3, 2, 9, 8, 7, 6, 5, 4, 3, 2];
+  let sum = 0;
+  for (let i = 0; i < 12; i++) sum += parseInt(digits[i], 10) * w1[i];
+  let rem = sum % 11;
+  const d1 = rem < 2 ? 0 : 11 - rem;
+  if (d1 !== parseInt(digits[12], 10)) return false;
+  const w2 = [6, 5, 4, 3, 2, 9, 8, 7, 6, 5, 4, 3, 2];
+  sum = 0;
+  for (let i = 0; i < 13; i++) sum += parseInt(digits[i], 10) * w2[i];
+  rem = sum % 11;
+  const d2 = rem < 2 ? 0 : 11 - rem;
+  if (d2 !== parseInt(digits[13], 10)) return false;
+  return true;
+}
+function isValidTaxId(raw) {
+  const digits = normalizeTaxId(raw);
+  if (digits.length === 11) return validateCpf(digits);
+  if (digits.length === 14) return validateCnpj(digits);
+  return false;
+}
+function maskTaxId(raw) {
+  const d = normalizeTaxId(raw);
+  if (d.length === 11) return `***.***.${d.slice(6, 9)}-${d.slice(9)}`;
+  if (d.length === 14) return `**.***.**/${d.slice(8, 12)}-${d.slice(12)}`;
+  return `****${d.slice(-4)}`;
+}
+function taxIdLast4(raw) {
+  return normalizeTaxId(raw).slice(-4);
+}
+var init_cpf_cnpj = __esm({
+  "src/domain/cpf-cnpj.ts"() {
+  }
+});
+
 // src/server/billing/router.ts
 var router_exports = {};
 __export(router_exports, {
@@ -575,6 +644,7 @@ __export(router_exports, {
 import { createHash, timingSafeEqual } from "node:crypto";
 import { Router as Router6 } from "express";
 import { waitUntil } from "@vercel/functions";
+import { z as z5 } from "zod";
 function webhookTokenMatches(actual, expected) {
   if (!actual || !expected) return false;
   const left = Buffer.from(actual);
@@ -709,7 +779,11 @@ function buildDeterministicSandboxEvent(contractId, amount_cents, external_refer
   return { fakePaymentId, fakeEventId, fakePayload };
 }
 function validateSandboxEnv(envNode, envVercel, envAsaas) {
-  return !(envNode === "production" || envVercel === "production" || envAsaas !== "sandbox");
+  if (envAsaas !== "sandbox") return false;
+  if (envVercel) {
+    return envVercel === "preview" || envVercel === "development";
+  }
+  return envNode !== "production";
 }
 async function executeProposalItemsRollback(db, reqUser, proposalId, itemsErrorMsg) {
   const { error: delError } = await db.from("commercial_proposals").delete().eq("id", proposalId);
@@ -1436,8 +1510,15 @@ function createBillingRouters(getSupabaseAdmin2) {
   });
   adminRouter.post("/commercial/contracts/:id/approve", authenticateRequest, resolvePlatformContext, requirePlatformPermission("platform.commercial.approve"), async (req, res) => {
     const db = getSupabaseAdmin2();
-    const { data: contract, error: readError } = await db.from("commercial_contracts").select("*").eq("id", req.params.id).single();
-    if (readError) return res.status(404).json({ error: "Contrato n\xE3o encontrado." });
+    const { data: contract, error: readError } = await db.from("commercial_contracts").select("*, commercial_contract_items(*)").eq("id", req.params.id).single();
+    if (readError || !contract) return res.status(404).json({ error: "Contrato n\xE3o encontrado." });
+    const { isValidTaxId: isValidTaxId2 } = await Promise.resolve().then(() => (init_cpf_cnpj(), cpf_cnpj_exports));
+    if (!contract.customer_tax_id || !isValidTaxId2(contract.customer_tax_id)) {
+      return res.status(422).json({ error: "CPF/CNPJ do contrato \xE9 ausente ou inv\xE1lido. Atualize os dados fiscais antes de aprovar." });
+    }
+    if (!contract.commercial_contract_items || contract.commercial_contract_items.length === 0) {
+      return res.status(422).json({ error: "Contrato n\xE3o possui itens comerciais configurados." });
+    }
     if (req.platformContext.role.key !== "admin" && !req.platformContext.managedTeams.some((team) => team.id === contract.team_id)) {
       return res.status(403).json({ error: "Contrato fora da sua al\xE7ada." });
     }
@@ -1474,36 +1555,188 @@ function createBillingRouters(getSupabaseAdmin2) {
     const { processStoredEvent: processStoredEvent2 } = await Promise.resolve().then(() => (init_router(), router_exports));
     return mockSandboxPaymentCore(req, res, db, processStoredEvent2);
   });
+  adminRouter.get("/billing/diagnostics", authenticateRequest, resolvePlatformContext, requirePlatformPermission("platform.billing.manage"), async (req, res) => {
+    return res.json(publicBillingHealth());
+  });
+  adminRouter.patch("/commercial/contracts/:id/fiscal", authenticateRequest, resolvePlatformContext, requirePlatformPermission("platform.commercial.manage"), async (req, res) => {
+    const db = getSupabaseAdmin2();
+    const { data: contract, error: readError } = await db.from("commercial_contracts").select("*").eq("id", req.params.id).single();
+    if (readError || !contract) return res.status(404).json({ error: "Contrato n\xE3o encontrado." });
+    if (req.platformContext.role.key !== "admin" && !canReadAssignedResource(req.platformContext, contract, "member_client_visibility")) {
+      return res.status(403).json({ error: "Contrato fora do seu escopo." });
+    }
+    if (contract.status !== "pending_approval" && contract.status !== "approved") {
+      return res.status(409).json({ error: "Dados fiscais s\xF3 podem ser alterados nos status pending_approval ou approved." });
+    }
+    const { data: existingCustomer } = await db.from("billing_customers").select("id").eq("contract_id", contract.id).maybeSingle();
+    const { data: existingSub } = await db.from("billing_subscriptions").select("id").eq("contract_id", contract.id).maybeSingle();
+    if (existingCustomer || existingSub) {
+      return res.status(409).json({ error: "N\xE3o \xE9 poss\xEDvel alterar dados fiscais ap\xF3s integra\xE7\xE3o financeira iniciada." });
+    }
+    const schema = z5.object({
+      customer_tax_id: z5.string().transform((v) => v.replace(/\D/g, "")),
+      customer_phone: z5.string().optional().nullable(),
+      customer_name: z5.string().optional().nullable(),
+      customer_email: z5.string().email("E-mail financeiro inv\xE1lido").optional().nullable()
+    });
+    const parsed = schema.safeParse(req.body);
+    if (!parsed.success) {
+      return res.status(422).json({ error: parsed.error.errors[0]?.message || "Dados fiscais inv\xE1lidos." });
+    }
+    const { customer_tax_id, customer_phone, customer_name, customer_email } = parsed.data;
+    const { isValidTaxId: isValidTaxId2, maskTaxId: maskTaxId2 } = await Promise.resolve().then(() => (init_cpf_cnpj(), cpf_cnpj_exports));
+    if (!isValidTaxId2(customer_tax_id)) {
+      return res.status(422).json({ error: "CPF ou CNPJ inv\xE1lido. Verifique os d\xEDgitos verificadores." });
+    }
+    if (customer_phone) {
+      const phoneDigits = customer_phone.replace(/\D/g, "");
+      if (phoneDigits.length < 10 || phoneDigits.length > 11) {
+        return res.status(422).json({ error: "Telefone comercial deve possuir 10 ou 11 d\xEDgitos com DDD." });
+      }
+    }
+    const beforeAudit = {
+      customer_tax_id_masked: maskTaxId2(contract.customer_tax_id || ""),
+      customer_name: contract.customer_name,
+      customer_email: contract.customer_email,
+      customer_phone: contract.customer_phone
+    };
+    const updates = { customer_tax_id };
+    if (customer_phone !== void 0) updates.customer_phone = customer_phone;
+    if (customer_name) updates.customer_name = customer_name;
+    if (customer_email) updates.customer_email = customer_email;
+    const { data: updated, error: updateError } = await db.from("commercial_contracts").update(updates).eq("id", contract.id).select("*").single();
+    if (updateError) return res.status(500).json({ error: "Falha ao atualizar dados fiscais: " + updateError.message });
+    const afterAudit = {
+      customer_tax_id_masked: maskTaxId2(updated.customer_tax_id || ""),
+      customer_name: updated.customer_name,
+      customer_email: updated.customer_email,
+      customer_phone: updated.customer_phone
+    };
+    await db.from("platform_audit_logs").insert({
+      actor_user_id: req.user.id,
+      action: "commercial.contract.fiscal_updated",
+      entity_type: "commercial_contracts",
+      entity_id: contract.id,
+      team_id: contract.team_id,
+      severity: "info",
+      ...auditContext(req, { result: "success", before: beforeAudit, after: afterAudit })
+    });
+    return res.json(updated);
+  });
   adminRouter.post("/commercial/contracts/:id/start-billing", authenticateRequest, resolvePlatformContext, requirePlatformPermission("platform.billing.manage"), async (req, res) => {
+    const db = getSupabaseAdmin2();
+    const { data: contract, error: contractErr } = await db.from("commercial_contracts").select("*, commercial_contract_items(*)").eq("id", req.params.id).single();
+    if (contractErr || !contract) {
+      return res.status(404).json({ error: "Contrato n\xE3o encontrado." });
+    }
+    const { data: existingSubscription } = await db.from("billing_subscriptions").select("*").eq("contract_id", contract.id).maybeSingle();
+    if (contract.status === "pending_payment" || contract.status === "active") {
+      if (existingSubscription) {
+        return res.status(200).json(existingSubscription);
+      }
+      await db.from("platform_audit_logs").insert({
+        actor_user_id: req.user.id,
+        action: "system.consistency.critical_error",
+        entity_type: "commercial_contracts",
+        entity_id: contract.id,
+        severity: "critical",
+        metadata: { reason: "Contrato em status pago/pendente sem registro de assinatura local." }
+      });
+      return res.status(500).json({ error: "Incoer\xEAncia cr\xEDtica: contrato em cobran\xE7a sem assinatura vinculada." });
+    }
+    if (contract.status !== "approved") {
+      return res.status(409).json({ error: `Contrato em status '${contract.status}' n\xE3o pode iniciar cobran\xE7a. Apenas contratos aprovados s\xE3o permitidos.` });
+    }
+    if (existingSubscription) {
+      const transitioned2 = await db.rpc("admin_transition_control_plane", {
+        p_entity_type: "contract",
+        p_entity_id: contract.id,
+        p_to_status: "pending_payment",
+        p_actor_user_id: req.user.id,
+        p_reason: "Recupera\xE7\xE3o idempotente de cobran\xE7a iniciada",
+        p_team_id: contract.team_id || null,
+        p_tenant_id: contract.tenant_id || null,
+        p_request_id: req.requestId || null
+      });
+      if (transitioned2.error) {
+        await db.from("platform_audit_logs").insert({
+          actor_user_id: req.user.id,
+          action: "system.consistency.error",
+          entity_type: "commercial_contracts",
+          entity_id: contract.id,
+          severity: "critical",
+          metadata: { reason: "Falha no admin_transition_control_plane na recupera\xE7\xE3o", error: transitioned2.error.message }
+        });
+        return res.status(500).json({ error: "Falha na transi\xE7\xE3o de status do contrato: " + transitioned2.error.message });
+      }
+      return res.status(200).json(existingSubscription);
+    }
+    if (!contract.commercial_contract_items || contract.commercial_contract_items.length === 0) {
+      return res.status(422).json({ error: "Contrato n\xE3o possui itens comerciais configurados." });
+    }
+    const rawTaxId = contract.customer_tax_id || "";
+    const { isValidTaxId: isValidTaxId2, normalizeTaxId: normalizeTaxId2 } = await Promise.resolve().then(() => (init_cpf_cnpj(), cpf_cnpj_exports));
+    if (!rawTaxId || !isValidTaxId2(rawTaxId)) {
+      return res.status(422).json({ error: "CPF/CNPJ do contrato \xE9 ausente ou inv\xE1lido. Atualize os dados fiscais antes de iniciar cobran\xE7a." });
+    }
+    const cleanTaxId = normalizeTaxId2(rawTaxId);
+    if (contract.customer_phone) {
+      const phoneDigits = contract.customer_phone.replace(/\D/g, "");
+      if (phoneDigits.length < 10 || phoneDigits.length > 11) {
+        return res.status(422).json({ error: "Telefone comercial inv\xE1lido (deve conter 10 ou 11 d\xEDgitos com DDD)." });
+      }
+    }
+    if (contract.customer_email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(contract.customer_email)) {
+      return res.status(422).json({ error: "E-mail comercial do contrato \xE9 inv\xE1lido." });
+    }
+    const nextDueDate = req.body?.next_due_date;
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(nextDueDate || "")) {
+      return res.status(400).json({ error: "next_due_date \xE9 obrigat\xF3rio no formato YYYY-MM-DD." });
+    }
+    let config;
     try {
-      const config = getBillingConfig();
-      const provider = new AsaasBillingProvider(config);
-      const db = getSupabaseAdmin2();
-      const { data: contract, error } = await db.from("commercial_contracts").select("*").eq("id", req.params.id).single();
-      if (error || !contract) return res.status(404).json({ error: "Contrato n\xE3o encontrado." });
-      if (contract.status !== "approved") return res.status(409).json({ error: "O contrato precisa estar aprovado." });
-      if (!contract.customer_tax_id) return res.status(400).json({ error: "CPF/CNPJ \xE9 obrigat\xF3rio para criar o cliente no Asaas." });
-      let { data: customer } = await db.from("billing_customers").select("*").eq("contract_id", contract.id).maybeSingle();
-      if (!customer) {
-        const remote = await provider.findCustomerByExternalReference(contract.external_reference) || await provider.createCustomer({ name: contract.customer_name, email: contract.customer_email, cpfCnpj: contract.customer_tax_id, mobilePhone: contract.customer_phone, externalReference: contract.external_reference });
-        const saved = await db.from("billing_customers").insert({
+      config = getBillingConfig();
+    } catch (err) {
+      return res.status(503).json({ error: "Configura\xE7\xE3o Asaas ausente ou inv\xE1lida: " + err.message });
+    }
+    let provider;
+    try {
+      provider = new AsaasBillingProvider(config);
+    } catch (err) {
+      return res.status(503).json({ error: "Integra\xE7\xE3o Asaas indispon\xEDvel: " + err.message });
+    }
+    let customer;
+    try {
+      const { data: localCustomer } = await db.from("billing_customers").select("*").eq("contract_id", contract.id).maybeSingle();
+      if (localCustomer) {
+        customer = localCustomer;
+      } else {
+        const remoteCustomer = await provider.findCustomerByExternalReference(contract.external_reference) || await provider.createCustomer({
+          name: contract.customer_name,
+          email: contract.customer_email,
+          cpfCnpj: cleanTaxId,
+          mobilePhone: contract.customer_phone,
+          externalReference: contract.external_reference
+        });
+        const savedCust = await db.from("billing_customers").insert({
           contract_id: contract.id,
           lead_id: contract.lead_id,
-          provider_customer_id: remote.id,
+          provider_customer_id: remoteCustomer.id,
           external_reference: contract.external_reference,
           name: contract.customer_name,
           email: contract.customer_email,
-          tax_id_last4: contract.customer_tax_id.replace(/\D/g, "").slice(-4),
+          tax_id_last4: cleanTaxId.slice(-4),
           provider_status: "ACTIVE"
         }).select().single();
-        if (saved.error) throw saved.error;
-        customer = saved.data;
+        if (savedCust.error) throw new Error("Falha ao salvar cliente localmente: " + savedCust.error.message);
+        customer = savedCust.data;
       }
-      const nextDueDate = req.body.next_due_date;
-      if (!/^\d{4}-\d{2}-\d{2}$/.test(nextDueDate || "")) return res.status(400).json({ error: "next_due_date deve usar YYYY-MM-DD." });
-      const { data: existingSubscription } = await db.from("billing_subscriptions").select("*").eq("contract_id", contract.id).maybeSingle();
-      if (existingSubscription) return res.status(200).json(existingSubscription);
-      const remoteSubscription = await provider.findSubscriptionByExternalReference(contract.external_reference) || await provider.createSubscription({
+    } catch (err) {
+      return res.status(502).json({ error: "Rejei\xE7\xE3o do provedor Asaas ao criar/buscar cliente: " + err.message });
+    }
+    let remoteSubscription;
+    try {
+      remoteSubscription = await provider.findSubscriptionByExternalReference(contract.external_reference) || await provider.createSubscription({
         customerId: customer.provider_customer_id,
         billingType: contract.billing_type,
         cycle: contract.cycle,
@@ -1512,34 +1745,54 @@ function createBillingRouters(getSupabaseAdmin2) {
         externalReference: contract.external_reference,
         description: `Contrato Ordum #${contract.contract_number}`
       });
-      const savedSubscription = await db.from("billing_subscriptions").insert({
-        contract_id: contract.id,
-        customer_id: customer.id,
-        provider_subscription_id: remoteSubscription.id,
-        external_reference: contract.external_reference,
-        status: "pending",
-        provider_status: remoteSubscription.status || null,
-        cycle: contract.cycle,
-        billing_type: contract.billing_type,
-        amount_cents: contract.amount_cents,
-        next_due_date: nextDueDate
-      }).select().single();
-      if (savedSubscription.error) throw savedSubscription.error;
-      await db.rpc("admin_transition_control_plane", {
-        p_entity_type: "contract",
-        p_entity_id: contract.id,
-        p_to_status: "pending_payment",
-        p_actor_user_id: req.user.id,
-        p_reason: "Cobran\xE7a iniciada no Sandbox",
-        p_team_id: contract.team_id || null,
-        p_tenant_id: contract.tenant_id || null,
-        p_request_id: req.requestId || null
-      });
-      await db.from("platform_audit_logs").insert({ actor_user_id: req.user.id, action: "billing.subscription.created", entity_type: "billing_subscriptions", entity_id: savedSubscription.data.id, team_id: contract.team_id, severity: "info" });
-      return res.status(201).json(savedSubscription.data);
-    } catch (error) {
-      return res.status(503).json({ error: cleanError(error) });
+    } catch (err) {
+      return res.status(502).json({ error: "Rejei\xE7\xE3o do provedor Asaas ao criar assinatura: " + err.message });
     }
+    const savedSubscription = await db.from("billing_subscriptions").insert({
+      contract_id: contract.id,
+      customer_id: customer.id,
+      provider_subscription_id: remoteSubscription.id,
+      external_reference: contract.external_reference,
+      status: "pending",
+      provider_status: remoteSubscription.status || null,
+      cycle: contract.cycle,
+      billing_type: contract.billing_type,
+      amount_cents: contract.amount_cents,
+      next_due_date: nextDueDate
+    }).select().single();
+    if (savedSubscription.error) {
+      return res.status(500).json({ error: "Falha ao salvar assinatura localmente: " + savedSubscription.error.message });
+    }
+    const transitioned = await db.rpc("admin_transition_control_plane", {
+      p_entity_type: "contract",
+      p_entity_id: contract.id,
+      p_to_status: "pending_payment",
+      p_actor_user_id: req.user.id,
+      p_reason: "Cobran\xE7a iniciada no Sandbox",
+      p_team_id: contract.team_id || null,
+      p_tenant_id: contract.tenant_id || null,
+      p_request_id: req.requestId || null
+    });
+    if (transitioned.error) {
+      await db.from("platform_audit_logs").insert({
+        actor_user_id: req.user.id,
+        action: "system.consistency.critical_error",
+        entity_type: "commercial_contracts",
+        entity_id: contract.id,
+        severity: "critical",
+        metadata: { reason: "Assinatura criada no Asaas mas transi\xE7\xE3o RPC falhou", error: transitioned.error.message, subscription_id: savedSubscription.data.id }
+      });
+      return res.status(500).json({ error: "Assinatura gerada, por\xE9m falhou transi\xE7\xE3o no control plane: " + transitioned.error.message });
+    }
+    await db.from("platform_audit_logs").insert({
+      actor_user_id: req.user.id,
+      action: "billing.subscription.created",
+      entity_type: "billing_subscriptions",
+      entity_id: savedSubscription.data.id,
+      team_id: contract.team_id,
+      severity: "info"
+    });
+    return res.status(201).json(savedSubscription.data);
   });
   adminRouter.post("/billing/subscriptions/:id/cancel", authenticateRequest, resolvePlatformContext, requirePlatformPermission("platform.billing.manage"), async (req, res) => {
     if (req.platformContext.role?.key !== "admin") return res.status(403).json({ error: "Somente admin pode cancelar recorr\xEAncia." });
@@ -3122,26 +3375,26 @@ init_router();
 // src/server/integrityRouter.ts
 init_tenantAuth();
 import express from "express";
-import { z as z5 } from "zod";
-var stateTransitionSchema = z5.object({
-  action: z5.enum(["received", "triage", "in_review", "waiting", "resolved", "archived"]),
-  note: z5.string().optional()
+import { z as z6 } from "zod";
+var stateTransitionSchema = z6.object({
+  action: z6.enum(["received", "triage", "in_review", "waiting", "resolved", "archived"]),
+  note: z6.string().optional()
 });
-var assignmentSchema = z5.object({
-  membershipId: z5.string().uuid()
+var assignmentSchema = z6.object({
+  membershipId: z6.string().uuid()
 });
-var messageSchema = z5.object({
-  body: z5.string().min(1, "Mensagem vazia").max(5e3),
-  visible_to_reporter: z5.boolean().default(false)
+var messageSchema = z6.object({
+  body: z6.string().min(1, "Mensagem vazia").max(5e3),
+  visible_to_reporter: z6.boolean().default(false)
 });
-var listQuerySchema = z5.object({
-  status: z5.string().optional(),
-  risk_level: z5.string().optional(),
-  category_id: z5.string().uuid().optional(),
-  channel_id: z5.string().uuid().optional(),
-  assigned_to: z5.string().uuid().optional(),
-  days_open_min: z5.string().regex(/^\d+$/).transform(Number).optional()
-}).catchall(z5.any());
+var listQuerySchema = z6.object({
+  status: z6.string().optional(),
+  risk_level: z6.string().optional(),
+  category_id: z6.string().uuid().optional(),
+  channel_id: z6.string().uuid().optional(),
+  assigned_to: z6.string().uuid().optional(),
+  days_open_min: z6.string().regex(/^\d+$/).transform(Number).optional()
+}).catchall(z6.any());
 function createIntegrityRouter(getSupabaseAdmin2, authOverrides) {
   const router = express.Router();
   const auth = authOverrides || { authenticateRequest, resolveTenantContext, requireTenantSolution, requireTenantPermission };

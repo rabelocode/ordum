@@ -332,7 +332,14 @@ test('Functional Recovery - Mandatory Test Suite', async (suite) => {
         select: () => ({
           eq: () => ({
             single: async () => ({
-              data: { id: 'cnt-1', status: 'pending_approval', team_id: 'team-1', amount_cents: 1000 },
+              data: {
+                id: 'cnt-1',
+                status: 'pending_approval',
+                team_id: 'team-1',
+                amount_cents: 1000,
+                customer_tax_id: '11144477735',
+                commercial_contract_items: [{ id: 'item-1', solution_id: 'sol-1' }]
+              },
               error: null,
             }),
           }),
