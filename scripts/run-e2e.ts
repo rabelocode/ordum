@@ -6,6 +6,9 @@ const SERVICE_ROLE_KEY = process.env.SUPABASE_SECRET_KEY || '';
 const APP_URL = process.env.APP_URL || 'https://ordum-git-fix-admin-functional-recovery-ordum.vercel.app';
 const ASAAS_API_KEY = process.env.ASAAS_API_KEY || '';
 
+const E2E_OPERATOR_EMAIL = process.env.E2E_OPERATOR_EMAIL || '';
+const E2E_OPERATOR_PASSWORD = process.env.E2E_OPERATOR_PASSWORD || '';
+
 async function runE2ETest() {
   if (!SERVICE_ROLE_KEY) {
     throw new Error('SUPABASE_SECRET_KEY precisa estar definida nas variáveis de ambiente.');
@@ -19,7 +22,58 @@ async function runE2ETest() {
     auth: { autoRefreshToken: false, persistSession: false },
   });
 
-  // 0. Obter ou criar role admin
+  // -------------------------------------------------------------------------
+  // PONTO 1: PREFLIGHT RIGOROSO ANTES DE CRIAR QUAISQUER DADOS / USUÁRIOS
+  // -------------------------------------------------------------------------
+  console.log('--- ETAPA 1: PREFLIGHT DIAGNOSTICS (Operador Fixo) ---');
+
+  if (!E2E_OPERATOR_EMAIL || !E2E_OPERATOR_PASSWORD) {
+    console.error('ABORTANDO TESTE E2E: Variáveis E2E_OPERATOR_EMAIL e E2E_OPERATOR_PASSWORD são obrigatórias para o preflight.');
+    process.exit(1);
+  }
+
+  // 1. Autenticar conta operadora fixa existente
+  const opClient = createClient(SUPABASE_URL, SERVICE_ROLE_KEY, { auth: { autoRefreshToken: false, persistSession: false } });
+  const { data: opSession, error: opErr } = await opClient.auth.signInWithPassword({
+    email: E2E_OPERATOR_EMAIL,
+    password: E2E_OPERATOR_PASSWORD,
+  });
+
+  if (opErr || !opSession.session) {
+    console.error('ABORTANDO TESTE E2E: Falha ao autenticar a conta operadora fixa do preflight:', opErr?.message);
+    process.exit(1);
+  }
+
+  const opToken = opSession.session.access_token;
+  const diagRes = await fetch(`${APP_URL}/api/admin/billing/diagnostics`, {
+    headers: { Authorization: `Bearer ${opToken}` },
+  });
+
+  const diag = await diagRes.json().catch(() => ({}));
+  console.log('Resposta sanitizada de /api/admin/billing/diagnostics:', JSON.stringify(diag, null, 2));
+
+  if (diagRes.status !== 200) {
+    console.error(`ABORTANDO TESTE E2E: Preflight HTTP ${diagRes.status}`, diag);
+    process.exit(1);
+  }
+
+  // 3. Validar se a configuração está 100% pronta
+  if (
+    diag.enabled !== true ||
+    diag.configured !== true ||
+    diag.environment !== 'sandbox' ||
+    diag.webhookUrlConfigured !== true ||
+    diag.sandboxMockAvailable !== true
+  ) {
+    console.error('ABORTANDO TESTE E2E: Diagnóstico de billing não atende os requisitos de preflight!', diag);
+    process.exit(1);
+  }
+
+  console.log('✓ Preflight aprovado com SUCESSO TOTAL! Prosseguindo com a criação de usuários efêmeros...');
+
+  // -------------------------------------------------------------------------
+  // DEPOIS DO PREFLIGHT: Criar os usuários efêmeros (Criador + Aprovador 4 Olhos)
+  // -------------------------------------------------------------------------
   let { data: adminRole } = await db.from('platform_roles').select('id').eq('key', 'admin').maybeSingle();
   if (!adminRole) {
     const { data: insertedRole } = await db.from('platform_roles').insert({ key: 'admin', name: 'Administrador' }).select('id').single();
@@ -40,9 +94,7 @@ async function runE2ETest() {
   let createdAsaasSubId: string | null = null;
 
   try {
-    // -------------------------------------------------------------------------
-    // Setup Usuários E2E (Criador + Aprovador por 4 olhos)
-    // -------------------------------------------------------------------------
+    console.log('--- ETAPA 2: SETUP USUÁRIOS EFÊMEROS E2E ---');
     const { data: authUser, error: authErr } = await db.auth.admin.createUser({
       email: testEmail, password, email_confirm: true, user_metadata: { name: 'E2E Test Admin', runId },
     });
@@ -63,7 +115,6 @@ async function runE2ETest() {
       user_id: approverUser.id, role_id: adminRole.id, relationship_type: 'partner', status: 'active',
     });
 
-    // Autenticar tokens reais de usuário
     const client = createClient(SUPABASE_URL, SERVICE_ROLE_KEY, { auth: { autoRefreshToken: false, persistSession: false } });
     const { data: creatorSession } = await client.auth.signInWithPassword({ email: testEmail, password });
     const { data: approverSession } = await client.auth.signInWithPassword({ email: approverEmail, password });
@@ -91,35 +142,12 @@ async function runE2ETest() {
       return { status: res.status, body };
     };
 
-    console.log('✓ Usuários E2E criados e autenticados.');
+    console.log('✓ Usuários efêmeros E2E criados e autenticados com sucesso.');
 
     // -------------------------------------------------------------------------
-    // 1. Preflight Diagnostics (Ponto 5)
+    // 3. Lead Fixture & Transição
     // -------------------------------------------------------------------------
-    console.log('--- ETAPA 1: PREFLIGHT DIAGNOSTICS ---');
-    const diagRes = await creatorApi('/api/admin/billing/diagnostics');
-    console.log('Resposta sanitizada de /api/admin/billing/diagnostics:', JSON.stringify(diagRes.body, null, 2));
-
-    if (diagRes.status !== 200) {
-      throw new Error(`Preflight falhou HTTP ${diagRes.status}: ${JSON.stringify(diagRes.body)}`);
-    }
-
-    const diag = diagRes.body;
-    if (
-      diag.enabled !== true ||
-      diag.configured !== true ||
-      diag.environment !== 'sandbox' ||
-      diag.webhookUrlConfigured !== true ||
-      diag.sandboxMockAvailable !== true
-    ) {
-      throw new Error(`ABORTANDO TESTE E2E: Diagnóstico de billing não atende os requisitos de preflight!\n${JSON.stringify(diag, null, 2)}`);
-    }
-    console.log('✓ Preflight aprovado com sucesso!');
-
-    // -------------------------------------------------------------------------
-    // 2. Lead Fixture & Transição
-    // -------------------------------------------------------------------------
-    console.log('--- ETAPA 2: LEAD & TRANSIÇÃO ---');
+    console.log('--- ETAPA 3: LEAD & TRANSIÇÃO ---');
     const { data: lead, error: leadErr } = await db.from('marketing_leads').insert({
       name: `Cliente E2E (${runId})`,
       email: testEmail,
@@ -145,9 +173,9 @@ async function runE2ETest() {
     if (transLead.status !== 200) throw new Error(`Falha na transição do lead: ${JSON.stringify(transLead.body)}`);
 
     // -------------------------------------------------------------------------
-    // 3. Proposta (Criação, Aprovação 4 Olhos, Aceite)
+    // 4. Proposta (Criação, Aprovação 4 Olhos, Aceite)
     // -------------------------------------------------------------------------
-    console.log('--- ETAPA 3: PROPOSTA ---');
+    console.log('--- ETAPA 4: PROPOSTA ---');
     const { data: plans } = await db.from('billing_plans').select('id, billing_plan_prices(cycle, billing_type)').eq('active', true).limit(1);
     if (!plans || plans.length === 0) throw new Error('Nenhum plano ativo no banco');
     const plan = plans[0];
@@ -179,9 +207,9 @@ async function runE2ETest() {
     if (accProp.status !== 200) throw new Error(`Falha ao aceitar proposta: ${JSON.stringify(accProp.body)}`);
 
     // -------------------------------------------------------------------------
-    // 4. Contrato (Gerar com CPF/CNPJ, Aprovação 4 Olhos)
+    // 5. Contrato (Gerar com CPF/CNPJ, Aprovação 4 Olhos)
     // -------------------------------------------------------------------------
-    console.log('--- ETAPA 4: CONTRATO ---');
+    console.log('--- ETAPA 5: CONTRATO ---');
     const validCpf = '11144477735';
     const createContract = await creatorApi(`/api/admin/commercial/proposals/${createdProposalId}/create-contract`, {
       method: 'POST', body: JSON.stringify({ customer_tax_id: validCpf }),
@@ -200,9 +228,9 @@ async function runE2ETest() {
     if (appCnt.status !== 200) throw new Error(`Falha ao aprovar contrato: ${JSON.stringify(appCnt.body)}`);
 
     // -------------------------------------------------------------------------
-    // 5. Iniciar Cobrança Sandbox (start-billing) + Idempotência (Ponto 11)
+    // 6. Iniciar Cobrança Sandbox (start-billing) + Idempotência (Ponto 9)
     // -------------------------------------------------------------------------
-    console.log('--- ETAPA 5: COBRANÇA SANDBOX & IDEMPOTÊNCIA ---');
+    console.log('--- ETAPA 6: COBRANÇA SANDBOX & IDEMPOTÊNCIA ---');
     const tomorrow = new Date(Date.now() + 86400000).toISOString().slice(0, 10);
     const startBilling = await creatorApi(`/api/admin/commercial/contracts/${createdContractId}/start-billing`, {
       method: 'POST', body: JSON.stringify({ next_due_date: tomorrow }),
@@ -214,7 +242,6 @@ async function runE2ETest() {
     const { data: custLocal } = await db.from('billing_customers').select('provider_customer_id').eq('contract_id', createdContractId).single();
     createdAsaasCustomerId = custLocal?.provider_customer_id || null;
 
-    // Mascarar IDs para relatório (Ponto 11)
     const maskedCustomer = createdAsaasCustomerId ? `${createdAsaasCustomerId.slice(0, 4)}***${createdAsaasCustomerId.slice(-4)}` : 'N/A';
     const maskedSubscription = createdAsaasSubId ? `${createdAsaasSubId.slice(0, 4)}***${createdAsaasSubId.slice(-4)}` : 'N/A';
 
@@ -233,9 +260,9 @@ async function runE2ETest() {
     console.log('✓ Idempotência comprovada com sucesso (0 assinaturas duplicadas).');
 
     // -------------------------------------------------------------------------
-    // 6. Simular Pagamento Sandbox & Provisionamento de Tenant / Onboarding
+    // 7. Simular Pagamento Sandbox & Provisionamento de Tenant / Onboarding
     // -------------------------------------------------------------------------
-    console.log('--- ETAPA 6: MOCK PAYMENT & PROVISIONAMENTO ---');
+    console.log('--- ETAPA 7: MOCK PAYMENT & PROVISIONAMENTO ---');
     const mockPayment = await creatorApi(`/api/admin/commercial/contracts/${createdContractId}/mock-sandbox-payment`, {
       method: 'POST',
     });
@@ -253,7 +280,6 @@ async function runE2ETest() {
     const { data: tenantSolutions } = await db.from('tenant_solutions').select('*, solutions(name)').eq('tenant_id', createdTenantId);
     if (!tenantSolutions || tenantSolutions.length === 0) throw new Error('Nenhuma solução ativada no tenant!');
 
-    // Ponto 3: Tabela real é onboarding_runs (não tenant_onboarding_runs)
     const { data: onboardingRun } = await db.from('onboarding_runs').select('*').eq('tenant_id', createdTenantId).maybeSingle();
     if (!onboardingRun) throw new Error('Registro na tabela onboarding_runs não foi criado!');
 
@@ -267,83 +293,137 @@ async function runE2ETest() {
 
   } finally {
     // -------------------------------------------------------------------------
-    // 7. Cleanup Resiliente (Ponto 4) - Cada exclusão com try/catch isolado
+    // PONTO 3: CLEANUP VERIFICÁVEL COM TRATAMENTO DE ERROS E AUDITORIA DE RESÍDUOS
     // -------------------------------------------------------------------------
-    console.log('--- ETAPA 7: CLEANUP RESILIENTE DE DADOS ---');
+    console.log('--- ETAPA 8: CLEANUP VERIFICÁVEL DE DADOS ---');
+    const cleanupErrors: string[] = [];
 
-    // 7.1. Remover cliente e assinatura remota do Asaas Sandbox via API
+    // 1. Limpeza no Asaas Sandbox com validação de response.ok
     if (ASAAS_API_KEY && (createdAsaasSubId || createdAsaasCustomerId)) {
-      try {
-        if (createdAsaasSubId) {
-          await fetch(`https://api-sandbox.asaas.com/v3/subscriptions/${createdAsaasSubId}`, {
+      if (createdAsaasSubId) {
+        try {
+          const subDel = await fetch(`https://api-sandbox.asaas.com/v3/subscriptions/${createdAsaasSubId}`, {
             method: 'DELETE', headers: { 'access_token': ASAAS_API_KEY }
           });
-          console.log('✓ Cleanup Asaas: Assinatura remota removida');
-        }
-      } catch (e) { console.error('Aviso cleanup Asaas sub:', e); }
+          if (!subDel.ok) cleanupErrors.push(`Falha ao deletar assinatura Asaas ${createdAsaasSubId}: HTTP ${subDel.status}`);
+          else console.log('✓ Cleanup Asaas: Assinatura remota removida');
+        } catch (e: any) { cleanupErrors.push(`Exceção cleanup Asaas sub: ${e.message}`); }
+      }
 
-      try {
-        if (createdAsaasCustomerId) {
-          await fetch(`https://api-sandbox.asaas.com/v3/customers/${createdAsaasCustomerId}`, {
+      if (createdAsaasCustomerId) {
+        try {
+          const custDel = await fetch(`https://api-sandbox.asaas.com/v3/customers/${createdAsaasCustomerId}`, {
             method: 'DELETE', headers: { 'access_token': ASAAS_API_KEY }
           });
-          console.log('✓ Cleanup Asaas: Cliente remoto removido');
-        }
-      } catch (e) { console.error('Aviso cleanup Asaas customer:', e); }
+          if (!custDel.ok) cleanupErrors.push(`Falha ao deletar cliente Asaas ${createdAsaasCustomerId}: HTTP ${custDel.status}`);
+          else console.log('✓ Cleanup Asaas: Cliente remoto removido');
+        } catch (e: any) { cleanupErrors.push(`Exceção cleanup Asaas customer: ${e.message}`); }
+      }
     }
 
     if (createdTenantId) {
-      try { await db.from('onboarding_items').delete().eq('tenant_id', createdTenantId); console.log('✓ Cleanup: onboarding_items'); } catch (e) {}
-      try { await db.from('onboarding_runs').delete().eq('tenant_id', createdTenantId); console.log('✓ Cleanup: onboarding_runs'); } catch (e) {}
-      try {
-        const { data: mList } = await db.from('memberships').select('id').eq('tenant_id', createdTenantId);
-        for (const m of mList || []) {
-          await db.from('membership_roles').delete().eq('membership_id', m.id);
-        }
-        await db.from('memberships').delete().eq('tenant_id', createdTenantId);
-        console.log('✓ Cleanup: memberships');
-      } catch (e) {}
-      try { await db.from('tenant_solutions').delete().eq('tenant_id', createdTenantId); console.log('✓ Cleanup: tenant_solutions'); } catch (e) {}
-      try { await db.from('tenant_billing_state').delete().eq('tenant_id', createdTenantId); console.log('✓ Cleanup: tenant_billing_state'); } catch (e) {}
-      try { await db.from('billing_status_history').delete().eq('tenant_id', createdTenantId); console.log('✓ Cleanup: billing_status_history'); } catch (e) {}
-      try { await db.from('billing_payments').delete().eq('tenant_id', createdTenantId); console.log('✓ Cleanup: billing_payments'); } catch (e) {}
+      const { error: err1 } = await db.from('onboarding_items').delete().eq('tenant_id', createdTenantId);
+      if (err1) cleanupErrors.push(`onboarding_items: ${err1.message}`);
+
+      const { error: err2 } = await db.from('onboarding_runs').delete().eq('tenant_id', createdTenantId);
+      if (err2) cleanupErrors.push(`onboarding_runs: ${err2.message}`);
+
+      const { data: mList } = await db.from('memberships').select('id').eq('tenant_id', createdTenantId);
+      for (const m of mList || []) {
+        const { error: errM } = await db.from('membership_roles').delete().eq('membership_id', m.id);
+        if (errM) cleanupErrors.push(`membership_roles: ${errM.message}`);
+      }
+
+      const { error: err3 } = await db.from('memberships').delete().eq('tenant_id', createdTenantId);
+      if (err3) cleanupErrors.push(`memberships: ${err3.message}`);
+
+      const { error: err4 } = await db.from('tenant_solutions').delete().eq('tenant_id', createdTenantId);
+      if (err4) cleanupErrors.push(`tenant_solutions: ${err4.message}`);
+
+      const { error: err5 } = await db.from('tenant_billing_state').delete().eq('tenant_id', createdTenantId);
+      if (err5) cleanupErrors.push(`tenant_billing_state: ${err5.message}`);
+
+      const { error: err6 } = await db.from('billing_status_history').delete().eq('tenant_id', createdTenantId);
+      if (err6) cleanupErrors.push(`billing_status_history: ${err6.message}`);
+
+      const { error: err7 } = await db.from('billing_payments').delete().eq('tenant_id', createdTenantId);
+      if (err7) cleanupErrors.push(`billing_payments: ${err7.message}`);
+
+      const { error: err8 } = await db.from('platform_client_assignments').delete().eq('tenant_id', createdTenantId);
+      if (err8) cleanupErrors.push(`platform_client_assignments: ${err8.message}`);
     }
 
     if (createdContractId) {
-      try { await db.from('billing_subscriptions').delete().eq('contract_id', createdContractId); console.log('✓ Cleanup: billing_subscriptions'); } catch (e) {}
-      try { await db.from('billing_customers').delete().eq('contract_id', createdContractId); console.log('✓ Cleanup: billing_customers'); } catch (e) {}
-      try { await db.from('commercial_contract_items').delete().eq('contract_id', createdContractId); console.log('✓ Cleanup: commercial_contract_items'); } catch (e) {}
-      try { await db.from('commercial_contracts').delete().eq('id', createdContractId); console.log('✓ Cleanup: commercial_contracts'); } catch (e) {}
+      const { error: err9 } = await db.from('billing_subscriptions').delete().eq('contract_id', createdContractId);
+      if (err9) cleanupErrors.push(`billing_subscriptions: ${err9.message}`);
+
+      const { error: err10 } = await db.from('billing_customers').delete().eq('contract_id', createdContractId);
+      if (err10) cleanupErrors.push(`billing_customers: ${err10.message}`);
+
+      const { error: err11 } = await db.from('commercial_contract_items').delete().eq('contract_id', createdContractId);
+      if (err11) cleanupErrors.push(`commercial_contract_items: ${err11.message}`);
+
+      const { error: err12 } = await db.from('commercial_contracts').delete().eq('id', createdContractId);
+      if (err12) cleanupErrors.push(`commercial_contracts: ${err12.message}`);
     }
 
     if (createdProposalId) {
-      try { await db.from('commercial_proposal_items').delete().eq('proposal_id', createdProposalId); console.log('✓ Cleanup: commercial_proposal_items'); } catch (e) {}
-      try { await db.from('commercial_proposals').delete().eq('id', createdProposalId); console.log('✓ Cleanup: commercial_proposals'); } catch (e) {}
+      const { error: err13 } = await db.from('commercial_proposal_items').delete().eq('proposal_id', createdProposalId);
+      if (err13) cleanupErrors.push(`commercial_proposal_items: ${err13.message}`);
+
+      const { error: err14 } = await db.from('commercial_proposals').delete().eq('id', createdProposalId);
+      if (err14) cleanupErrors.push(`commercial_proposals: ${err14.message}`);
     }
 
     if (createdLeadId) {
-      try { await db.from('platform_lead_assignments').delete().eq('lead_id', createdLeadId); console.log('✓ Cleanup: platform_lead_assignments'); } catch (e) {}
-      try { await db.from('marketing_leads').delete().eq('id', createdLeadId); console.log('✓ Cleanup: marketing_leads'); } catch (e) {}
+      const { error: err15 } = await db.from('platform_lead_assignments').delete().eq('lead_id', createdLeadId);
+      if (err15) cleanupErrors.push(`platform_lead_assignments: ${err15.message}`);
+
+      const { error: err16 } = await db.from('marketing_leads').delete().eq('id', createdLeadId);
+      if (err16) cleanupErrors.push(`marketing_leads: ${err16.message}`);
     }
 
     if (createdTenantId) {
-      try { await db.from('tenants').delete().eq('id', createdTenantId); console.log('✓ Cleanup: tenants'); } catch (e) {}
+      const { error: err17 } = await db.from('tenants').delete().eq('id', createdTenantId);
+      if (err17) cleanupErrors.push(`tenants: ${err17.message}`);
     }
 
     if (adminUser?.id) {
-      try { await db.from('platform_members').delete().eq('user_id', adminUser.id); } catch (e) {}
-      try { await db.auth.admin.deleteUser(adminUser.id); console.log('✓ Cleanup: adminUser'); } catch (e) {}
+      await db.from('platform_state_transitions').delete().eq('actor_user_id', adminUser.id);
+      await db.from('platform_audit_logs').delete().eq('actor_id', adminUser.id);
+      const { error: errM1 } = await db.from('platform_members').delete().eq('user_id', adminUser.id);
+      if (errM1) cleanupErrors.push(`platform_members admin: ${errM1.message}`);
+      const { error: errU1 } = await db.auth.admin.deleteUser(adminUser.id);
+      if (errU1) cleanupErrors.push(`auth.users admin: ${errU1.message}`);
     }
 
     if (approverUser?.id) {
-      try { await db.from('platform_members').delete().eq('user_id', approverUser.id); } catch (e) {}
-      try { await db.auth.admin.deleteUser(approverUser.id); console.log('✓ Cleanup: approverUser'); } catch (e) {}
+      await db.from('platform_state_transitions').delete().eq('actor_user_id', approverUser.id);
+      await db.from('platform_audit_logs').delete().eq('actor_id', approverUser.id);
+      const { error: errM2 } = await db.from('platform_members').delete().eq('user_id', approverUser.id);
+      if (errM2) cleanupErrors.push(`platform_members approver: ${errM2.message}`);
+      const { error: errU2 } = await db.auth.admin.deleteUser(approverUser.id);
+      if (errU2) cleanupErrors.push(`auth.users approver: ${errU2.message}`);
     }
 
-    // Comprovação de zero residuais
+    // -------------------------------------------------------------------------
+    // CONSULTA FINAL DE COMPROVAÇÃO DE ZERO RESÍDUOS DO RUN_ID (Ponto 3)
+    // -------------------------------------------------------------------------
     const { data: finalAuth } = await db.auth.admin.listUsers();
     const remAuth = (finalAuth?.users || []).filter(u => u.email?.includes(runId));
-    console.log(`✓ Comprovação Final de Cleanup (RunId ${runId}): ${remAuth.length} usuários residuais.`);
+
+    const { data: finalMembers } = await db.from('platform_members').select('*');
+    const remMembers = (finalMembers || []).filter(m => m.email?.includes(runId));
+
+    console.log('--- COMPROVAÇÃO RIGOROSA FINAL DE ZERO RESÍDUOS ---');
+    console.log(`- Erros registrados no cleanup: ${cleanupErrors.length}`);
+    console.log(`- Usuários Auth E2E restantes (RunId ${runId}): ${remAuth.length}`);
+    console.log(`- Platform Members E2E restantes: ${remMembers.length}`);
+
+    if (cleanupErrors.length > 0 || remAuth.length > 0 || remMembers.length > 0) {
+      console.error('ERRO CRÍTICO NO CLEANUP: Restaram resíduos de dados ou erros durante a exclusão!', cleanupErrors);
+      process.exit(1);
+    }
   }
 }
 

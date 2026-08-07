@@ -1,3 +1,6 @@
-Owner: chatgpt_backend
+Owner: antigravity_agent
 Status: ready_for_review
-Head: 0a9f6289786e4655622ab00984273768b657a378
+Branch: fix/admin-functional-recovery
+Head: PENDING_COMMIT_SHA
+Preview URL: https://ordum-git-fix-admin-functional-recovery-ordum.vercel.app
+Scope: Admin Commercial Recovery & Billing Sandbox Final Package
