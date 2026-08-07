@@ -3,7 +3,7 @@
 ## Branch: `fix/admin-functional-recovery`
 
 - **Status**: Complete & Verified (Admin Billing Sandbox & Commercial Governance Recovery)
-- **Last Commit SHA**: `000336e`
+- **Last Commit SHA**: `93a45e2`
 - **Preview Deployment URL**: `https://ordum-git-fix-admin-functional-recovery-ordum.vercel.app`
 - **Scope**:
   - Resilient `start-billing` (HTTP 201 on new, 200 on repeat idempotency, 404/409/422/503/502/500 handlers)
