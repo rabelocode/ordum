@@ -15,29 +15,6 @@ async function runE2ETest() {
   console.log(`=== INICIANDO FLUXO E2E AUTENTICADO DE COBRANÇA (RunId: ${runId}) ===`);
   console.log(`URL do Preview: ${APP_URL}`);
 
-  // -------------------------------------------------------------------------
-  // 1. Preflight Diagnostics (Ponto 5)
-  // -------------------------------------------------------------------------
-  console.log('--- ETAPA 1: PREFLIGHT DIAGNOSTICS ---');
-  const diagRes = await fetch(`${APP_URL}/api/admin/billing/diagnostics`);
-  const diag = await diagRes.json().catch(() => ({}));
-  console.log('Resposta sanitizada de /api/admin/billing/diagnostics:', JSON.stringify(diag, null, 2));
-
-  if (!diagRes.ok) {
-    throw new Error(`Preflight falhou HTTP ${diagRes.status}: ${JSON.stringify(diag)}`);
-  }
-
-  if (
-    diag.enabled !== true ||
-    diag.configured !== true ||
-    diag.environment !== 'sandbox' ||
-    diag.webhookUrlConfigured !== true ||
-    diag.sandboxMockAvailable !== true
-  ) {
-    throw new Error(`ABORTANDO TESTE E2E: Diagnóstico de billing não atende os requisitos de preflight!\n${JSON.stringify(diag, null, 2)}`);
-  }
-  console.log('✓ Preflight aprovado com sucesso!');
-
   const db = createClient(SUPABASE_URL, SERVICE_ROLE_KEY, {
     auth: { autoRefreshToken: false, persistSession: false },
   });
@@ -64,9 +41,8 @@ async function runE2ETest() {
 
   try {
     // -------------------------------------------------------------------------
-    // 2. Setup Usuários E2E (Criador + Aprovador por 4 olhos)
+    // Setup Usuários E2E (Criador + Aprovador por 4 olhos)
     // -------------------------------------------------------------------------
-    console.log('--- ETAPA 2: SETUP USUÁRIOS E2E ---');
     const { data: authUser, error: authErr } = await db.auth.admin.createUser({
       email: testEmail, password, email_confirm: true, user_metadata: { name: 'E2E Test Admin', runId },
     });
@@ -118,9 +94,32 @@ async function runE2ETest() {
     console.log('✓ Usuários E2E criados e autenticados.');
 
     // -------------------------------------------------------------------------
-    // 3. Lead Fixture & Transição
+    // 1. Preflight Diagnostics (Ponto 5)
     // -------------------------------------------------------------------------
-    console.log('--- ETAPA 3: LEAD & TRANSIÇÃO ---');
+    console.log('--- ETAPA 1: PREFLIGHT DIAGNOSTICS ---');
+    const diagRes = await creatorApi('/api/admin/billing/diagnostics');
+    console.log('Resposta sanitizada de /api/admin/billing/diagnostics:', JSON.stringify(diagRes.body, null, 2));
+
+    if (diagRes.status !== 200) {
+      throw new Error(`Preflight falhou HTTP ${diagRes.status}: ${JSON.stringify(diagRes.body)}`);
+    }
+
+    const diag = diagRes.body;
+    if (
+      diag.enabled !== true ||
+      diag.configured !== true ||
+      diag.environment !== 'sandbox' ||
+      diag.webhookUrlConfigured !== true ||
+      diag.sandboxMockAvailable !== true
+    ) {
+      throw new Error(`ABORTANDO TESTE E2E: Diagnóstico de billing não atende os requisitos de preflight!\n${JSON.stringify(diag, null, 2)}`);
+    }
+    console.log('✓ Preflight aprovado com sucesso!');
+
+    // -------------------------------------------------------------------------
+    // 2. Lead Fixture & Transição
+    // -------------------------------------------------------------------------
+    console.log('--- ETAPA 2: LEAD & TRANSIÇÃO ---');
     const { data: lead, error: leadErr } = await db.from('marketing_leads').insert({
       name: `Cliente E2E (${runId})`,
       email: testEmail,
@@ -146,9 +145,9 @@ async function runE2ETest() {
     if (transLead.status !== 200) throw new Error(`Falha na transição do lead: ${JSON.stringify(transLead.body)}`);
 
     // -------------------------------------------------------------------------
-    // 4. Proposta (Criação, Aprovação 4 Olhos, Aceite)
+    // 3. Proposta (Criação, Aprovação 4 Olhos, Aceite)
     // -------------------------------------------------------------------------
-    console.log('--- ETAPA 4: PROPOSTA ---');
+    console.log('--- ETAPA 3: PROPOSTA ---');
     const { data: plans } = await db.from('billing_plans').select('id, billing_plan_prices(cycle, billing_type)').eq('active', true).limit(1);
     if (!plans || plans.length === 0) throw new Error('Nenhum plano ativo no banco');
     const plan = plans[0];
@@ -180,9 +179,9 @@ async function runE2ETest() {
     if (accProp.status !== 200) throw new Error(`Falha ao aceitar proposta: ${JSON.stringify(accProp.body)}`);
 
     // -------------------------------------------------------------------------
-    // 5. Contrato (Gerar com CPF/CNPJ, Aprovação 4 Olhos)
+    // 4. Contrato (Gerar com CPF/CNPJ, Aprovação 4 Olhos)
     // -------------------------------------------------------------------------
-    console.log('--- ETAPA 5: CONTRATO ---');
+    console.log('--- ETAPA 4: CONTRATO ---');
     const validCpf = '11144477735';
     const createContract = await creatorApi(`/api/admin/commercial/proposals/${createdProposalId}/create-contract`, {
       method: 'POST', body: JSON.stringify({ customer_tax_id: validCpf }),
@@ -201,9 +200,9 @@ async function runE2ETest() {
     if (appCnt.status !== 200) throw new Error(`Falha ao aprovar contrato: ${JSON.stringify(appCnt.body)}`);
 
     // -------------------------------------------------------------------------
-    // 6. Iniciar Cobrança Sandbox (start-billing) + Idempotência (Ponto 11)
+    // 5. Iniciar Cobrança Sandbox (start-billing) + Idempotência (Ponto 11)
     // -------------------------------------------------------------------------
-    console.log('--- ETAPA 6: COBRANÇA SANDBOX & IDEMPOTÊNCIA ---');
+    console.log('--- ETAPA 5: COBRANÇA SANDBOX & IDEMPOTÊNCIA ---');
     const tomorrow = new Date(Date.now() + 86400000).toISOString().slice(0, 10);
     const startBilling = await creatorApi(`/api/admin/commercial/contracts/${createdContractId}/start-billing`, {
       method: 'POST', body: JSON.stringify({ next_due_date: tomorrow }),
@@ -234,9 +233,9 @@ async function runE2ETest() {
     console.log('✓ Idempotência comprovada com sucesso (0 assinaturas duplicadas).');
 
     // -------------------------------------------------------------------------
-    // 7. Simular Pagamento Sandbox & Provisionamento de Tenant / Onboarding
+    // 6. Simular Pagamento Sandbox & Provisionamento de Tenant / Onboarding
     // -------------------------------------------------------------------------
-    console.log('--- ETAPA 7: MOCK PAYMENT & PROVISIONAMENTO ---');
+    console.log('--- ETAPA 6: MOCK PAYMENT & PROVISIONAMENTO ---');
     const mockPayment = await creatorApi(`/api/admin/commercial/contracts/${createdContractId}/mock-sandbox-payment`, {
       method: 'POST',
     });
@@ -268,11 +267,11 @@ async function runE2ETest() {
 
   } finally {
     // -------------------------------------------------------------------------
-    // 8. Cleanup Resiliente (Ponto 4) - Cada exclusão com try/catch isolado
+    // 7. Cleanup Resiliente (Ponto 4) - Cada exclusão com try/catch isolado
     // -------------------------------------------------------------------------
-    console.log('--- ETAPA 8: CLEANUP RESILIENTE DE DADOS ---');
+    console.log('--- ETAPA 7: CLEANUP RESILIENTE DE DADOS ---');
 
-    // 8.1. Remover cliente e assinatura remota do Asaas Sandbox via API
+    // 7.1. Remover cliente e assinatura remota do Asaas Sandbox via API
     if (ASAAS_API_KEY && (createdAsaasSubId || createdAsaasCustomerId)) {
       try {
         if (createdAsaasSubId) {
