@@ -42,12 +42,15 @@ describe('E2E Commercial Lifecycle Integration Test', () => {
     if (authErr) throw new Error('Falha ao criar usuário de teste no Auth: ' + authErr.message);
     adminUser = authUser.user;
 
+    // Buscar role_id da role admin na plataforma
+    const { data: adminRole } = await db.from('platform_roles').select('id').eq('key', 'admin').single();
+
     // Vincular permissão de admin na platform_members
     await db.from('platform_members').insert({
       user_id: adminUser.id,
       email: testEmail,
       name: 'E2E Test Admin',
-      role_key: 'admin',
+      role_id: adminRole?.id || null,
       status: 'active',
     });
 
@@ -115,18 +118,27 @@ describe('E2E Commercial Lifecycle Integration Test', () => {
   it('Executa o fluxo real completo de comercialização até o provisionamento do tenant e ativação de solução', async () => {
     if (!adminAccessToken) return;
 
-    // 1. Criar Lead Fixture
-    const leadRes = await apiFetch('/api/admin/leads', {
-      method: 'POST',
-      body: JSON.stringify({
-        name: 'Cliente Teste E2E',
-        email: testEmail,
-        company: 'Empresa Teste E2E LTDA',
-        phone: '11999998888',
-      }),
-    });
-    assert.equal(leadRes.status, 201, `Erro ao criar lead: ${JSON.stringify(leadRes.body)}`);
-    createdLeadId = leadRes.body.id;
+    // 1. Criar Lead Fixture via service role (Requisito 10)
+    const { data: insertedLead, error: leadErr } = await db.from('marketing_leads').insert({
+      name: 'Cliente Teste E2E',
+      email: testEmail,
+      company: 'Empresa Teste E2E LTDA',
+      phone: '11999998888',
+      status: 'new',
+      priority: 'normal',
+    }).select().single();
+    assert.ok(insertedLead && !leadErr, `Erro ao criar lead fixture: ${leadErr?.message}`);
+    createdLeadId = insertedLead.id;
+
+    // Buscar primeira equipe ativa para atribuir o lead
+    const { data: teams } = await db.from('platform_teams').select('id').limit(1);
+    if (teams && teams.length > 0) {
+      await db.from('platform_lead_assignments').insert({
+        lead_id: createdLeadId,
+        team_id: teams[0].id,
+        assignment_type: 'manual',
+      });
+    }
 
     // 2. Mudar status do Lead
     const leadTransRes = await apiFetch(`/api/admin/leads/${createdLeadId}/transition`, {
