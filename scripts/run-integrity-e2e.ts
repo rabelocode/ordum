@@ -321,6 +321,12 @@ export async function runIntegrityE2E(): Promise<Evidence> {
     expect(await workspace(`/cases/${caseRow.id}/transitions`, { method: "POST", body: JSON.stringify({ to_status: "reopened", reason: "Tentativa sem alçada", lock_version: closed.lock_version }) }, assignedInvestigator), 403, "investigator reopen denied");
     const reopened = expect(await workspace(`/cases/${caseRow.id}/transitions`, { method: "POST", body: JSON.stringify({ to_status: "reopened", reason: "Nova evidência recebida", lock_version: closed.lock_version }) }), 200, "reopen");
     if (reopened.status !== "reopened") throw new Error("reabertura não persistida");
+    const operationalDossier = await workspace(`/cases/${caseRow.id}/dossier.pdf`);
+    expect(operationalDossier, 200, "operational dossier");
+    const operationalPdfText = Buffer.isBuffer(operationalDossier.body) ? operationalDossier.body.toString("latin1") : "";
+    for (const expected of ["Validar cadeia de custódia", "Conclusão interna confidencial E2E", expectedChecksum]) {
+      if (!operationalPdfText.includes(expected)) throw new Error(`dossiê operacional sem ${expected}`);
+    }
     const timeline = expect(await workspace(`/cases/${caseRow.id}/timeline`), 200, "timeline").events;
     for (const event of ["report_received", "routed", "task_created", "task_completed", "task_reopened", "decision_recorded", "status_changed"]) {
       if (!timeline.some((item: any) => item.event_type === event)) throw new Error(`timeline sem ${event}`);
@@ -350,7 +356,11 @@ export async function runIntegrityE2E(): Promise<Evidence> {
     if (/secret_hash|signedUrl|token=|access_secret/i.test(forbiddenPdfText)) throw new Error("dossiê contém material proibido");
     expect(await workspace(`/cases/${identifiedCase.id}/dossier.pdf`, {}, assignedInvestigator), 403, "investigator dossier denied");
     expect(await workspace(`/cases/${identifiedCase.id}/dossier.pdf`, {}, adminB, tenantA.id), 403, "platform admin dossier denied");
-    if (process.env.SAVE_PDF_QA === "1") { await mkdir("tmp/pdfs", { recursive: true }); await writeFile("tmp/pdfs/integrity-phase4f-dossier.pdf", dossierWithIdentity.body); }
+    if (process.env.SAVE_PDF_QA === "1") {
+      await mkdir("tmp/pdfs", { recursive: true });
+      await writeFile("tmp/pdfs/integrity-phase4f-dossier.pdf", operationalDossier.body);
+      await writeFile("tmp/pdfs/integrity-phase4f-identity-authorized.pdf", dossierWithIdentity.body);
+    }
     evidence.dossierPdf = true;
     evidence.dossierIdentityDefaultOmitted = true;
     evidence.platformAdminDossierDenied = true;
