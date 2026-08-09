@@ -371,8 +371,8 @@ var init_asaas = __esm({
         this.config = config;
         if (!config.enabled || !config.apiKey) throw new Error("Integra\xE7\xE3o Asaas Sandbox n\xE3o est\xE1 habilitada.");
       }
-      async request(path2, init2) {
-        const response = await fetch(`${this.config.baseUrl}${path2}`, {
+      async request(path3, init2) {
+        const response = await fetch(`${this.config.baseUrl}${path3}`, {
           ...init2,
           headers: {
             "Content-Type": "application/json",
@@ -1877,8 +1877,8 @@ var init_router = __esm({
 });
 
 // server.ts
-import express2 from "express";
-import path from "path";
+import express3 from "express";
+import path2 from "path";
 
 // src/server/adminLeadsRouter.ts
 import { Router } from "express";
@@ -2220,229 +2220,410 @@ import { Router as Router2 } from "express";
 import { z as z2 } from "zod";
 function createAdminClientsRouter(getSupabaseAdmin2) {
   const router = Router2();
-  router.get("/", authenticateRequest, resolvePlatformContext, requirePlatformPermission(["platform.clients.read", "platform.commercial.read"]), async (req, res) => {
-    try {
-      const { platformContext } = req;
-      const { page, pageSize, from, to } = parsePagination(req.query);
-      const paginated = req.query.page !== void 0;
-      let visibleTenantIds2 = null;
-      if (platformContext.role?.key !== "admin") {
-        const visibleTeams = platformContext.teams.filter((team) => platformContext.managedTeams.some((managed) => managed.id === team.id) || ["team", "all"].includes(team.member_client_visibility)).map((team) => team.id);
-        let assignmentQuery = getSupabaseAdmin2().from("platform_client_assignments").select("tenant_id");
-        const clauses = [`owner_platform_member_id.eq.${platformContext.platformMember.id}`];
-        if (visibleTeams.length) clauses.push(`team_id.in.(${visibleTeams.join(",")})`);
-        assignmentQuery = assignmentQuery.or(clauses.join(","));
-        const assignmentResult = await assignmentQuery;
-        if (assignmentResult.error) throw assignmentResult.error;
-        visibleTenantIds2 = [...new Set((assignmentResult.data || []).map((item) => String(item.tenant_id)))];
-        if (!visibleTenantIds2.length) return res.json(paginated ? pageResult([], 0, page, pageSize) : []);
+  router.get(
+    "/",
+    authenticateRequest,
+    resolvePlatformContext,
+    requirePlatformPermission([
+      "platform.clients.read",
+      "platform.commercial.read"
+    ]),
+    async (req, res) => {
+      try {
+        const { platformContext } = req;
+        const { page, pageSize, from, to } = parsePagination(req.query);
+        const paginated = req.query.page !== void 0;
+        let visibleTenantIds2 = null;
+        if (platformContext.role?.key !== "admin") {
+          const visibleTeams = platformContext.teams.filter(
+            (team) => platformContext.managedTeams.some(
+              (managed) => managed.id === team.id
+            ) || ["team", "all"].includes(team.member_client_visibility)
+          ).map((team) => team.id);
+          let assignmentQuery = getSupabaseAdmin2().from("platform_client_assignments").select("tenant_id");
+          const clauses = [
+            `owner_platform_member_id.eq.${platformContext.platformMember.id}`
+          ];
+          if (visibleTeams.length)
+            clauses.push(`team_id.in.(${visibleTeams.join(",")})`);
+          assignmentQuery = assignmentQuery.or(clauses.join(","));
+          const assignmentResult = await assignmentQuery;
+          if (assignmentResult.error) throw assignmentResult.error;
+          visibleTenantIds2 = [
+            ...new Set(
+              (assignmentResult.data || []).map(
+                (item) => String(item.tenant_id)
+              )
+            )
+          ];
+          if (!visibleTenantIds2.length)
+            return res.json(paginated ? pageResult([], 0, page, pageSize) : []);
+        }
+        let query = getSupabaseAdmin2().from("tenants").select(
+          "*, tenant_solutions(*, solutions(key,name)), platform_client_assignments(*, platform_teams(name), platform_members(user_id, platform_roles(key, name))), tenant_billing_state(*), tenant_domains(*), memberships(id,status,user_id,employment_level), departments(id,name,active)",
+          { count: "exact" }
+        ).order("created_at", { ascending: false });
+        if (visibleTenantIds2) query = query.in("id", visibleTenantIds2);
+        if (typeof req.query.status === "string" && req.query.status) {
+          query = query.eq("status", req.query.status);
+        } else {
+          query = query.in("status", [
+            "active",
+            "trial",
+            "suspended",
+            "inactive"
+          ]);
+        }
+        if (typeof req.query.search === "string" && req.query.search.trim()) {
+          const term = req.query.search.trim().replace(/[%(),]/g, "").slice(0, 100);
+          query = query.or(`name.ilike.%${term}%,slug.ilike.%${term}%`);
+        }
+        if (paginated) query = query.range(from, to);
+        const { data, error, count } = await query;
+        if (error) throw error;
+        const { data: usersData } = await getSupabaseAdmin2().auth.admin.listUsers();
+        let clients = data.map((c) => {
+          const assignment = c.platform_client_assignments?.[0];
+          let owner = null;
+          if (assignment?.platform_members?.user_id) {
+            const u = usersData?.users?.find(
+              (u2) => u2.id === assignment.platform_members.user_id
+            );
+            if (u) owner = { email: u.email, name: u.user_metadata?.full_name };
+          }
+          return { ...c, assignment, owner };
+        });
+        res.json(
+          paginated ? pageResult(clients, count, page, pageSize) : clients
+        );
+      } catch (e) {
+        res.status(500).json({ error: e.message });
       }
-      let query = getSupabaseAdmin2().from("tenants").select("*, tenant_solutions(*, solutions(key,name)), platform_client_assignments(*, platform_teams(name), platform_members(user_id, platform_roles(key, name))), tenant_billing_state(*), tenant_domains(*), memberships(id,status,user_id,employment_level), departments(id,name,active)", { count: "exact" }).order("created_at", { ascending: false });
-      if (visibleTenantIds2) query = query.in("id", visibleTenantIds2);
-      if (typeof req.query.status === "string" && req.query.status) {
-        query = query.eq("status", req.query.status);
-      } else {
-        query = query.in("status", ["active", "trial", "suspended", "inactive"]);
+    }
+  );
+  router.get(
+    "/:id/integrity-summary",
+    authenticateRequest,
+    resolvePlatformContext,
+    requirePlatformPermission([
+      "platform.clients.read",
+      "platform.commercial.read"
+    ]),
+    async (req, res) => {
+      try {
+        const db = getSupabaseAdmin2();
+        const tenant = await db.from("tenants").select("id,status,platform_client_assignments(*)").eq("id", req.params.id).single();
+        if (tenant.error || !tenant.data)
+          return res.status(404).json({ error: "Cliente n\xE3o encontrado." });
+        if (req.platformContext.role?.key !== "admin" && !canReadAssignedResource(
+          req.platformContext,
+          tenant.data.platform_client_assignments?.[0],
+          "member_client_visibility"
+        ))
+          return res.status(403).json({ error: "Forbidden" });
+        const [
+          solution,
+          settings,
+          channels,
+          cases,
+          members,
+          onboarding,
+          storage
+        ] = await Promise.all([
+          db.from("tenant_solutions").select("status,created_at,updated_at,solutions!inner(key)").eq("tenant_id", req.params.id).eq("solutions.key", "integrity").maybeSingle(),
+          db.from("integrity_settings").select("configured_at,updated_at").eq("tenant_id", req.params.id).maybeSingle(),
+          db.from("integrity_channels").select("id,active").eq("tenant_id", req.params.id),
+          db.from("integrity_cases").select(
+            "status,first_action_at,first_response_due_at,treatment_due_at,updated_at"
+          ).eq("tenant_id", req.params.id),
+          db.from("memberships").select("id", { count: "exact", head: true }).eq("tenant_id", req.params.id).eq("status", "active"),
+          db.from("onboarding_runs").select("id,status,progress_percent,updated_at").eq("tenant_id", req.params.id).order("created_at", { ascending: false }).limit(1).maybeSingle(),
+          db.from("files").select("size_bytes").eq("tenant_id", req.params.id).eq("bucket", "ordum-integrity").is("deleted_at", null)
+        ]);
+        const failed = [
+          solution,
+          settings,
+          channels,
+          cases,
+          members,
+          onboarding,
+          storage
+        ].find((result) => result.error);
+        if (failed) throw failed.error;
+        const now = Date.now();
+        const rows = cases.data || [];
+        return res.json({
+          contracted: Boolean(solution.data),
+          solution_status: solution.data?.status || "not_contracted",
+          activated_at: solution.data?.created_at || null,
+          configuration_complete: Boolean(settings.data?.configured_at),
+          channels_total: channels.data?.length || 0,
+          channels_active: (channels.data || []).filter(
+            (channel) => channel.active
+          ).length,
+          active_users: members.count || 0,
+          cases_total: rows.length,
+          cases_open: rows.filter(
+            (item) => !["closed", "archived"].includes(item.status)
+          ).length,
+          sla_overdue: rows.filter(
+            (item) => !["closed", "archived"].includes(item.status) && (!item.first_action_at && item.first_response_due_at && new Date(item.first_response_due_at).getTime() < now || item.treatment_due_at && new Date(item.treatment_due_at).getTime() < now)
+          ).length,
+          storage_bytes: (storage.data || []).reduce(
+            (sum, item) => sum + Number(item.size_bytes || 0),
+            0
+          ),
+          health: !solution.data ? "not_contracted" : !settings.data?.configured_at ? "configuration_pending" : !(channels.data || []).some((channel) => channel.active) ? "channel_inactive" : rows.some(
+            (item) => !["closed", "archived"].includes(item.status) && item.treatment_due_at && new Date(item.treatment_due_at).getTime() < now
+          ) ? "attention" : "healthy",
+          operational_errors: null,
+          operational_errors_reason: "Sem integra\xE7\xE3o de erros por tenant dispon\xEDvel.",
+          last_use_at: rows.map((item) => item.updated_at).filter(Boolean).sort().at(-1) || settings.data?.updated_at || null,
+          onboarding: onboarding.data || null,
+          confidentiality_boundary: "aggregate_only"
+        });
+      } catch (error) {
+        return res.status(500).json({ error: "N\xE3o foi poss\xEDvel carregar a sa\xFAde do Integridade." });
       }
-      if (typeof req.query.search === "string" && req.query.search.trim()) {
-        const term = req.query.search.trim().replace(/[%(),]/g, "").slice(0, 100);
-        query = query.or(`name.ilike.%${term}%,slug.ilike.%${term}%`);
-      }
-      if (paginated) query = query.range(from, to);
-      const { data, error, count } = await query;
-      if (error) throw error;
-      const { data: usersData } = await getSupabaseAdmin2().auth.admin.listUsers();
-      let clients = data.map((c) => {
-        const assignment = c.platform_client_assignments?.[0];
+    }
+  );
+  router.get(
+    "/:id",
+    authenticateRequest,
+    resolvePlatformContext,
+    requirePlatformPermission([
+      "platform.clients.read",
+      "platform.commercial.read"
+    ]),
+    async (req, res) => {
+      try {
+        const { platformContext } = req;
+        const clientId = req.params.id;
+        const { data, error } = await getSupabaseAdmin2().from("tenants").select(
+          "*, tenant_solutions(solution_id, status, solutions(key,name)), platform_client_assignments(*, platform_teams(name), platform_members(user_id, platform_roles(key, name))), tenant_domains(*), departments(*), memberships(id,user_id,status,employment_level,joined_at), tenant_billing_state(*), commercial_contracts(*, billing_subscriptions(*), billing_payments(*))"
+        ).eq("id", clientId).single();
+        if (error) throw error;
+        const { data: usersData } = await getSupabaseAdmin2().auth.admin.listUsers();
+        const assignment = data.platform_client_assignments?.[0];
         let owner = null;
         if (assignment?.platform_members?.user_id) {
-          const u = usersData?.users?.find((u2) => u2.id === assignment.platform_members.user_id);
+          const u = usersData?.users?.find(
+            (u2) => u2.id === assignment.platform_members.user_id
+          );
           if (u) owner = { email: u.email, name: u.user_metadata?.full_name };
         }
-        return { ...c, assignment, owner };
-      });
-      res.json(paginated ? pageResult(clients, count, page, pageSize) : clients);
-    } catch (e) {
-      res.status(500).json({ error: e.message });
-    }
-  });
-  router.get("/:id/integrity-summary", authenticateRequest, resolvePlatformContext, requirePlatformPermission(["platform.clients.read", "platform.commercial.read"]), async (req, res) => {
-    try {
-      const db = getSupabaseAdmin2();
-      const tenant = await db.from("tenants").select("id,status,platform_client_assignments(*)").eq("id", req.params.id).single();
-      if (tenant.error || !tenant.data) return res.status(404).json({ error: "Cliente n\xE3o encontrado." });
-      if (req.platformContext.role?.key !== "admin" && !canReadAssignedResource(req.platformContext, tenant.data.platform_client_assignments?.[0], "member_client_visibility")) return res.status(403).json({ error: "Forbidden" });
-      const [solution, settings, channels, cases, members, onboarding] = await Promise.all([
-        db.from("tenant_solutions").select("status,created_at,updated_at,solutions!inner(key)").eq("tenant_id", req.params.id).eq("solutions.key", "integrity").maybeSingle(),
-        db.from("integrity_settings").select("configured_at,updated_at").eq("tenant_id", req.params.id).maybeSingle(),
-        db.from("integrity_channels").select("id,active").eq("tenant_id", req.params.id),
-        db.from("integrity_cases").select("status,sla_due_at,updated_at").eq("tenant_id", req.params.id),
-        db.from("memberships").select("id", { count: "exact", head: true }).eq("tenant_id", req.params.id).eq("status", "active"),
-        db.from("onboarding_runs").select("id,status,progress_percent,updated_at").eq("tenant_id", req.params.id).order("created_at", { ascending: false }).limit(1).maybeSingle()
-      ]);
-      const failed = [solution, settings, channels, cases, members, onboarding].find((result) => result.error);
-      if (failed) throw failed.error;
-      const now = Date.now();
-      const rows = cases.data || [];
-      return res.json({
-        contracted: Boolean(solution.data),
-        solution_status: solution.data?.status || "not_contracted",
-        activated_at: solution.data?.created_at || null,
-        configuration_complete: Boolean(settings.data?.configured_at),
-        channels_total: channels.data?.length || 0,
-        channels_active: (channels.data || []).filter((channel) => channel.active).length,
-        active_users: members.count || 0,
-        cases_total: rows.length,
-        cases_open: rows.filter((item) => !["closed", "archived"].includes(item.status)).length,
-        sla_overdue: rows.filter((item) => item.sla_due_at && new Date(item.sla_due_at).getTime() < now && !["closed", "archived"].includes(item.status)).length,
-        last_use_at: rows.map((item) => item.updated_at).filter(Boolean).sort().at(-1) || settings.data?.updated_at || null,
-        onboarding: onboarding.data || null,
-        confidentiality_boundary: "aggregate_only"
-      });
-    } catch (error) {
-      return res.status(500).json({ error: "N\xE3o foi poss\xEDvel carregar a sa\xFAde do Integridade." });
-    }
-  });
-  router.get("/:id", authenticateRequest, resolvePlatformContext, requirePlatformPermission(["platform.clients.read", "platform.commercial.read"]), async (req, res) => {
-    try {
-      const { platformContext } = req;
-      const clientId = req.params.id;
-      const { data, error } = await getSupabaseAdmin2().from("tenants").select("*, tenant_solutions(solution_id, status, solutions(key,name)), platform_client_assignments(*, platform_teams(name), platform_members(user_id, platform_roles(key, name))), tenant_domains(*), departments(*), memberships(id,user_id,status,employment_level,joined_at), tenant_billing_state(*), commercial_contracts(*, billing_subscriptions(*), billing_payments(*))").eq("id", clientId).single();
-      if (error) throw error;
-      const { data: usersData } = await getSupabaseAdmin2().auth.admin.listUsers();
-      const assignment = data.platform_client_assignments?.[0];
-      let owner = null;
-      if (assignment?.platform_members?.user_id) {
-        const u = usersData?.users?.find((u2) => u2.id === assignment.platform_members.user_id);
-        if (u) owner = { email: u.email, name: u.user_metadata?.full_name };
-      }
-      if (platformContext.role?.key !== "admin") {
-        if (!canReadAssignedResource(platformContext, assignment, "member_client_visibility")) return res.status(403).json({ error: "Forbidden" });
-      }
-      const { data: audit } = await getSupabaseAdmin2().from("platform_audit_logs").select("id,action,severity,metadata,created_at,actor_user_id,request_id").eq("entity_id", clientId).order("created_at", { ascending: false }).limit(50);
-      res.json({ ...data, assignment, owner, audit: audit || [] });
-    } catch (e) {
-      res.status(500).json({ error: e.message });
-    }
-  });
-  router.post("/:id/assign", authenticateRequest, resolvePlatformContext, requirePlatformPermission(["platform.clients.manage", "platform.commercial.manage"]), async (req, res) => {
-    try {
-      const { platformContext } = req;
-      const clientId = req.params.id;
-      const schema = z2.object({ team_id: z2.string().uuid(), owner_platform_member_id: z2.string().uuid().optional().nullable(), reason: z2.string().min(3) });
-      const parse = schema.safeParse(req.body);
-      if (!parse.success) return res.status(400).json({ error: "Equipe e motivo s\xE3o obrigat\xF3rios.", details: parse.error.issues });
-      const { team_id, owner_platform_member_id, reason } = parse.data;
-      if (!team_id || !reason) return res.status(400).json({ error: "Equipe e motivo da transfer\xEAncia s\xE3o obrigat\xF3rios." });
-      const previous = await getSupabaseAdmin2().from("platform_client_assignments").select("*").eq("tenant_id", clientId).eq("assignment_type", "commercial").maybeSingle();
-      if (previous.error) throw previous.error;
-      if (platformContext.role?.key !== "admin") {
-        const isManager = platformContext.managedTeams.some((t) => t.id === team_id);
-        if (!isManager) return res.status(403).json({ error: "Forbidden" });
-        if (!previous.data || !platformContext.managedTeams.some((team) => team.id === previous.data.team_id)) {
-          return res.status(403).json({ error: "Cliente fora do escopo gerenciado." });
+        if (platformContext.role?.key !== "admin") {
+          if (!canReadAssignedResource(
+            platformContext,
+            assignment,
+            "member_client_visibility"
+          ))
+            return res.status(403).json({ error: "Forbidden" });
         }
+        const { data: audit } = await getSupabaseAdmin2().from("platform_audit_logs").select(
+          "id,action,severity,metadata,created_at,actor_user_id,request_id"
+        ).eq("entity_id", clientId).order("created_at", { ascending: false }).limit(50);
+        res.json({ ...data, assignment, owner, audit: audit || [] });
+      } catch (e) {
+        res.status(500).json({ error: e.message });
       }
-      if (owner_platform_member_id) {
-        const target = await getSupabaseAdmin2().from("platform_team_members").select("platform_member_id").eq("team_id", team_id).eq("platform_member_id", owner_platform_member_id).eq("status", "active").maybeSingle();
-        if (!target.data) return res.status(400).json({ error: "O respons\xE1vel precisa ser membro ativo da equipe." });
+    }
+  );
+  router.post(
+    "/:id/assign",
+    authenticateRequest,
+    resolvePlatformContext,
+    requirePlatformPermission([
+      "platform.clients.manage",
+      "platform.commercial.manage"
+    ]),
+    async (req, res) => {
+      try {
+        const { platformContext } = req;
+        const clientId = req.params.id;
+        const schema = z2.object({
+          team_id: z2.string().uuid(),
+          owner_platform_member_id: z2.string().uuid().optional().nullable(),
+          reason: z2.string().min(3)
+        });
+        const parse = schema.safeParse(req.body);
+        if (!parse.success)
+          return res.status(400).json({
+            error: "Equipe e motivo s\xE3o obrigat\xF3rios.",
+            details: parse.error.issues
+          });
+        const { team_id, owner_platform_member_id, reason } = parse.data;
+        if (!team_id || !reason)
+          return res.status(400).json({
+            error: "Equipe e motivo da transfer\xEAncia s\xE3o obrigat\xF3rios."
+          });
+        const previous = await getSupabaseAdmin2().from("platform_client_assignments").select("*").eq("tenant_id", clientId).eq("assignment_type", "commercial").maybeSingle();
+        if (previous.error) throw previous.error;
+        if (platformContext.role?.key !== "admin") {
+          const isManager = platformContext.managedTeams.some(
+            (t) => t.id === team_id
+          );
+          if (!isManager) return res.status(403).json({ error: "Forbidden" });
+          if (!previous.data || !platformContext.managedTeams.some(
+            (team) => team.id === previous.data.team_id
+          )) {
+            return res.status(403).json({ error: "Cliente fora do escopo gerenciado." });
+          }
+        }
+        if (owner_platform_member_id) {
+          const target = await getSupabaseAdmin2().from("platform_team_members").select("platform_member_id").eq("team_id", team_id).eq("platform_member_id", owner_platform_member_id).eq("status", "active").maybeSingle();
+          if (!target.data)
+            return res.status(400).json({
+              error: "O respons\xE1vel precisa ser membro ativo da equipe."
+            });
+        }
+        const { data, error } = await getSupabaseAdmin2().from("platform_client_assignments").upsert(
+          {
+            tenant_id: clientId,
+            team_id,
+            owner_platform_member_id: owner_platform_member_id || null,
+            assigned_by_user_id: req.user.id,
+            assignment_type: "commercial",
+            status: "active"
+          },
+          { onConflict: "tenant_id,team_id,assignment_type" }
+        ).select().single();
+        if (error) throw error;
+        await getSupabaseAdmin2().from("platform_audit_logs").insert({
+          actor_user_id: req.user.id,
+          action: "client.assigned",
+          entity_type: "platform_client_assignments",
+          entity_id: clientId,
+          severity: "info",
+          team_id,
+          ...auditContext(req, {
+            result: "success",
+            reason,
+            before: previous.data ? {
+              team_id: previous.data.team_id,
+              owner_platform_member_id: previous.data.owner_platform_member_id
+            } : null,
+            after: {
+              team_id,
+              owner_platform_member_id: owner_platform_member_id || null
+            }
+          })
+        });
+        res.json(data);
+      } catch (e) {
+        res.status(500).json({ error: e.message });
       }
-      const { data, error } = await getSupabaseAdmin2().from("platform_client_assignments").upsert({
-        tenant_id: clientId,
-        team_id,
-        owner_platform_member_id: owner_platform_member_id || null,
-        assigned_by_user_id: req.user.id,
-        assignment_type: "commercial",
-        status: "active"
-      }, { onConflict: "tenant_id,team_id,assignment_type" }).select().single();
-      if (error) throw error;
-      await getSupabaseAdmin2().from("platform_audit_logs").insert({
-        actor_user_id: req.user.id,
-        action: "client.assigned",
-        entity_type: "platform_client_assignments",
-        entity_id: clientId,
-        severity: "info",
-        team_id,
-        ...auditContext(req, { result: "success", reason, before: previous.data ? { team_id: previous.data.team_id, owner_platform_member_id: previous.data.owner_platform_member_id } : null, after: { team_id, owner_platform_member_id: owner_platform_member_id || null } })
-      });
-      res.json(data);
-    } catch (e) {
-      res.status(500).json({ error: e.message });
     }
-  });
-  router.post("/:id/suspend", authenticateRequest, resolvePlatformContext, requirePlatformPermission("platform.clients.manage"), async (req, res) => {
-    try {
-      const clientId = req.params.id;
-      const parse = z2.object({ reason: z2.string().min(5) }).safeParse(req.body);
-      if (!parse.success) return res.status(400).json({ error: "Motivo da suspens\xE3o \xE9 obrigat\xF3rio." });
-      const db = getSupabaseAdmin2();
-      const existing = await db.from("tenants").select("status, lifecycle_status").eq("id", clientId).single();
-      if (existing.error || !existing.data) return res.status(404).json({ error: "Cliente n\xE3o encontrado." });
-      if (existing.data.status === "suspended") return res.status(400).json({ error: "Cliente j\xE1 est\xE1 suspenso." });
-      const transitioned = await db.rpc("admin_transition_control_plane", {
-        p_entity_type: "tenant",
-        p_entity_id: clientId,
-        p_to_status: "suspended",
-        p_actor_user_id: req.user.id,
-        p_reason: parse.data.reason.trim(),
-        p_request_id: req.requestId || null
-      });
-      if (transitioned.error) return res.status(409).json({ error: transitioned.error.message });
-      const updated = await db.from("tenants").select("*").eq("id", clientId).single();
-      res.json({ success: true, tenant: updated.data });
-    } catch (e) {
-      res.status(500).json({ error: e.message });
+  );
+  router.post(
+    "/:id/suspend",
+    authenticateRequest,
+    resolvePlatformContext,
+    requirePlatformPermission("platform.clients.manage"),
+    async (req, res) => {
+      try {
+        const clientId = req.params.id;
+        const parse = z2.object({ reason: z2.string().min(5) }).safeParse(req.body);
+        if (!parse.success)
+          return res.status(400).json({ error: "Motivo da suspens\xE3o \xE9 obrigat\xF3rio." });
+        const db = getSupabaseAdmin2();
+        const existing = await db.from("tenants").select("status, lifecycle_status").eq("id", clientId).single();
+        if (existing.error || !existing.data)
+          return res.status(404).json({ error: "Cliente n\xE3o encontrado." });
+        if (existing.data.status === "suspended")
+          return res.status(400).json({ error: "Cliente j\xE1 est\xE1 suspenso." });
+        const transitioned = await db.rpc("admin_transition_control_plane", {
+          p_entity_type: "tenant",
+          p_entity_id: clientId,
+          p_to_status: "suspended",
+          p_actor_user_id: req.user.id,
+          p_reason: parse.data.reason.trim(),
+          p_request_id: req.requestId || null
+        });
+        if (transitioned.error)
+          return res.status(409).json({ error: transitioned.error.message });
+        const updated = await db.from("tenants").select("*").eq("id", clientId).single();
+        res.json({ success: true, tenant: updated.data });
+      } catch (e) {
+        res.status(500).json({ error: e.message });
+      }
     }
-  });
-  router.post("/:id/reactivate", authenticateRequest, resolvePlatformContext, requirePlatformPermission("platform.clients.manage"), async (req, res) => {
-    try {
-      const clientId = req.params.id;
-      const parse = z2.object({ reason: z2.string().min(5) }).safeParse(req.body);
-      if (!parse.success) return res.status(400).json({ error: "Motivo da reativa\xE7\xE3o \xE9 obrigat\xF3rio." });
-      const db = getSupabaseAdmin2();
-      const existing = await db.from("tenants").select("status, lifecycle_status").eq("id", clientId).single();
-      if (existing.error || !existing.data) return res.status(404).json({ error: "Cliente n\xE3o encontrado." });
-      if (existing.data.status === "active") return res.status(400).json({ error: "Cliente j\xE1 est\xE1 ativo." });
-      const transitioned = await db.rpc("admin_transition_control_plane", {
-        p_entity_type: "tenant",
-        p_entity_id: clientId,
-        p_to_status: "active",
-        p_actor_user_id: req.user.id,
-        p_reason: parse.data.reason.trim(),
-        p_request_id: req.requestId || null
-      });
-      if (transitioned.error) return res.status(409).json({ error: transitioned.error.message });
-      const updated = await db.from("tenants").select("*").eq("id", clientId).single();
-      res.json({ success: true, tenant: updated.data });
-    } catch (e) {
-      res.status(500).json({ error: e.message });
+  );
+  router.post(
+    "/:id/reactivate",
+    authenticateRequest,
+    resolvePlatformContext,
+    requirePlatformPermission("platform.clients.manage"),
+    async (req, res) => {
+      try {
+        const clientId = req.params.id;
+        const parse = z2.object({ reason: z2.string().min(5) }).safeParse(req.body);
+        if (!parse.success)
+          return res.status(400).json({ error: "Motivo da reativa\xE7\xE3o \xE9 obrigat\xF3rio." });
+        const db = getSupabaseAdmin2();
+        const existing = await db.from("tenants").select("status, lifecycle_status").eq("id", clientId).single();
+        if (existing.error || !existing.data)
+          return res.status(404).json({ error: "Cliente n\xE3o encontrado." });
+        if (existing.data.status === "active")
+          return res.status(400).json({ error: "Cliente j\xE1 est\xE1 ativo." });
+        const transitioned = await db.rpc("admin_transition_control_plane", {
+          p_entity_type: "tenant",
+          p_entity_id: clientId,
+          p_to_status: "active",
+          p_actor_user_id: req.user.id,
+          p_reason: parse.data.reason.trim(),
+          p_request_id: req.requestId || null
+        });
+        if (transitioned.error)
+          return res.status(409).json({ error: transitioned.error.message });
+        const updated = await db.from("tenants").select("*").eq("id", clientId).single();
+        res.json({ success: true, tenant: updated.data });
+      } catch (e) {
+        res.status(500).json({ error: e.message });
+      }
     }
-  });
-  router.put("/:id/solutions", authenticateRequest, resolvePlatformContext, requirePlatformPermission("platform.solutions.manage"), async (req, res) => {
-    try {
-      const clientId = req.params.id;
-      const parse = z2.object({ solutionKeys: z2.array(z2.string()) }).safeParse(req.body);
-      if (!parse.success) return res.status(400).json({ error: "solutionKeys deve ser uma lista de chaves v\xE1lidas." });
-      const { solutionKeys } = parse.data;
-      const before = await getSupabaseAdmin2().from("tenant_solutions").select("solutions(key)").eq("tenant_id", clientId);
-      const replaced = await getSupabaseAdmin2().rpc("admin_replace_tenant_solutions", {
-        p_tenant_id: clientId,
-        p_solution_keys: [...new Set(solutionKeys)]
-      });
-      if (replaced.error) throw replaced.error;
-      await getSupabaseAdmin2().from("platform_audit_logs").insert({
-        actor_user_id: req.user.id,
-        action: "solution.updated",
-        entity_type: "tenant_solutions",
-        entity_id: clientId,
-        severity: "info",
-        ...auditContext(req, { result: "success", before: before.data, after: { solutions: solutionKeys } })
-      });
-      res.json({ success: true });
-    } catch (e) {
-      res.status(500).json({ error: e.message });
+  );
+  router.put(
+    "/:id/solutions",
+    authenticateRequest,
+    resolvePlatformContext,
+    requirePlatformPermission("platform.solutions.manage"),
+    async (req, res) => {
+      try {
+        const clientId = req.params.id;
+        const parse = z2.object({ solutionKeys: z2.array(z2.string()) }).safeParse(req.body);
+        if (!parse.success)
+          return res.status(400).json({
+            error: "solutionKeys deve ser uma lista de chaves v\xE1lidas."
+          });
+        const { solutionKeys } = parse.data;
+        const before = await getSupabaseAdmin2().from("tenant_solutions").select("solutions(key)").eq("tenant_id", clientId);
+        const replaced = await getSupabaseAdmin2().rpc(
+          "admin_replace_tenant_solutions",
+          {
+            p_tenant_id: clientId,
+            p_solution_keys: [...new Set(solutionKeys)]
+          }
+        );
+        if (replaced.error) throw replaced.error;
+        await getSupabaseAdmin2().from("platform_audit_logs").insert({
+          actor_user_id: req.user.id,
+          action: "solution.updated",
+          entity_type: "tenant_solutions",
+          entity_id: clientId,
+          severity: "info",
+          ...auditContext(req, {
+            result: "success",
+            before: before.data,
+            after: { solutions: solutionKeys }
+          })
+        });
+        res.json({ success: true });
+      } catch (e) {
+        res.status(500).json({ error: e.message });
+      }
     }
-  });
+  );
   return router;
 }
 
@@ -3412,42 +3593,110 @@ init_router();
 // src/server/integrityRouter.ts
 init_tenantAuth();
 import express from "express";
+import { randomUUID as randomUUID2 } from "node:crypto";
 import { z as z6 } from "zod";
 
 // src/domain/integrity.ts
 var INTEGRITY_TRANSITIONS = {
-  received: ["triage"],
-  triage: ["investigation", "waiting_information", "closed"],
-  investigation: ["waiting_information", "decision", "closed"],
-  waiting_information: ["investigation", "decision", "closed"],
+  received: ["triage", "archived"],
+  triage: ["investigation", "waiting_information", "archived"],
+  investigation: ["waiting_information", "decision", "archived"],
+  waiting_information: ["investigation", "decision", "archived"],
   decision: ["closed", "investigation"],
-  closed: ["reopened", "archived"],
-  reopened: ["triage", "investigation"],
+  closed: ["reopened"],
+  reopened: ["triage"],
   archived: []
 };
 function canTransitionIntegrityCase(from, to) {
   return (INTEGRITY_TRANSITIONS[from] || []).includes(to);
 }
 function integrityTransitionNeedsReason(to) {
-  return ["closed", "reopened"].includes(to);
+  return ["closed", "reopened", "archived"].includes(to);
 }
 function integrityDashboard(cases, now = /* @__PURE__ */ new Date()) {
   const open = (item) => !["closed", "archived"].includes(item.status);
-  const averageHours = (values) => values.length ? Math.round(values.reduce((sum, value) => sum + value, 0) / values.length / 36e5) : null;
+  const averageHours = (values) => values.length ? Math.round(
+    values.reduce((sum, value) => sum + value, 0) / values.length / 36e5
+  ) : null;
   return {
     total: cases.length,
     open: cases.filter(open).length,
     received: cases.filter((item) => item.status === "received").length,
     triage: cases.filter((item) => item.status === "triage").length,
     investigation: cases.filter((item) => item.status === "investigation").length,
-    waiting_information: cases.filter((item) => item.status === "waiting_information").length,
+    waiting_information: cases.filter(
+      (item) => item.status === "waiting_information"
+    ).length,
     critical: cases.filter((item) => item.severity === "critical" && open(item)).length,
-    sla_overdue: cases.filter((item) => item.sla_due_at && new Date(item.sla_due_at) < now && open(item)).length,
-    sla_due_soon: cases.filter((item) => item.sla_due_at && new Date(item.sla_due_at) >= now && new Date(item.sla_due_at).getTime() <= now.getTime() + 864e5 && open(item)).length,
+    sla_overdue: cases.filter(
+      (item) => item.sla_due_at && new Date(item.sla_due_at) < now && open(item)
+    ).length,
+    sla_due_soon: cases.filter(
+      (item) => item.sla_due_at && new Date(item.sla_due_at) >= now && new Date(item.sla_due_at).getTime() <= now.getTime() + 864e5 && open(item)
+    ).length,
+    first_response_overdue: cases.filter(
+      (item) => !item.first_action_at && item.first_response_due_at && new Date(item.first_response_due_at) < now && open(item)
+    ).length,
+    treatment_overdue: cases.filter(
+      (item) => item.treatment_due_at && new Date(item.treatment_due_at) < now && open(item)
+    ).length,
     closed: cases.filter((item) => item.status === "closed").length,
-    average_first_action_hours: averageHours(cases.filter((item) => item.first_action_at).map((item) => new Date(item.first_action_at).getTime() - new Date(item.created_at).getTime())),
-    average_resolution_hours: averageHours(cases.filter((item) => item.closed_at).map((item) => new Date(item.closed_at).getTime() - new Date(item.created_at).getTime()))
+    average_first_action_hours: averageHours(
+      cases.filter((item) => item.first_action_at).map(
+        (item) => new Date(item.first_action_at).getTime() - new Date(item.created_at).getTime()
+      )
+    ),
+    average_resolution_hours: averageHours(
+      cases.filter((item) => item.closed_at).map(
+        (item) => new Date(item.closed_at).getTime() - new Date(item.created_at).getTime()
+      )
+    )
   };
+}
+
+// src/domain/integrity-files.ts
+import { createHmac } from "node:crypto";
+import path from "node:path";
+var INTEGRITY_MIME_EXTENSIONS = {
+  "image/jpeg": [".jpg", ".jpeg"],
+  "image/png": [".png"],
+  "image/webp": [".webp"],
+  "application/pdf": [".pdf"],
+  "text/plain": [".txt"],
+  "audio/mpeg": [".mp3"],
+  "audio/wav": [".wav"],
+  "video/mp4": [".mp4"]
+};
+function validateIntegrityEvidence(buffer, mimeType, originalName, maxBytes) {
+  const safeName = path.basename(originalName).replace(/[\u0000-\u001f\u007f]/g, "").trim().slice(0, 180);
+  if (!safeName || !INTEGRITY_MIME_EXTENSIONS[mimeType])
+    return { valid: false, error: "Tipo de arquivo n\xE3o permitido." };
+  if (buffer.length < 1 || buffer.length > maxBytes)
+    return {
+      valid: false,
+      error: `O arquivo deve possuir no m\xE1ximo ${Math.ceil(maxBytes / 1048576)} MB.`
+    };
+  if (!INTEGRITY_MIME_EXTENSIONS[mimeType].includes(
+    path.extname(safeName).toLowerCase()
+  ))
+    return {
+      valid: false,
+      error: "A extens\xE3o n\xE3o corresponde ao tipo informado."
+    };
+  const signatureValid = mimeType === "image/jpeg" && buffer[0] === 255 && buffer[1] === 216 && buffer[2] === 255 || mimeType === "image/png" && buffer.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10])) || mimeType === "image/webp" && buffer.subarray(0, 4).toString() === "RIFF" && buffer.subarray(8, 12).toString() === "WEBP" || mimeType === "application/pdf" && buffer.subarray(0, 5).toString() === "%PDF-" || mimeType === "text/plain" && !buffer.subarray(0, Math.min(buffer.length, 1024)).includes(0) || mimeType === "audio/mpeg" && (buffer.subarray(0, 3).toString() === "ID3" || buffer[0] === 255 && (buffer[1] & 224) === 224) || mimeType === "audio/wav" && buffer.subarray(0, 4).toString() === "RIFF" && buffer.subarray(8, 12).toString() === "WAVE" || mimeType === "video/mp4" && buffer.subarray(4, 8).toString() === "ftyp";
+  if (!signatureValid)
+    return {
+      valid: false,
+      error: "O conte\xFAdo do arquivo n\xE3o corresponde ao formato declarado."
+    };
+  const kind = mimeType.startsWith("image/") ? "image" : mimeType.startsWith("audio/") ? "audio" : mimeType.startsWith("video/") ? "video" : "document";
+  return { valid: true, safeName, kind };
+}
+function integrityRateLimitKey(secret, action, address, scope = "") {
+  if (!secret) throw new Error("Missing server-side rate limit secret");
+  return createHmac("sha256", secret).update(`${action}
+${address}
+${scope}`).digest("hex");
 }
 
 // src/server/integrityRouter.ts
@@ -3461,12 +3710,27 @@ var listSchema = z6.object({
   sla: z6.enum(["due_soon", "overdue"]).optional(),
   page: z6.coerce.number().int().min(1).default(1),
   limit: z6.coerce.number().int().min(1).max(100).default(25),
-  order: z6.enum(["created_at", "sla_due_at", "severity"]).default("created_at"),
+  order: z6.enum([
+    "created_at",
+    "first_response_due_at",
+    "treatment_due_at",
+    "severity"
+  ]).default("created_at"),
   direction: z6.enum(["asc", "desc"]).default("desc")
 });
-var transitionSchema = z6.object({ to_status: z6.string(), reason: z6.string().trim().max(1e3).optional(), lock_version: z6.number().int().positive() });
-var assignmentSchema = z6.object({ membership_id: z6.string().uuid(), reason: z6.string().trim().min(3).max(500) });
-var messageSchema = z6.object({ body: z6.string().trim().min(2).max(5e3), visible_to_reporter: z6.boolean().default(false) });
+var transitionSchema = z6.object({
+  to_status: z6.string(),
+  reason: z6.string().trim().max(1e3).optional(),
+  lock_version: z6.number().int().positive()
+});
+var assignmentSchema = z6.object({
+  membership_id: z6.string().uuid(),
+  reason: z6.string().trim().min(3).max(500)
+});
+var messageSchema = z6.object({
+  body: z6.string().trim().min(2).max(5e3),
+  visible_to_reporter: z6.boolean().default(false)
+});
 var settingsSchema = z6.object({
   introduction: z6.string().trim().min(10).max(2e3),
   instructions: z6.string().trim().max(4e3).nullable().optional(),
@@ -3476,20 +3740,92 @@ var settingsSchema = z6.object({
   automatic_acknowledgement: z6.string().trim().min(5).max(2e3),
   branding: z6.record(z6.string(), z6.unknown()).default({}),
   attachment_policy: z6.record(z6.string(), z6.unknown()).default({}),
-  routing_rules: z6.array(z6.unknown()).default([])
+  routing_rules: z6.array(z6.unknown()).default([]),
+  treatment_sla_hours: z6.number().int().min(1).max(17520).default(720),
+  default_assignee_membership_id: z6.string().uuid().nullable().optional(),
+  default_committee_id: z6.string().uuid().nullable().optional()
 });
-var conflictSchema = z6.object({ membership_id: z6.string().uuid(), reason: z6.string().trim().min(3).max(500) });
-var channelSchema = z6.object({ id: z6.string().uuid().optional(), name: z6.string().trim().min(2).max(160), public_title: z6.string().trim().min(2).max(160), public_slug: z6.string().trim().regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/).max(80), active: z6.boolean().default(true), allows_anonymous: z6.boolean(), allows_identified: z6.boolean() });
-var categorySchema = z6.object({ id: z6.string().uuid().optional(), name: z6.string().trim().min(2).max(120), slug: z6.string().trim().regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/).max(80), description: z6.string().trim().max(1e3).nullable().optional(), default_risk_level: z6.enum(["low", "medium", "high", "critical"]), sla_hours: z6.number().int().min(1).max(8760).nullable().optional(), active: z6.boolean().default(true) });
-var unitSchema = z6.object({ id: z6.string().uuid().optional(), name: z6.string().trim().min(2).max(120), code: z6.string().trim().max(40).nullable().optional(), active: z6.boolean().default(true) });
+var conflictSchema = z6.object({
+  membership_id: z6.string().uuid(),
+  reason: z6.string().trim().min(3).max(500)
+});
+var channelSchema = z6.object({
+  id: z6.string().uuid().optional(),
+  name: z6.string().trim().min(2).max(160),
+  public_title: z6.string().trim().min(2).max(160),
+  public_slug: z6.string().trim().regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/).max(80),
+  active: z6.boolean().default(true),
+  allows_anonymous: z6.boolean(),
+  allows_identified: z6.boolean()
+});
+var categorySchema = z6.object({
+  id: z6.string().uuid().optional(),
+  name: z6.string().trim().min(2).max(120),
+  slug: z6.string().trim().regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/).max(80),
+  description: z6.string().trim().max(1e3).nullable().optional(),
+  default_risk_level: z6.enum(["low", "medium", "high", "critical"]),
+  sla_hours: z6.number().int().min(1).max(8760).nullable().optional(),
+  active: z6.boolean().default(true)
+});
+var unitSchema = z6.object({
+  id: z6.string().uuid().optional(),
+  name: z6.string().trim().min(2).max(120),
+  code: z6.string().trim().max(40).nullable().optional(),
+  active: z6.boolean().default(true)
+});
+var taskSchema = z6.object({
+  title: z6.string().trim().min(2).max(200),
+  description: z6.string().trim().max(2e3).nullable().optional(),
+  assignee_membership_id: z6.string().uuid().nullable().optional(),
+  due_at: z6.string().datetime().nullable().optional(),
+  priority: z6.enum(["low", "normal", "high", "urgent"]).default("normal")
+});
+var taskStatusSchema = z6.object({
+  status: z6.enum(["open", "in_progress", "done", "cancelled"]),
+  reason: z6.string().trim().min(3).max(500)
+});
+var decisionSchema = z6.object({
+  final_classification: z6.string().trim().min(3).max(200),
+  conclusion: z6.string().trim().min(3).max(1e4),
+  measures_taken: z6.string().trim().min(3).max(1e4),
+  internal_justification: z6.string().trim().min(3).max(5e3),
+  reporter_outcome: z6.string().trim().max(3e3).nullable().optional(),
+  lock_version: z6.number().int().positive()
+});
+var committeeSchema = z6.object({
+  name: z6.string().trim().min(2).max(120),
+  description: z6.string().trim().max(1e3).nullable().optional(),
+  member_ids: z6.array(z6.string().uuid()).max(50).default([]),
+  active: z6.boolean().default(true)
+});
+var routingSchema = z6.object({
+  name: z6.string().trim().min(2).max(120),
+  category_id: z6.string().uuid().nullable().optional(),
+  unit_id: z6.string().uuid().nullable().optional(),
+  assignee_membership_id: z6.string().uuid().nullable().optional(),
+  committee_id: z6.string().uuid().nullable().optional(),
+  priority: z6.number().int().min(0).max(1e4).default(100),
+  active: z6.boolean().default(true)
+}).refine((value) => value.assignee_membership_id || value.committee_id, {
+  message: "Defina um respons\xE1vel ou comit\xEA."
+});
 function createIntegrityRouter(getSupabaseAdmin2, authOverrides) {
   const router = express.Router();
-  const auth = authOverrides || { authenticateRequest, resolveTenantContext, requireTenantSolution };
-  router.use(auth.authenticateRequest, auth.resolveTenantContext, auth.requireTenantSolution("integrity"));
+  const auth = authOverrides || {
+    authenticateRequest,
+    resolveTenantContext,
+    requireTenantSolution
+  };
+  router.use(
+    auth.authenticateRequest,
+    auth.resolveTenantContext,
+    auth.requireTenantSolution("integrity")
+  );
   const asyncHandler = (fn) => (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
   const requireAny = (...permissions) => (req, res, next) => {
     const granted = req.tenantContext?.permissions || [];
-    if (!permissions.some((permission) => granted.includes(permission))) return res.status(403).json({ error: "Voc\xEA n\xE3o possui permiss\xE3o para esta opera\xE7\xE3o." });
+    if (!permissions.some((permission) => granted.includes(permission)))
+      return res.status(403).json({ error: "Voc\xEA n\xE3o possui permiss\xE3o para esta opera\xE7\xE3o." });
     next();
   };
   const tenantId = (req) => req.tenantContext.tenant.id;
@@ -3497,197 +3833,1082 @@ function createIntegrityRouter(getSupabaseAdmin2, authOverrides) {
   async function findCase(db, req, id, select = "id,tenant_id,report_id,status,lock_version,owner_membership_id,first_action_at") {
     return db.from("integrity_cases").select(select).eq("id", id).eq("tenant_id", tenantId(req)).maybeSingle();
   }
-  router.get("/dashboard", requireAny("integrity.analytics.read", "integrity.cases.read"), asyncHandler(async (req, res) => {
-    const db = getSupabaseAdmin2();
-    const { data: cases, error } = await db.from("integrity_cases").select("status,severity,sla_due_at,first_action_at,closed_at,created_at,category_id,unit_id").eq("tenant_id", tenantId(req));
-    if (error) return res.status(500).json({ error: "N\xE3o foi poss\xEDvel carregar os indicadores." });
-    const rows = cases || [];
-    return res.json({
-      ...integrityDashboard(rows),
-      updated_at: (/* @__PURE__ */ new Date()).toISOString()
-    });
-  }));
-  router.get("/members", requireAny("integrity.cases.assign", "integrity.cases.manage"), asyncHandler(async (req, res) => {
-    const db = getSupabaseAdmin2();
-    const memberships = await db.from("memberships").select("id,user_id").eq("tenant_id", tenantId(req)).eq("status", "active").order("created_at");
-    if (memberships.error) return res.status(500).json({ error: "N\xE3o foi poss\xEDvel carregar os respons\xE1veis." });
-    const userIds = (memberships.data || []).map((item) => item.user_id);
-    const profiles = userIds.length ? await db.from("profiles").select("id,full_name").in("id", userIds) : { data: [], error: null };
-    if (profiles.error) return res.status(500).json({ error: "N\xE3o foi poss\xEDvel carregar os respons\xE1veis." });
-    const names = new Map((profiles.data || []).map((profile) => [profile.id, profile.full_name]));
-    return res.json({ members: (memberships.data || []).map((item) => ({ id: item.id, name: names.get(item.user_id) || "Membro do tenant" })) });
-  }));
-  router.get("/cases", requireAny("integrity.cases.read"), asyncHandler(async (req, res) => {
-    const parsed = listSchema.safeParse(req.query);
-    if (!parsed.success) return res.status(400).json({ error: "Filtros inv\xE1lidos.", issues: parsed.error.issues });
-    const q = parsed.data;
-    const from = (q.page - 1) * q.limit;
-    const db = getSupabaseAdmin2();
-    let query = db.from("integrity_cases").select("id,protocol,status,severity,priority,sla_due_at,created_at,updated_at,owner_membership_id,lock_version,integrity_categories(name),integrity_units(name),integrity_reports!inner(subject)", { count: "exact" }).eq("tenant_id", tenantId(req));
-    if (q.search) query = query.ilike("protocol", `%${q.search.replace(/[%_,]/g, "")}%`);
-    if (q.status) query = query.eq("status", q.status);
-    if (q.severity) query = query.eq("severity", q.severity);
-    if (q.category_id) query = query.eq("category_id", q.category_id);
-    if (q.unit_id) query = query.eq("unit_id", q.unit_id);
-    if (q.owner_id) query = query.eq("owner_membership_id", q.owner_id);
-    if (q.sla === "overdue") query = query.lt("sla_due_at", (/* @__PURE__ */ new Date()).toISOString()).not("status", "in", "(closed,archived)");
-    if (q.sla === "due_soon") query = query.gte("sla_due_at", (/* @__PURE__ */ new Date()).toISOString()).lte("sla_due_at", new Date(Date.now() + 864e5).toISOString()).not("status", "in", "(closed,archived)");
-    const result = await query.order(q.order, { ascending: q.direction === "asc" }).range(from, from + q.limit - 1);
-    if (result.error) return res.status(500).json({ error: "N\xE3o foi poss\xEDvel carregar os casos." });
-    return res.json({ cases: result.data || [], page: q.page, limit: q.limit, total: result.count || 0, total_pages: Math.ceil((result.count || 0) / q.limit) });
-  }));
-  router.get("/cases/:id", requireAny("integrity.cases.read"), asyncHandler(async (req, res) => {
-    const db = getSupabaseAdmin2();
-    const result = await findCase(db, req, req.params.id, "*,integrity_reports!inner(id,subject,description,occurred_at,reporter_mode,created_at),integrity_categories(name),integrity_units(name),integrity_case_assignments(membership_id,created_at),integrity_case_tasks(*),integrity_case_conflicts(membership_id,reason,active)");
-    if (result.error) return res.status(500).json({ error: "N\xE3o foi poss\xEDvel carregar o caso." });
-    if (!result.data) return res.status(404).json({ error: "Caso n\xE3o encontrado." });
-    return res.json({ case: result.data });
-  }));
-  router.get("/cases/:id/timeline", requireAny("integrity.cases.read"), asyncHandler(async (req, res) => {
-    const db = getSupabaseAdmin2();
-    const found = await findCase(db, req, req.params.id);
-    if (!found.data) return res.status(404).json({ error: "Caso n\xE3o encontrado." });
-    const result = await db.from("integrity_case_events").select("*").eq("case_id", req.params.id).order("created_at", { ascending: false }).limit(200);
-    if (result.error) return res.status(500).json({ error: "N\xE3o foi poss\xEDvel carregar a timeline." });
-    return res.json({ events: result.data || [] });
-  }));
-  router.post("/cases/:id/transitions", requireAny("integrity.cases.manage"), asyncHandler(async (req, res) => {
-    const parsed = transitionSchema.safeParse(req.body);
-    if (!parsed.success) return res.status(400).json({ error: "Transi\xE7\xE3o inv\xE1lida.", issues: parsed.error.issues });
-    const db = getSupabaseAdmin2();
-    const found = await findCase(db, req, req.params.id);
-    if (found.error || !found.data) return res.status(404).json({ error: "Caso n\xE3o encontrado." });
-    const { to_status, reason, lock_version } = parsed.data;
-    if (!canTransitionIntegrityCase(found.data.status, to_status)) return res.status(409).json({ error: `Transi\xE7\xE3o ${found.data.status} \u2192 ${to_status} n\xE3o permitida.` });
-    if (integrityTransitionNeedsReason(to_status) && (!reason || reason.length < 3)) return res.status(400).json({ error: "Informe o motivo desta transi\xE7\xE3o." });
-    const saved = await db.rpc("transition_integrity_case", {
-      p_case_id: req.params.id,
-      p_tenant_id: tenantId(req),
-      p_actor_membership_id: membershipId(req),
-      p_to_status: to_status,
-      p_reason: reason || null,
-      p_expected_lock_version: lock_version
-    });
-    if (saved.error) {
-      const conflict = saved.error.code === "40001" || saved.error.message?.includes("case_version_conflict");
-      return res.status(conflict ? 409 : 500).json({ error: conflict ? "O caso foi alterado por outra pessoa. Atualize a p\xE1gina." : "N\xE3o foi poss\xEDvel alterar o status com auditoria." });
+  router.get(
+    "/dashboard",
+    requireAny("integrity.analytics.read", "integrity.cases.read"),
+    asyncHandler(async (req, res) => {
+      const db = getSupabaseAdmin2();
+      const [{ data: cases, error }, overdueTasks] = await Promise.all([
+        db.from("integrity_cases").select(
+          "status,severity,sla_due_at,first_response_due_at,treatment_due_at,first_action_at,closed_at,created_at,category_id,unit_id"
+        ).eq("tenant_id", tenantId(req)),
+        db.from("integrity_case_tasks").select("id,integrity_cases!inner(tenant_id)", {
+          count: "exact",
+          head: true
+        }).eq("integrity_cases.tenant_id", tenantId(req)).in("status", ["open", "in_progress"]).lt("due_at", (/* @__PURE__ */ new Date()).toISOString())
+      ]);
+      if (error || overdueTasks.error)
+        return res.status(500).json({ error: "N\xE3o foi poss\xEDvel carregar os indicadores." });
+      const rows = cases || [];
+      return res.json({
+        ...integrityDashboard(rows),
+        tasks_overdue: overdueTasks.count || 0,
+        updated_at: (/* @__PURE__ */ new Date()).toISOString()
+      });
+    })
+  );
+  router.get(
+    "/members",
+    requireAny("integrity.cases.assign", "integrity.cases.manage"),
+    asyncHandler(async (req, res) => {
+      const db = getSupabaseAdmin2();
+      const memberships = await db.from("memberships").select("id,user_id").eq("tenant_id", tenantId(req)).eq("status", "active").order("created_at");
+      if (memberships.error)
+        return res.status(500).json({ error: "N\xE3o foi poss\xEDvel carregar os respons\xE1veis." });
+      const userIds = (memberships.data || []).map((item) => item.user_id);
+      const profiles = userIds.length ? await db.from("profiles").select("id,full_name").in("id", userIds) : { data: [], error: null };
+      if (profiles.error)
+        return res.status(500).json({ error: "N\xE3o foi poss\xEDvel carregar os respons\xE1veis." });
+      const names = new Map(
+        (profiles.data || []).map((profile) => [
+          profile.id,
+          profile.full_name
+        ])
+      );
+      return res.json({
+        members: (memberships.data || []).map((item) => ({
+          id: item.id,
+          name: names.get(item.user_id) || "Membro do tenant"
+        }))
+      });
+    })
+  );
+  router.get(
+    "/cases",
+    requireAny("integrity.cases.read"),
+    asyncHandler(async (req, res) => {
+      const parsed = listSchema.safeParse(req.query);
+      if (!parsed.success)
+        return res.status(400).json({ error: "Filtros inv\xE1lidos.", issues: parsed.error.issues });
+      const q = parsed.data;
+      const from = (q.page - 1) * q.limit;
+      const db = getSupabaseAdmin2();
+      let query = db.from("integrity_cases").select(
+        "id,protocol,status,severity,priority,sla_due_at,first_response_due_at,treatment_due_at,first_action_at,created_at,updated_at,owner_membership_id,lock_version,integrity_categories(name),integrity_units(name),integrity_reports!inner(subject)",
+        { count: "exact" }
+      ).eq("tenant_id", tenantId(req));
+      if (q.search)
+        query = query.ilike("protocol", `%${q.search.replace(/[%_,]/g, "")}%`);
+      if (q.status) query = query.eq("status", q.status);
+      if (q.severity) query = query.eq("severity", q.severity);
+      if (q.category_id) query = query.eq("category_id", q.category_id);
+      if (q.unit_id) query = query.eq("unit_id", q.unit_id);
+      if (q.owner_id) query = query.eq("owner_membership_id", q.owner_id);
+      const now = (/* @__PURE__ */ new Date()).toISOString();
+      const soon = new Date(Date.now() + 864e5).toISOString();
+      if (q.sla === "overdue")
+        query = query.or(
+          `and(first_action_at.is.null,first_response_due_at.lt.${now}),treatment_due_at.lt.${now}`
+        ).not("status", "in", "(closed,archived)");
+      if (q.sla === "due_soon")
+        query = query.or(
+          `and(first_action_at.is.null,first_response_due_at.gte.${now},first_response_due_at.lte.${soon}),and(treatment_due_at.gte.${now},treatment_due_at.lte.${soon})`
+        ).not("status", "in", "(closed,archived)");
+      const result = await query.order(q.order, { ascending: q.direction === "asc" }).range(from, from + q.limit - 1);
+      if (result.error)
+        return res.status(500).json({ error: "N\xE3o foi poss\xEDvel carregar os casos." });
+      return res.json({
+        cases: result.data || [],
+        page: q.page,
+        limit: q.limit,
+        total: result.count || 0,
+        total_pages: Math.ceil((result.count || 0) / q.limit)
+      });
+    })
+  );
+  router.get(
+    "/cases/:id",
+    requireAny("integrity.cases.read"),
+    asyncHandler(async (req, res) => {
+      const db = getSupabaseAdmin2();
+      const result = await findCase(
+        db,
+        req,
+        req.params.id,
+        "*,integrity_reports!inner(id,subject,description,occurred_at,reporter_mode,created_at),integrity_categories(name),integrity_units(name),integrity_case_assignments(membership_id,created_at),integrity_case_tasks(*),integrity_case_conflicts(membership_id,reason,active)"
+      );
+      if (result.error)
+        return res.status(500).json({ error: "N\xE3o foi poss\xEDvel carregar o caso." });
+      if (!result.data)
+        return res.status(404).json({ error: "Caso n\xE3o encontrado." });
+      return res.json({ case: result.data });
+    })
+  );
+  router.get(
+    "/cases/:id/timeline",
+    requireAny("integrity.cases.read"),
+    asyncHandler(async (req, res) => {
+      const db = getSupabaseAdmin2();
+      const found = await findCase(db, req, req.params.id);
+      if (!found.data)
+        return res.status(404).json({ error: "Caso n\xE3o encontrado." });
+      const result = await db.from("integrity_case_events").select("*").eq("case_id", req.params.id).order("created_at", { ascending: false }).limit(200);
+      if (result.error)
+        return res.status(500).json({ error: "N\xE3o foi poss\xEDvel carregar a timeline." });
+      return res.json({ events: result.data || [] });
+    })
+  );
+  router.post(
+    "/cases/:id/transitions",
+    requireAny("integrity.cases.manage"),
+    asyncHandler(async (req, res) => {
+      const parsed = transitionSchema.safeParse(req.body);
+      if (!parsed.success)
+        return res.status(400).json({ error: "Transi\xE7\xE3o inv\xE1lida.", issues: parsed.error.issues });
+      const db = getSupabaseAdmin2();
+      const found = await findCase(db, req, req.params.id);
+      if (found.error || !found.data)
+        return res.status(404).json({ error: "Caso n\xE3o encontrado." });
+      const { to_status, reason, lock_version } = parsed.data;
+      if (!canTransitionIntegrityCase(found.data.status, to_status))
+        return res.status(409).json({
+          error: `Transi\xE7\xE3o ${found.data.status} \u2192 ${to_status} n\xE3o permitida.`
+        });
+      if (integrityTransitionNeedsReason(to_status) && (!reason || reason.length < 3))
+        return res.status(400).json({ error: "Informe o motivo desta transi\xE7\xE3o." });
+      const saved = await db.rpc("transition_integrity_case", {
+        p_case_id: req.params.id,
+        p_tenant_id: tenantId(req),
+        p_actor_membership_id: membershipId(req),
+        p_to_status: to_status,
+        p_reason: reason || null,
+        p_expected_lock_version: lock_version
+      });
+      if (saved.error) {
+        const conflict = saved.error.code === "40001" || saved.error.message?.includes("case_version_conflict");
+        return res.status(conflict ? 409 : 500).json({
+          error: conflict ? "O caso foi alterado por outra pessoa. Atualize a p\xE1gina." : "N\xE3o foi poss\xEDvel alterar o status com auditoria."
+        });
+      }
+      const result = Array.isArray(saved.data) ? saved.data[0] : saved.data;
+      return res.json({
+        status: result.status,
+        lock_version: result.lock_version
+      });
+    })
+  );
+  router.post(
+    "/cases/:id/assignments",
+    requireAny("integrity.cases.assign", "integrity.cases.manage"),
+    asyncHandler(async (req, res) => {
+      const parsed = assignmentSchema.safeParse(req.body);
+      if (!parsed.success)
+        return res.status(400).json({ error: "Atribui\xE7\xE3o inv\xE1lida.", issues: parsed.error.issues });
+      const db = getSupabaseAdmin2();
+      const found = await findCase(db, req, req.params.id);
+      if (!found.data)
+        return res.status(404).json({ error: "Caso n\xE3o encontrado." });
+      const target = await db.from("memberships").select("id,status").eq("id", parsed.data.membership_id).eq("tenant_id", tenantId(req)).maybeSingle();
+      if (!target.data || target.data.status !== "active")
+        return res.status(400).json({ error: "Respons\xE1vel n\xE3o est\xE1 ativo neste tenant." });
+      const conflict = await db.from("integrity_case_conflicts").select("id,reason").eq("case_id", req.params.id).eq("membership_id", parsed.data.membership_id).eq("active", true).maybeSingle();
+      if (conflict.data)
+        return res.status(409).json({
+          error: "Atribui\xE7\xE3o bloqueada por conflito de interesse registrado."
+        });
+      const assignment = await db.from("integrity_case_assignments").upsert(
+        {
+          report_id: found.data.report_id,
+          case_id: req.params.id,
+          membership_id: parsed.data.membership_id,
+          assigned_by_membership_id: membershipId(req)
+        },
+        { onConflict: "report_id,membership_id" }
+      );
+      if (assignment.error)
+        return res.status(500).json({ error: "N\xE3o foi poss\xEDvel atribuir o respons\xE1vel." });
+      const owner = await db.from("integrity_cases").update({
+        owner_membership_id: parsed.data.membership_id,
+        updated_at: (/* @__PURE__ */ new Date()).toISOString()
+      }).eq("id", req.params.id).eq("tenant_id", tenantId(req));
+      if (owner.error)
+        return res.status(500).json({
+          error: "A atribui\xE7\xE3o foi criada, mas o respons\xE1vel principal n\xE3o foi atualizado."
+        });
+      const event = await db.from("integrity_case_events").insert({
+        report_id: found.data.report_id,
+        case_id: req.params.id,
+        event_type: "assigned",
+        actor_membership_id: membershipId(req),
+        note: parsed.data.reason,
+        metadata: { assigned_membership_id: parsed.data.membership_id }
+      });
+      if (event.error)
+        return res.status(500).json({ error: "Atribui\xE7\xE3o conclu\xEDda, mas a auditoria falhou." });
+      return res.status(201).json({ assigned: true });
+    })
+  );
+  router.post(
+    "/cases/:id/conflicts",
+    requireAny("integrity.cases.assign", "integrity.cases.manage"),
+    asyncHandler(async (req, res) => {
+      const parsed = conflictSchema.safeParse(req.body);
+      if (!parsed.success)
+        return res.status(400).json({ error: "Conflito inv\xE1lido.", issues: parsed.error.issues });
+      const db = getSupabaseAdmin2();
+      const found = await findCase(db, req, req.params.id);
+      if (!found.data)
+        return res.status(404).json({ error: "Caso n\xE3o encontrado." });
+      const target = await db.from("memberships").select("id").eq("id", parsed.data.membership_id).eq("tenant_id", tenantId(req)).maybeSingle();
+      if (!target.data)
+        return res.status(400).json({ error: "Membro n\xE3o pertence a este tenant." });
+      const saved = await db.from("integrity_case_conflicts").upsert(
+        {
+          case_id: req.params.id,
+          membership_id: parsed.data.membership_id,
+          reason: parsed.data.reason,
+          active: true,
+          created_by_membership_id: membershipId(req)
+        },
+        { onConflict: "case_id,membership_id" }
+      );
+      if (saved.error)
+        return res.status(500).json({ error: "N\xE3o foi poss\xEDvel registrar o conflito." });
+      await db.from("integrity_case_assignments").delete().eq("case_id", req.params.id).eq("membership_id", parsed.data.membership_id);
+      if (found.data.owner_membership_id === parsed.data.membership_id)
+        await db.from("integrity_cases").update({ owner_membership_id: null }).eq("id", req.params.id);
+      const event = await db.from("integrity_case_events").insert({
+        report_id: found.data.report_id,
+        case_id: req.params.id,
+        event_type: "conflict_registered",
+        actor_membership_id: membershipId(req),
+        note: parsed.data.reason,
+        metadata: { blocked_membership_id: parsed.data.membership_id }
+      });
+      if (event.error)
+        return res.status(500).json({ error: "Conflito registrado, mas a auditoria falhou." });
+      return res.status(201).json({ conflict: true });
+    })
+  );
+  router.get(
+    "/cases/:id/messages",
+    requireAny("integrity.cases.read"),
+    asyncHandler(async (req, res) => {
+      const db = getSupabaseAdmin2();
+      const found = await findCase(db, req, req.params.id);
+      if (!found.data)
+        return res.status(404).json({ error: "Caso n\xE3o encontrado." });
+      const result = await db.from("integrity_report_messages").select(
+        "id,author_type,body,visible_to_reporter,created_at,author_membership_id"
+      ).eq("report_id", found.data.report_id).order("created_at");
+      if (result.error)
+        return res.status(500).json({ error: "N\xE3o foi poss\xEDvel carregar as mensagens." });
+      return res.json({ messages: result.data || [] });
+    })
+  );
+  router.post(
+    "/cases/:id/messages",
+    requireAny("integrity.messages.send", "integrity.cases.manage"),
+    asyncHandler(async (req, res) => {
+      const parsed = messageSchema.safeParse(req.body);
+      if (!parsed.success)
+        return res.status(400).json({ error: "Mensagem inv\xE1lida.", issues: parsed.error.issues });
+      const db = getSupabaseAdmin2();
+      const found = await findCase(db, req, req.params.id);
+      if (!found.data)
+        return res.status(404).json({ error: "Caso n\xE3o encontrado." });
+      const saved = await db.from("integrity_report_messages").insert({
+        report_id: found.data.report_id,
+        body: parsed.data.body,
+        visible_to_reporter: parsed.data.visible_to_reporter,
+        author_type: "case_manager",
+        author_membership_id: membershipId(req)
+      }).select("id").single();
+      if (saved.error)
+        return res.status(500).json({ error: "N\xE3o foi poss\xEDvel registrar a mensagem." });
+      const event = await db.from("integrity_case_events").insert({
+        report_id: found.data.report_id,
+        case_id: req.params.id,
+        event_type: parsed.data.visible_to_reporter ? "reporter_message_sent" : "internal_note_added",
+        actor_membership_id: membershipId(req),
+        metadata: {
+          message_id: saved.data.id,
+          visible_to_reporter: parsed.data.visible_to_reporter
+        }
+      });
+      if (event.error)
+        return res.status(500).json({ error: "Mensagem registrada, mas a auditoria falhou." });
+      return res.status(201).json({ id: saved.data.id });
+    })
+  );
+  router.get(
+    "/cases/:id/evidence",
+    requireAny("integrity.cases.read"),
+    asyncHandler(async (req, res) => {
+      const db = getSupabaseAdmin2();
+      const found = await findCase(db, req, req.params.id);
+      if (!found.data)
+        return res.status(404).json({ error: "Caso n\xE3o encontrado." });
+      const result = await db.from("integrity_attachments").select(
+        "id,evidence_kind,description,visible_to_reporter,uploaded_by_type,created_at,files!inner(id,original_name,mime_type,size_bytes,validation_status)"
+      ).eq("case_id", req.params.id).is("deleted_at", null).order("created_at", { ascending: false });
+      if (result.error)
+        return res.status(500).json({ error: "N\xE3o foi poss\xEDvel carregar as evid\xEAncias." });
+      return res.json({ evidence: result.data || [] });
+    })
+  );
+  router.post(
+    "/cases/:id/evidence",
+    requireAny("integrity.evidence.manage"),
+    express.raw({ type: () => true, limit: "10mb" }),
+    asyncHandler(async (req, res) => {
+      if (!Buffer.isBuffer(req.body))
+        return res.status(400).json({ error: "Arquivo inv\xE1lido." });
+      const db = getSupabaseAdmin2();
+      const found = await findCase(db, req, req.params.id);
+      if (!found.data)
+        return res.status(404).json({ error: "Caso n\xE3o encontrado." });
+      const mime = String(req.header("content-type") || "").split(";")[0].toLowerCase();
+      const checked = validateIntegrityEvidence(
+        req.body,
+        mime,
+        req.header("x-file-name") || "",
+        10485760
+      );
+      if (checked.valid === false)
+        return res.status(415).json({ error: checked.error });
+      const visible = req.header("x-visible-to-reporter") === "true";
+      const objectPath = `${tenantId(req)}/${req.params.id}/${randomUUID2()}`;
+      const uploaded = await db.storage.from("ordum-integrity").upload(objectPath, req.body, { contentType: mime, upsert: false });
+      if (uploaded.error)
+        return res.status(500).json({ error: "N\xE3o foi poss\xEDvel armazenar a evid\xEAncia." });
+      const file = await db.from("files").insert({
+        tenant_id: tenantId(req),
+        case_id: req.params.id,
+        bucket: "ordum-integrity",
+        object_path: objectPath,
+        original_name: checked.safeName,
+        mime_type: mime,
+        size_bytes: req.body.length,
+        sensitivity: "restricted",
+        validation_status: "validated",
+        uploaded_by_membership_id: membershipId(req)
+      }).select("id").single();
+      if (file.error) {
+        await db.storage.from("ordum-integrity").remove([objectPath]);
+        return res.status(500).json({ error: "N\xE3o foi poss\xEDvel registrar a evid\xEAncia." });
+      }
+      const attachment = await db.from("integrity_attachments").insert({
+        report_id: found.data.report_id,
+        case_id: req.params.id,
+        file_id: file.data.id,
+        uploaded_by_type: "case_manager",
+        visible_to_reporter: visible,
+        evidence_kind: checked.kind,
+        description: req.header("x-file-description")?.slice(0, 1e3) || null
+      }).select("id").single();
+      if (attachment.error) {
+        await db.storage.from("ordum-integrity").remove([objectPath]);
+        await db.from("files").delete().eq("id", file.data.id);
+        return res.status(500).json({ error: "N\xE3o foi poss\xEDvel vincular a evid\xEAncia." });
+      }
+      await db.from("integrity_case_events").insert({
+        report_id: found.data.report_id,
+        case_id: req.params.id,
+        event_type: "evidence_added",
+        actor_membership_id: membershipId(req),
+        metadata: {
+          attachment_id: attachment.data.id,
+          visible_to_reporter: visible
+        }
+      });
+      return res.status(201).json({ id: attachment.data.id });
+    })
+  );
+  router.post(
+    "/cases/:id/evidence/:evidenceId/url",
+    requireAny("integrity.cases.read"),
+    asyncHandler(async (req, res) => {
+      const db = getSupabaseAdmin2();
+      const found = await findCase(db, req, req.params.id);
+      if (!found.data)
+        return res.status(404).json({ error: "Caso n\xE3o encontrado." });
+      const evidence = await db.from("integrity_attachments").select("files!inner(bucket,object_path)").eq("id", req.params.evidenceId).eq("case_id", req.params.id).is("deleted_at", null).maybeSingle();
+      if (!evidence.data)
+        return res.status(404).json({ error: "Evid\xEAncia n\xE3o encontrada." });
+      const file = evidence.data.files;
+      const signed = await db.storage.from(file.bucket).createSignedUrl(file.object_path, 120);
+      if (signed.error)
+        return res.status(500).json({ error: "N\xE3o foi poss\xEDvel liberar a evid\xEAncia." });
+      return res.json({ url: signed.data.signedUrl, expires_in: 120 });
+    })
+  );
+  router.delete(
+    "/cases/:id/evidence/:evidenceId",
+    requireAny("integrity.evidence.manage"),
+    asyncHandler(async (req, res) => {
+      const reason = String(req.body?.reason || "").trim();
+      if (reason.length < 3)
+        return res.status(400).json({ error: "Informe o motivo da exclus\xE3o." });
+      const db = getSupabaseAdmin2();
+      const found = await findCase(db, req, req.params.id);
+      if (!found.data)
+        return res.status(404).json({ error: "Caso n\xE3o encontrado." });
+      const evidence = await db.from("integrity_attachments").select("file_id,files!inner(bucket,object_path)").eq("id", req.params.evidenceId).eq("case_id", req.params.id).is("deleted_at", null).maybeSingle();
+      if (!evidence.data)
+        return res.status(404).json({ error: "Evid\xEAncia n\xE3o encontrada." });
+      const now = (/* @__PURE__ */ new Date()).toISOString();
+      const marked = await db.from("integrity_attachments").update({
+        deleted_at: now,
+        deleted_by_membership_id: membershipId(req),
+        delete_reason: reason
+      }).eq("id", req.params.evidenceId).eq("case_id", req.params.id);
+      if (marked.error)
+        return res.status(500).json({ error: "N\xE3o foi poss\xEDvel excluir a evid\xEAncia." });
+      await db.from("files").update({
+        deleted_at: now,
+        deleted_by_membership_id: membershipId(req),
+        delete_reason: reason
+      }).eq("id", evidence.data.file_id).eq("tenant_id", tenantId(req));
+      const file = evidence.data.files;
+      const removed = await db.storage.from(file.bucket).remove([file.object_path]);
+      if (removed.error)
+        return res.status(500).json({
+          error: "Metadados exclu\xEDdos, mas a remo\xE7\xE3o segura do objeto falhou."
+        });
+      await db.from("integrity_case_events").insert({
+        report_id: found.data.report_id,
+        case_id: req.params.id,
+        event_type: "evidence_deleted",
+        actor_membership_id: membershipId(req),
+        note: reason,
+        metadata: { attachment_id: req.params.evidenceId }
+      });
+      return res.json({ deleted: true });
+    })
+  );
+  router.get(
+    "/cases/:id/tasks",
+    requireAny("integrity.cases.read"),
+    asyncHandler(async (req, res) => {
+      const db = getSupabaseAdmin2();
+      const found = await findCase(db, req, req.params.id);
+      if (!found.data)
+        return res.status(404).json({ error: "Caso n\xE3o encontrado." });
+      let query = db.from("integrity_case_tasks").select("*").eq("case_id", req.params.id);
+      if (req.query.status)
+        query = query.eq("status", String(req.query.status));
+      if (req.query.overdue === "true")
+        query = query.lt("due_at", (/* @__PURE__ */ new Date()).toISOString()).in("status", ["open", "in_progress"]);
+      const result = await query.order("due_at", {
+        ascending: true,
+        nullsFirst: false
+      });
+      if (result.error)
+        return res.status(500).json({ error: "N\xE3o foi poss\xEDvel carregar as tarefas." });
+      return res.json({ tasks: result.data || [] });
+    })
+  );
+  router.post(
+    "/cases/:id/tasks",
+    requireAny("integrity.cases.manage"),
+    asyncHandler(async (req, res) => {
+      const parsed = taskSchema.safeParse(req.body);
+      if (!parsed.success)
+        return res.status(400).json({ error: "Tarefa inv\xE1lida." });
+      const db = getSupabaseAdmin2();
+      const found = await findCase(db, req, req.params.id);
+      if (!found.data)
+        return res.status(404).json({ error: "Caso n\xE3o encontrado." });
+      if (parsed.data.assignee_membership_id) {
+        const member = await db.from("memberships").select("id,status").eq("id", parsed.data.assignee_membership_id).eq("tenant_id", tenantId(req)).maybeSingle();
+        if (!member.data || member.data.status !== "active")
+          return res.status(400).json({ error: "Respons\xE1vel inv\xE1lido." });
+        const conflict = await db.from("integrity_case_conflicts").select("id").eq("case_id", req.params.id).eq("membership_id", parsed.data.assignee_membership_id).eq("active", true).maybeSingle();
+        if (conflict.data)
+          return res.status(409).json({
+            error: "Respons\xE1vel bloqueado por conflito de interesse."
+          });
+      }
+      const task = await db.from("integrity_case_tasks").insert({
+        case_id: req.params.id,
+        ...parsed.data,
+        created_by_membership_id: membershipId(req)
+      }).select("*").single();
+      if (task.error)
+        return res.status(500).json({ error: "N\xE3o foi poss\xEDvel criar a tarefa." });
+      await db.from("integrity_case_events").insert({
+        report_id: found.data.report_id,
+        case_id: req.params.id,
+        event_type: "task_created",
+        actor_membership_id: membershipId(req),
+        metadata: { task_id: task.data.id, priority: task.data.priority }
+      });
+      return res.status(201).json({ task: task.data });
+    })
+  );
+  router.patch(
+    "/cases/:id/tasks/:taskId",
+    requireAny("integrity.cases.manage"),
+    asyncHandler(async (req, res) => {
+      const parsed = taskStatusSchema.safeParse(req.body);
+      if (!parsed.success)
+        return res.status(400).json({ error: "Atualiza\xE7\xE3o de tarefa inv\xE1lida." });
+      const db = getSupabaseAdmin2();
+      const found = await findCase(db, req, req.params.id);
+      if (!found.data)
+        return res.status(404).json({ error: "Caso n\xE3o encontrado." });
+      const current = await db.from("integrity_case_tasks").select("id,status").eq("id", req.params.taskId).eq("case_id", req.params.id).maybeSingle();
+      if (!current.data)
+        return res.status(404).json({ error: "Tarefa n\xE3o encontrada." });
+      const now = (/* @__PURE__ */ new Date()).toISOString();
+      const update = { status: parsed.data.status, updated_at: now };
+      if (parsed.data.status === "done") {
+        update.completed_at = now;
+        update.completed_by_membership_id = membershipId(req);
+      }
+      if (current.data.status === "done" && parsed.data.status === "open") {
+        update.completed_at = null;
+        update.completed_by_membership_id = null;
+        update.reopened_at = now;
+      }
+      const saved = await db.from("integrity_case_tasks").update(update).eq("id", req.params.taskId).eq("case_id", req.params.id).select("*").single();
+      if (saved.error)
+        return res.status(500).json({ error: "N\xE3o foi poss\xEDvel atualizar a tarefa." });
+      await db.from("integrity_case_events").insert({
+        report_id: found.data.report_id,
+        case_id: req.params.id,
+        event_type: parsed.data.status === "done" ? "task_completed" : current.data.status === "done" ? "task_reopened" : "task_status_changed",
+        actor_membership_id: membershipId(req),
+        note: parsed.data.reason,
+        metadata: {
+          task_id: req.params.taskId,
+          from_status: current.data.status,
+          to_status: parsed.data.status
+        }
+      });
+      return res.json({ task: saved.data });
+    })
+  );
+  router.post(
+    "/cases/:id/decision",
+    requireAny("integrity.cases.manage"),
+    asyncHandler(async (req, res) => {
+      const parsed = decisionSchema.safeParse(req.body);
+      if (!parsed.success)
+        return res.status(400).json({ error: "Preencha todos os campos internos da decis\xE3o." });
+      const db = getSupabaseAdmin2();
+      const saved = await db.rpc("decide_and_close_integrity_case", {
+        p_case_id: req.params.id,
+        p_tenant_id: tenantId(req),
+        p_actor_membership_id: membershipId(req),
+        p_final_classification: parsed.data.final_classification,
+        p_conclusion: parsed.data.conclusion,
+        p_measures_taken: parsed.data.measures_taken,
+        p_internal_justification: parsed.data.internal_justification,
+        p_reporter_outcome: parsed.data.reporter_outcome || null,
+        p_expected_lock_version: parsed.data.lock_version
+      });
+      if (saved.error) {
+        const conflict = saved.error.code === "40001";
+        return res.status(conflict ? 409 : 400).json({
+          error: conflict ? "O caso foi alterado por outra pessoa." : "O caso precisa estar em decis\xE3o e possuir dados completos."
+        });
+      }
+      const result = Array.isArray(saved.data) ? saved.data[0] : saved.data;
+      return res.json(result);
+    })
+  );
+  router.get(
+    "/settings",
+    requireAny("integrity.settings.manage"),
+    asyncHandler(async (req, res) => {
+      const db = getSupabaseAdmin2();
+      const [
+        settings,
+        channels,
+        categories,
+        units,
+        members,
+        committees,
+        committeeMembers,
+        routingRules
+      ] = await Promise.all([
+        db.from("integrity_settings").select("*").eq("tenant_id", tenantId(req)).maybeSingle(),
+        db.from("integrity_channels").select("*").eq("tenant_id", tenantId(req)).order("created_at"),
+        db.from("integrity_categories").select("*").eq("tenant_id", tenantId(req)).order("name"),
+        db.from("integrity_units").select("*").eq("tenant_id", tenantId(req)).order("name"),
+        db.from("memberships").select("id,user_id,status").eq("tenant_id", tenantId(req)).eq("status", "active"),
+        db.from("integrity_committees").select("*").eq("tenant_id", tenantId(req)).order("name"),
+        db.from("integrity_committee_members").select(
+          "committee_id,membership_id,role,active,integrity_committees!inner(tenant_id)"
+        ).eq("integrity_committees.tenant_id", tenantId(req)),
+        db.from("integrity_routing_rules").select("*").eq("tenant_id", tenantId(req)).order("priority")
+      ]);
+      const failed = [
+        settings,
+        channels,
+        categories,
+        units,
+        members,
+        committees,
+        committeeMembers,
+        routingRules
+      ].find((result) => result.error);
+      if (failed)
+        return res.status(500).json({ error: "N\xE3o foi poss\xEDvel carregar as configura\xE7\xF5es." });
+      return res.json({
+        settings: settings.data,
+        channels: channels.data || [],
+        categories: categories.data || [],
+        units: units.data || [],
+        members: members.data || [],
+        committees: committees.data || [],
+        committee_members: committeeMembers.data || [],
+        routing_rules: routingRules.data || []
+      });
+    })
+  );
+  router.put(
+    "/settings",
+    requireAny("integrity.settings.manage"),
+    asyncHandler(async (req, res) => {
+      const parsed = settingsSchema.safeParse(req.body);
+      if (!parsed.success)
+        return res.status(400).json({
+          error: "Configura\xE7\xE3o inv\xE1lida.",
+          issues: parsed.error.issues
+        });
+      if (!parsed.data.allows_anonymous && !parsed.data.allows_identified)
+        return res.status(400).json({ error: "Habilite ao menos um modo de relato." });
+      const db = getSupabaseAdmin2();
+      const saved = await db.from("integrity_settings").upsert(
+        {
+          tenant_id: tenantId(req),
+          ...parsed.data,
+          updated_at: (/* @__PURE__ */ new Date()).toISOString(),
+          updated_by_membership_id: membershipId(req),
+          configured_at: (/* @__PURE__ */ new Date()).toISOString()
+        },
+        { onConflict: "tenant_id" }
+      ).select("*").single();
+      if (saved.error)
+        return res.status(500).json({ error: "N\xE3o foi poss\xEDvel salvar as configura\xE7\xF5es." });
+      return res.json({ settings: saved.data });
+    })
+  );
+  router.post(
+    "/settings/channels",
+    requireAny("integrity.settings.manage"),
+    asyncHandler(async (req, res) => {
+      const parsed = channelSchema.safeParse(req.body);
+      if (!parsed.success)
+        return res.status(400).json({ error: "Canal inv\xE1lido.", issues: parsed.error.issues });
+      if (!parsed.data.allows_anonymous && !parsed.data.allows_identified)
+        return res.status(400).json({ error: "Habilite ao menos um modo de relato." });
+      const db = getSupabaseAdmin2();
+      const { id, ...values } = parsed.data;
+      const settings = await db.from("integrity_settings").upsert(
+        {
+          tenant_id: tenantId(req),
+          updated_by_membership_id: membershipId(req)
+        },
+        { onConflict: "tenant_id" }
+      );
+      if (settings.error)
+        return res.status(500).json({
+          error: "N\xE3o foi poss\xEDvel preparar as configura\xE7\xF5es do tenant."
+        });
+      const query = id ? db.from("integrity_channels").update({ ...values, updated_at: (/* @__PURE__ */ new Date()).toISOString() }).eq("id", id).eq("tenant_id", tenantId(req)) : db.from("integrity_channels").insert({ ...values, tenant_id: tenantId(req) });
+      const saved = await query.select("*").single();
+      if (saved.error)
+        return res.status(saved.error.code === "23505" ? 409 : 500).json({
+          error: saved.error.code === "23505" ? "Este slug p\xFAblico j\xE1 est\xE1 em uso." : "N\xE3o foi poss\xEDvel salvar o canal."
+        });
+      const categories = await db.from("integrity_categories").select("id").eq("tenant_id", tenantId(req)).eq("active", true);
+      if (!categories.error && categories.data?.length)
+        await db.from("integrity_channel_categories").upsert(
+          categories.data.map((item, index) => ({
+            channel_id: saved.data.id,
+            category_id: item.id,
+            sort_order: index
+          })),
+          { onConflict: "channel_id,category_id" }
+        );
+      return res.status(id ? 200 : 201).json({ channel: saved.data });
+    })
+  );
+  router.post(
+    "/settings/categories",
+    requireAny("integrity.settings.manage"),
+    asyncHandler(async (req, res) => {
+      const parsed = categorySchema.safeParse(req.body);
+      if (!parsed.success)
+        return res.status(400).json({ error: "Categoria inv\xE1lida.", issues: parsed.error.issues });
+      const db = getSupabaseAdmin2();
+      const { id, ...values } = parsed.data;
+      const query = id ? db.from("integrity_categories").update(values).eq("id", id).eq("tenant_id", tenantId(req)) : db.from("integrity_categories").insert({ ...values, tenant_id: tenantId(req) });
+      const saved = await query.select("*").single();
+      if (saved.error)
+        return res.status(saved.error.code === "23505" ? 409 : 500).json({
+          error: saved.error.code === "23505" ? "J\xE1 existe uma categoria com este slug." : "N\xE3o foi poss\xEDvel salvar a categoria."
+        });
+      const channels = await db.from("integrity_channels").select("id").eq("tenant_id", tenantId(req));
+      if (!channels.error && channels.data?.length)
+        await db.from("integrity_channel_categories").upsert(
+          channels.data.map((item, index) => ({
+            channel_id: item.id,
+            category_id: saved.data.id,
+            sort_order: index
+          })),
+          { onConflict: "channel_id,category_id" }
+        );
+      return res.status(id ? 200 : 201).json({ category: saved.data });
+    })
+  );
+  router.post(
+    "/settings/units",
+    requireAny("integrity.settings.manage"),
+    asyncHandler(async (req, res) => {
+      const parsed = unitSchema.safeParse(req.body);
+      if (!parsed.success)
+        return res.status(400).json({ error: "Unidade inv\xE1lida.", issues: parsed.error.issues });
+      const db = getSupabaseAdmin2();
+      const { id, ...values } = parsed.data;
+      const query = id ? db.from("integrity_units").update({ ...values, updated_at: (/* @__PURE__ */ new Date()).toISOString() }).eq("id", id).eq("tenant_id", tenantId(req)) : db.from("integrity_units").insert({ ...values, tenant_id: tenantId(req) });
+      const saved = await query.select("*").single();
+      if (saved.error)
+        return res.status(saved.error.code === "23505" ? 409 : 500).json({
+          error: saved.error.code === "23505" ? "Esta unidade j\xE1 existe." : "N\xE3o foi poss\xEDvel salvar a unidade."
+        });
+      return res.status(id ? 200 : 201).json({ unit: saved.data });
+    })
+  );
+  router.post(
+    "/settings/committees",
+    requireAny("integrity.settings.manage"),
+    asyncHandler(async (req, res) => {
+      const parsed = committeeSchema.safeParse(req.body);
+      if (!parsed.success)
+        return res.status(400).json({ error: "Comit\xEA inv\xE1lido." });
+      const db = getSupabaseAdmin2();
+      if (parsed.data.member_ids.length) {
+        const members = await db.from("memberships").select("id").eq("tenant_id", tenantId(req)).eq("status", "active").in("id", parsed.data.member_ids);
+        if (members.error || (members.data || []).length !== parsed.data.member_ids.length)
+          return res.status(400).json({
+            error: "Todos os membros devem estar ativos neste tenant."
+          });
+      }
+      const committee = await db.from("integrity_committees").insert({
+        tenant_id: tenantId(req),
+        name: parsed.data.name,
+        description: parsed.data.description || null,
+        active: parsed.data.active
+      }).select("*").single();
+      if (committee.error)
+        return res.status(committee.error.code === "23505" ? 409 : 500).json({ error: "N\xE3o foi poss\xEDvel criar o comit\xEA." });
+      if (parsed.data.member_ids.length) {
+        const added = await db.from("integrity_committee_members").insert(
+          parsed.data.member_ids.map((id, index) => ({
+            committee_id: committee.data.id,
+            membership_id: id,
+            role: index === 0 ? "chair" : "member"
+          }))
+        );
+        if (added.error) {
+          await db.from("integrity_committees").delete().eq("id", committee.data.id);
+          return res.status(500).json({ error: "N\xE3o foi poss\xEDvel vincular os membros." });
+        }
+      }
+      return res.status(201).json({ committee: committee.data });
+    })
+  );
+  router.post(
+    "/settings/routing",
+    requireAny("integrity.settings.manage"),
+    asyncHandler(async (req, res) => {
+      const parsed = routingSchema.safeParse(req.body);
+      if (!parsed.success)
+        return res.status(400).json({ error: "Regra de roteamento inv\xE1lida." });
+      const db = getSupabaseAdmin2();
+      const value = parsed.data;
+      if (value.assignee_membership_id) {
+        const member = await db.from("memberships").select("id").eq("id", value.assignee_membership_id).eq("tenant_id", tenantId(req)).eq("status", "active").maybeSingle();
+        if (!member.data)
+          return res.status(400).json({ error: "Respons\xE1vel inv\xE1lido." });
+      }
+      if (value.committee_id) {
+        const committee = await db.from("integrity_committees").select("id").eq("id", value.committee_id).eq("tenant_id", tenantId(req)).eq("active", true).maybeSingle();
+        if (!committee.data)
+          return res.status(400).json({ error: "Comit\xEA inv\xE1lido." });
+      }
+      const rule = await db.from("integrity_routing_rules").insert({ tenant_id: tenantId(req), ...value }).select("*").single();
+      if (rule.error)
+        return res.status(500).json({ error: "N\xE3o foi poss\xEDvel criar a regra." });
+      return res.status(201).json({ routing_rule: rule.data });
+    })
+  );
+  return router;
+}
+
+// src/server/integrityPublicRouter.ts
+import express2 from "express";
+import { randomUUID as randomUUID3 } from "node:crypto";
+import { z as z7 } from "zod";
+var reportSchema = z7.object({
+  channel_slug: z7.string().trim().min(2).max(80),
+  category_slug: z7.string().trim().min(1).max(80),
+  reporter_mode: z7.enum(["anonymous", "identified"]),
+  subject: z7.string().trim().min(3).max(160),
+  description: z7.string().trim().min(20).max(2e4),
+  occurred_at: z7.string().date().nullable().optional(),
+  unit_id: z7.string().uuid().nullable().optional(),
+  identity: z7.object({
+    name: z7.string().trim().min(2).max(160),
+    email: z7.string().email().max(254).optional().or(z7.literal("")),
+    phone: z7.string().trim().max(30).optional()
+  }).nullable().optional()
+});
+var credentialsSchema = z7.object({
+  protocol: z7.string().trim().min(8).max(64),
+  secret: z7.string().min(24).max(256)
+});
+var messageSchema2 = credentialsSchema.extend({
+  body: z7.string().trim().min(2).max(5e3)
+});
+function createIntegrityPublicRouter(getSupabaseAdmin2) {
+  const router = express2.Router();
+  const asyncHandler = (fn) => (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
+  const address = (req) => String(req.headers["x-forwarded-for"] || req.ip || "unknown").split(",")[0].trim();
+  const rateSecret = () => process.env.INTEGRITY_RATE_LIMIT_SECRET || process.env.SUPABASE_SECRET_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY || "";
+  async function rate(req, res, action, limit, seconds, scope = "") {
+    const key = integrityRateLimitKey(
+      rateSecret(),
+      action,
+      address(req),
+      scope.toUpperCase().slice(0, 64)
+    );
+    const result = await getSupabaseAdmin2().rpc(
+      "check_integrity_public_rate_limit",
+      {
+        p_key_hash: key,
+        p_action: action,
+        p_limit: limit,
+        p_window_seconds: seconds
+      }
+    );
+    if (result.error) {
+      res.status(503).json({ error: "Prote\xE7\xE3o do canal temporariamente indispon\xEDvel." });
+      return false;
     }
-    const result = Array.isArray(saved.data) ? saved.data[0] : saved.data;
-    return res.json({ status: result.status, lock_version: result.lock_version });
-  }));
-  router.post("/cases/:id/assignments", requireAny("integrity.cases.assign", "integrity.cases.manage"), asyncHandler(async (req, res) => {
-    const parsed = assignmentSchema.safeParse(req.body);
-    if (!parsed.success) return res.status(400).json({ error: "Atribui\xE7\xE3o inv\xE1lida.", issues: parsed.error.issues });
-    const db = getSupabaseAdmin2();
-    const found = await findCase(db, req, req.params.id);
-    if (!found.data) return res.status(404).json({ error: "Caso n\xE3o encontrado." });
-    const target = await db.from("memberships").select("id,status").eq("id", parsed.data.membership_id).eq("tenant_id", tenantId(req)).maybeSingle();
-    if (!target.data || target.data.status !== "active") return res.status(400).json({ error: "Respons\xE1vel n\xE3o est\xE1 ativo neste tenant." });
-    const conflict = await db.from("integrity_case_conflicts").select("id,reason").eq("case_id", req.params.id).eq("membership_id", parsed.data.membership_id).eq("active", true).maybeSingle();
-    if (conflict.data) return res.status(409).json({ error: "Atribui\xE7\xE3o bloqueada por conflito de interesse registrado." });
-    const assignment = await db.from("integrity_case_assignments").upsert({ report_id: found.data.report_id, case_id: req.params.id, membership_id: parsed.data.membership_id, assigned_by_membership_id: membershipId(req) }, { onConflict: "report_id,membership_id" });
-    if (assignment.error) return res.status(500).json({ error: "N\xE3o foi poss\xEDvel atribuir o respons\xE1vel." });
-    const owner = await db.from("integrity_cases").update({ owner_membership_id: parsed.data.membership_id, updated_at: (/* @__PURE__ */ new Date()).toISOString() }).eq("id", req.params.id).eq("tenant_id", tenantId(req));
-    if (owner.error) return res.status(500).json({ error: "A atribui\xE7\xE3o foi criada, mas o respons\xE1vel principal n\xE3o foi atualizado." });
-    const event = await db.from("integrity_case_events").insert({ report_id: found.data.report_id, case_id: req.params.id, event_type: "assigned", actor_membership_id: membershipId(req), note: parsed.data.reason, metadata: { assigned_membership_id: parsed.data.membership_id } });
-    if (event.error) return res.status(500).json({ error: "Atribui\xE7\xE3o conclu\xEDda, mas a auditoria falhou." });
-    return res.status(201).json({ assigned: true });
-  }));
-  router.post("/cases/:id/conflicts", requireAny("integrity.cases.assign", "integrity.cases.manage"), asyncHandler(async (req, res) => {
-    const parsed = conflictSchema.safeParse(req.body);
-    if (!parsed.success) return res.status(400).json({ error: "Conflito inv\xE1lido.", issues: parsed.error.issues });
-    const db = getSupabaseAdmin2();
-    const found = await findCase(db, req, req.params.id);
-    if (!found.data) return res.status(404).json({ error: "Caso n\xE3o encontrado." });
-    const target = await db.from("memberships").select("id").eq("id", parsed.data.membership_id).eq("tenant_id", tenantId(req)).maybeSingle();
-    if (!target.data) return res.status(400).json({ error: "Membro n\xE3o pertence a este tenant." });
-    const saved = await db.from("integrity_case_conflicts").upsert({ case_id: req.params.id, membership_id: parsed.data.membership_id, reason: parsed.data.reason, active: true, created_by_membership_id: membershipId(req) }, { onConflict: "case_id,membership_id" });
-    if (saved.error) return res.status(500).json({ error: "N\xE3o foi poss\xEDvel registrar o conflito." });
-    await db.from("integrity_case_assignments").delete().eq("case_id", req.params.id).eq("membership_id", parsed.data.membership_id);
-    if (found.data.owner_membership_id === parsed.data.membership_id) await db.from("integrity_cases").update({ owner_membership_id: null }).eq("id", req.params.id);
-    const event = await db.from("integrity_case_events").insert({ report_id: found.data.report_id, case_id: req.params.id, event_type: "conflict_registered", actor_membership_id: membershipId(req), note: parsed.data.reason, metadata: { blocked_membership_id: parsed.data.membership_id } });
-    if (event.error) return res.status(500).json({ error: "Conflito registrado, mas a auditoria falhou." });
-    return res.status(201).json({ conflict: true });
-  }));
-  router.get("/cases/:id/messages", requireAny("integrity.cases.read"), asyncHandler(async (req, res) => {
-    const db = getSupabaseAdmin2();
-    const found = await findCase(db, req, req.params.id);
-    if (!found.data) return res.status(404).json({ error: "Caso n\xE3o encontrado." });
-    const result = await db.from("integrity_report_messages").select("id,author_type,body,visible_to_reporter,created_at,author_membership_id").eq("report_id", found.data.report_id).order("created_at");
-    if (result.error) return res.status(500).json({ error: "N\xE3o foi poss\xEDvel carregar as mensagens." });
-    return res.json({ messages: result.data || [] });
-  }));
-  router.post("/cases/:id/messages", requireAny("integrity.messages.send", "integrity.cases.manage"), asyncHandler(async (req, res) => {
-    const parsed = messageSchema.safeParse(req.body);
-    if (!parsed.success) return res.status(400).json({ error: "Mensagem inv\xE1lida.", issues: parsed.error.issues });
-    const db = getSupabaseAdmin2();
-    const found = await findCase(db, req, req.params.id);
-    if (!found.data) return res.status(404).json({ error: "Caso n\xE3o encontrado." });
-    const saved = await db.from("integrity_report_messages").insert({ report_id: found.data.report_id, body: parsed.data.body, visible_to_reporter: parsed.data.visible_to_reporter, author_type: "case_manager", author_membership_id: membershipId(req) }).select("id").single();
-    if (saved.error) return res.status(500).json({ error: "N\xE3o foi poss\xEDvel registrar a mensagem." });
-    const event = await db.from("integrity_case_events").insert({ report_id: found.data.report_id, case_id: req.params.id, event_type: parsed.data.visible_to_reporter ? "reporter_message_sent" : "internal_note_added", actor_membership_id: membershipId(req), metadata: { message_id: saved.data.id, visible_to_reporter: parsed.data.visible_to_reporter } });
-    if (event.error) return res.status(500).json({ error: "Mensagem registrada, mas a auditoria falhou." });
-    return res.status(201).json({ id: saved.data.id });
-  }));
-  router.get("/settings", requireAny("integrity.settings.manage"), asyncHandler(async (req, res) => {
-    const db = getSupabaseAdmin2();
-    const [settings, channels, categories, units, members] = await Promise.all([
-      db.from("integrity_settings").select("*").eq("tenant_id", tenantId(req)).maybeSingle(),
-      db.from("integrity_channels").select("*").eq("tenant_id", tenantId(req)).order("created_at"),
-      db.from("integrity_categories").select("*").eq("tenant_id", tenantId(req)).order("name"),
-      db.from("integrity_units").select("*").eq("tenant_id", tenantId(req)).order("name"),
-      db.from("memberships").select("id,user_id,status").eq("tenant_id", tenantId(req)).eq("status", "active")
-    ]);
-    const failed = [settings, channels, categories, units, members].find((result) => result.error);
-    if (failed) return res.status(500).json({ error: "N\xE3o foi poss\xEDvel carregar as configura\xE7\xF5es." });
-    return res.json({ settings: settings.data, channels: channels.data || [], categories: categories.data || [], units: units.data || [], members: members.data || [] });
-  }));
-  router.put("/settings", requireAny("integrity.settings.manage"), asyncHandler(async (req, res) => {
-    const parsed = settingsSchema.safeParse(req.body);
-    if (!parsed.success) return res.status(400).json({ error: "Configura\xE7\xE3o inv\xE1lida.", issues: parsed.error.issues });
-    if (!parsed.data.allows_anonymous && !parsed.data.allows_identified) return res.status(400).json({ error: "Habilite ao menos um modo de relato." });
-    const db = getSupabaseAdmin2();
-    const saved = await db.from("integrity_settings").upsert({ tenant_id: tenantId(req), ...parsed.data, updated_at: (/* @__PURE__ */ new Date()).toISOString(), updated_by_membership_id: membershipId(req), configured_at: (/* @__PURE__ */ new Date()).toISOString() }, { onConflict: "tenant_id" }).select("*").single();
-    if (saved.error) return res.status(500).json({ error: "N\xE3o foi poss\xEDvel salvar as configura\xE7\xF5es." });
-    return res.json({ settings: saved.data });
-  }));
-  router.post("/settings/channels", requireAny("integrity.settings.manage"), asyncHandler(async (req, res) => {
-    const parsed = channelSchema.safeParse(req.body);
-    if (!parsed.success) return res.status(400).json({ error: "Canal inv\xE1lido.", issues: parsed.error.issues });
-    if (!parsed.data.allows_anonymous && !parsed.data.allows_identified) return res.status(400).json({ error: "Habilite ao menos um modo de relato." });
-    const db = getSupabaseAdmin2();
-    const { id, ...values } = parsed.data;
-    const settings = await db.from("integrity_settings").upsert({ tenant_id: tenantId(req), updated_by_membership_id: membershipId(req) }, { onConflict: "tenant_id" });
-    if (settings.error) return res.status(500).json({ error: "N\xE3o foi poss\xEDvel preparar as configura\xE7\xF5es do tenant." });
-    const query = id ? db.from("integrity_channels").update({ ...values, updated_at: (/* @__PURE__ */ new Date()).toISOString() }).eq("id", id).eq("tenant_id", tenantId(req)) : db.from("integrity_channels").insert({ ...values, tenant_id: tenantId(req) });
-    const saved = await query.select("*").single();
-    if (saved.error) return res.status(saved.error.code === "23505" ? 409 : 500).json({ error: saved.error.code === "23505" ? "Este slug p\xFAblico j\xE1 est\xE1 em uso." : "N\xE3o foi poss\xEDvel salvar o canal." });
-    const categories = await db.from("integrity_categories").select("id").eq("tenant_id", tenantId(req)).eq("active", true);
-    if (!categories.error && categories.data?.length) await db.from("integrity_channel_categories").upsert(categories.data.map((item, index) => ({ channel_id: saved.data.id, category_id: item.id, sort_order: index })), { onConflict: "channel_id,category_id" });
-    return res.status(id ? 200 : 201).json({ channel: saved.data });
-  }));
-  router.post("/settings/categories", requireAny("integrity.settings.manage"), asyncHandler(async (req, res) => {
-    const parsed = categorySchema.safeParse(req.body);
-    if (!parsed.success) return res.status(400).json({ error: "Categoria inv\xE1lida.", issues: parsed.error.issues });
-    const db = getSupabaseAdmin2();
-    const { id, ...values } = parsed.data;
-    const query = id ? db.from("integrity_categories").update(values).eq("id", id).eq("tenant_id", tenantId(req)) : db.from("integrity_categories").insert({ ...values, tenant_id: tenantId(req) });
-    const saved = await query.select("*").single();
-    if (saved.error) return res.status(saved.error.code === "23505" ? 409 : 500).json({ error: saved.error.code === "23505" ? "J\xE1 existe uma categoria com este slug." : "N\xE3o foi poss\xEDvel salvar a categoria." });
-    const channels = await db.from("integrity_channels").select("id").eq("tenant_id", tenantId(req));
-    if (!channels.error && channels.data?.length) await db.from("integrity_channel_categories").upsert(channels.data.map((item, index) => ({ channel_id: item.id, category_id: saved.data.id, sort_order: index })), { onConflict: "channel_id,category_id" });
-    return res.status(id ? 200 : 201).json({ category: saved.data });
-  }));
-  router.post("/settings/units", requireAny("integrity.settings.manage"), asyncHandler(async (req, res) => {
-    const parsed = unitSchema.safeParse(req.body);
-    if (!parsed.success) return res.status(400).json({ error: "Unidade inv\xE1lida.", issues: parsed.error.issues });
-    const db = getSupabaseAdmin2();
-    const { id, ...values } = parsed.data;
-    const query = id ? db.from("integrity_units").update({ ...values, updated_at: (/* @__PURE__ */ new Date()).toISOString() }).eq("id", id).eq("tenant_id", tenantId(req)) : db.from("integrity_units").insert({ ...values, tenant_id: tenantId(req) });
-    const saved = await query.select("*").single();
-    if (saved.error) return res.status(saved.error.code === "23505" ? 409 : 500).json({ error: saved.error.code === "23505" ? "Esta unidade j\xE1 existe." : "N\xE3o foi poss\xEDvel salvar a unidade." });
-    return res.status(id ? 200 : 201).json({ unit: saved.data });
-  }));
+    const value = result.data;
+    res.setHeader("x-ratelimit-remaining", String(value.remaining));
+    if (!value.allowed) {
+      res.setHeader("retry-after", String(value.retry_after_seconds));
+      res.status(429).json({
+        error: "Muitas tentativas. Aguarde antes de tentar novamente."
+      });
+      return false;
+    }
+    return true;
+  }
+  router.get(
+    "/channels/:slug",
+    asyncHandler(async (req, res) => {
+      const result = await getSupabaseAdmin2().rpc("get_integrity_channel", {
+        p_channel_slug: req.params.slug
+      });
+      if (result.error || !result.data)
+        return res.status(404).json({ error: "Canal n\xE3o encontrado, pausado ou indispon\xEDvel." });
+      return res.json({ channel: result.data });
+    })
+  );
+  router.post(
+    "/reports",
+    asyncHandler(async (req, res) => {
+      if (!await rate(req, res, "submit", 5, 3600, req.body?.channel_slug || ""))
+        return;
+      const parsed = reportSchema.safeParse(req.body);
+      if (!parsed.success)
+        return res.status(400).json({ error: "Revise os campos do relato." });
+      const value = parsed.data;
+      const result = await getSupabaseAdmin2().rpc(
+        "submit_integrity_report_v2",
+        {
+          p_channel_slug: value.channel_slug,
+          p_category_slug: value.category_slug,
+          p_reporter_mode: value.reporter_mode,
+          p_subject: value.subject,
+          p_description: value.description,
+          p_occurred_at: value.occurred_at || null,
+          p_unit_id: value.unit_id || null,
+          p_identity: value.identity || null
+        }
+      );
+      if (result.error || !result.data)
+        return res.status(400).json({ error: "N\xE3o foi poss\xEDvel registrar o relato." });
+      return res.status(201).json(result.data);
+    })
+  );
+  router.post(
+    "/track",
+    asyncHandler(async (req, res) => {
+      const parsed = credentialsSchema.safeParse(req.body);
+      if (!parsed.success)
+        return res.status(400).json({ error: "Protocolo ou chave inv\xE1lidos." });
+      if (!await rate(req, res, "track", 20, 900, parsed.data.protocol))
+        return;
+      const result = await getSupabaseAdmin2().rpc("read_integrity_report_v2", {
+        p_protocol: parsed.data.protocol,
+        p_access_secret: parsed.data.secret
+      });
+      if (result.error || !result.data)
+        return res.status(404).json({ error: "Protocolo ou chave inv\xE1lidos." });
+      const authorized = await getSupabaseAdmin2().rpc(
+        "authorize_integrity_reporter",
+        {
+          p_protocol: parsed.data.protocol,
+          p_access_secret: parsed.data.secret
+        }
+      );
+      const access = authorized.data?.[0];
+      const attachments = access ? await getSupabaseAdmin2().from("integrity_attachments").select(
+        "id,evidence_kind,description,created_at,files!inner(original_name,mime_type,size_bytes)"
+      ).eq("case_id", access.case_id).eq("visible_to_reporter", true).is("deleted_at", null).order("created_at") : { data: [] };
+      return res.json({
+        tracking: { ...result.data, attachments: attachments.data || [] }
+      });
+    })
+  );
+  router.post(
+    "/messages",
+    asyncHandler(async (req, res) => {
+      const parsed = messageSchema2.safeParse(req.body);
+      if (!parsed.success)
+        return res.status(400).json({ error: "Mensagem inv\xE1lida." });
+      if (!await rate(req, res, "message", 10, 900, parsed.data.protocol))
+        return;
+      const result = await getSupabaseAdmin2().rpc(
+        "post_integrity_reporter_message",
+        {
+          p_protocol: parsed.data.protocol,
+          p_access_secret: parsed.data.secret,
+          p_body: parsed.data.body
+        }
+      );
+      if (result.error)
+        return res.status(404).json({ error: "N\xE3o foi poss\xEDvel validar o acompanhamento." });
+      return res.status(201).json({ sent: true });
+    })
+  );
+  router.post(
+    "/attachments",
+    express2.raw({ type: () => true, limit: "10mb" }),
+    asyncHandler(async (req, res) => {
+      const parsed = credentialsSchema.safeParse({
+        protocol: req.header("x-integrity-protocol"),
+        secret: req.header("x-integrity-secret")
+      });
+      if (!parsed.success || !Buffer.isBuffer(req.body))
+        return res.status(400).json({ error: "Credenciais ou arquivo inv\xE1lidos." });
+      if (!await rate(req, res, "upload", 10, 3600, parsed.data.protocol))
+        return;
+      const db = getSupabaseAdmin2();
+      const authorization = await db.rpc("authorize_integrity_reporter", {
+        p_protocol: parsed.data.protocol,
+        p_access_secret: parsed.data.secret
+      });
+      const access = authorization.data?.[0];
+      if (authorization.error || !access || ["closed", "archived"].includes(access.status))
+        return res.status(404).json({ error: "N\xE3o foi poss\xEDvel validar o acompanhamento." });
+      const settings = await db.from("integrity_settings").select("attachment_policy").eq("tenant_id", access.tenant_id).single();
+      const policy = settings.data?.attachment_policy || {};
+      if (!policy.enabled)
+        return res.status(403).json({ error: "Este canal n\xE3o permite anexos do denunciante." });
+      const maxFiles = Math.min(Number(policy.max_files) || 3, 10);
+      const count = await db.from("integrity_attachments").select("id", { count: "exact", head: true }).eq("case_id", access.case_id).eq("uploaded_by_type", "reporter").is("deleted_at", null);
+      if ((count.count || 0) >= maxFiles)
+        return res.status(409).json({ error: "Limite de anexos atingido." });
+      const maxBytes = Math.min(
+        (Number(policy.max_size_mb) || 5) * 1048576,
+        10485760
+      );
+      const mime = String(req.header("content-type") || "").split(";")[0].toLowerCase();
+      const checked = validateIntegrityEvidence(
+        req.body,
+        mime,
+        req.header("x-file-name") || "",
+        maxBytes
+      );
+      if (checked.valid === false)
+        return res.status(415).json({ error: checked.error });
+      const objectPath = `${access.tenant_id}/${access.case_id}/${randomUUID3()}`;
+      const uploaded = await db.storage.from("ordum-integrity").upload(objectPath, req.body, { contentType: mime, upsert: false });
+      if (uploaded.error)
+        return res.status(500).json({ error: "N\xE3o foi poss\xEDvel armazenar o anexo." });
+      const file = await db.from("files").insert({
+        tenant_id: access.tenant_id,
+        case_id: access.case_id,
+        bucket: "ordum-integrity",
+        object_path: objectPath,
+        original_name: checked.safeName,
+        mime_type: mime,
+        size_bytes: req.body.length,
+        sensitivity: "restricted",
+        validation_status: "validated"
+      }).select("id").single();
+      if (file.error) {
+        await db.storage.from("ordum-integrity").remove([objectPath]);
+        return res.status(500).json({ error: "N\xE3o foi poss\xEDvel registrar o anexo." });
+      }
+      const attachment = await db.from("integrity_attachments").insert({
+        report_id: access.report_id,
+        case_id: access.case_id,
+        file_id: file.data.id,
+        uploaded_by_type: "reporter",
+        visible_to_reporter: true,
+        evidence_kind: checked.kind
+      }).select("id").single();
+      if (attachment.error) {
+        await db.storage.from("ordum-integrity").remove([objectPath]);
+        await db.from("files").delete().eq("id", file.data.id);
+        return res.status(500).json({ error: "N\xE3o foi poss\xEDvel vincular o anexo." });
+      }
+      await db.from("integrity_case_events").insert({
+        report_id: access.report_id,
+        case_id: access.case_id,
+        event_type: "evidence_added",
+        metadata: { attachment_id: attachment.data.id, source: "reporter" }
+      });
+      return res.status(201).json({ id: attachment.data.id });
+    })
+  );
+  router.post(
+    "/attachments/:id/url",
+    asyncHandler(async (req, res) => {
+      const parsed = credentialsSchema.safeParse(req.body);
+      if (!parsed.success)
+        return res.status(400).json({ error: "Credenciais inv\xE1lidas." });
+      if (!await rate(req, res, "track", 20, 900, parsed.data.protocol))
+        return;
+      const db = getSupabaseAdmin2();
+      const authorization = await db.rpc("authorize_integrity_reporter", {
+        p_protocol: parsed.data.protocol,
+        p_access_secret: parsed.data.secret
+      });
+      const access = authorization.data?.[0];
+      if (!access)
+        return res.status(404).json({ error: "N\xE3o foi poss\xEDvel validar o acompanhamento." });
+      const evidence = await db.from("integrity_attachments").select("files!inner(bucket,object_path)").eq("id", req.params.id).eq("case_id", access.case_id).eq("visible_to_reporter", true).is("deleted_at", null).maybeSingle();
+      if (!evidence.data)
+        return res.status(404).json({ error: "Anexo n\xE3o encontrado." });
+      const file = evidence.data.files;
+      const signed = await db.storage.from(file.bucket).createSignedUrl(file.object_path, 120);
+      if (signed.error)
+        return res.status(500).json({ error: "N\xE3o foi poss\xEDvel liberar o anexo." });
+      return res.json({ url: signed.data.signedUrl, expires_in: 120 });
+    })
+  );
   return router;
 }
 
@@ -3696,31 +4917,40 @@ init_authorization();
 import { createClient as createClient2 } from "@supabase/supabase-js";
 import dotenv from "dotenv";
 import cors from "cors";
-import { randomUUID as randomUUID2 } from "node:crypto";
+import { randomUUID as randomUUID4 } from "node:crypto";
 init_tenantAuth();
 dotenv.config({ path: [".env.local", ".env"] });
 async function createApp() {
   initServerObservability();
-  const app = express2();
+  const app = express3();
   app.disable("x-powered-by");
   app.use((req, res, next) => {
-    const requestId = req.header("x-request-id") || randomUUID2();
+    const requestId = req.header("x-request-id") || randomUUID4();
     req.requestId = requestId;
     res.setHeader("x-request-id", requestId);
     res.setHeader("x-content-type-options", "nosniff");
     res.setHeader("x-frame-options", "DENY");
     res.setHeader("referrer-policy", "strict-origin-when-cross-origin");
-    res.setHeader("permissions-policy", "camera=(), microphone=(), geolocation=()");
-    if (req.path.startsWith("/api/")) res.setHeader("cache-control", "no-store");
+    res.setHeader(
+      "permissions-policy",
+      "camera=(), microphone=(), geolocation=()"
+    );
+    if (req.path.startsWith("/api/"))
+      res.setHeader("cache-control", "no-store");
     next();
   });
-  app.use(express2.json({ limit: "512kb" }));
-  app.use((error, req, res, next) => {
-    if (error instanceof SyntaxError && Object.prototype.hasOwnProperty.call(error, "body")) {
-      return res.status(400).json({ error: "Invalid JSON body", requestId: req.requestId });
+  app.use(express3.json({ limit: "512kb" }));
+  app.use(
+    (error, req, res, next) => {
+      if (error instanceof SyntaxError && Object.prototype.hasOwnProperty.call(error, "body")) {
+        return res.status(400).json({
+          error: "Invalid JSON body",
+          requestId: req.requestId
+        });
+      }
+      next(error);
     }
-    next(error);
-  });
+  );
   app.use(cors());
   let _supabaseAdmin = null;
   const getSupabaseAdmin2 = () => {
@@ -3730,17 +4960,24 @@ async function createApp() {
       if (!url || !key) {
         throw new Error("Missing server-side Supabase credentials");
       }
-      _supabaseAdmin = createClient2(url, key, { auth: { autoRefreshToken: false, persistSession: false } });
+      _supabaseAdmin = createClient2(url, key, {
+        auth: { autoRefreshToken: false, persistSession: false }
+      });
     }
     return _supabaseAdmin;
   };
   const requirePlatformAuth = async (req, res, next) => {
     const authHeader = req.headers.authorization;
-    if (!authHeader) return res.status(401).json({ error: "Missing authorization header" });
+    if (!authHeader)
+      return res.status(401).json({ error: "Missing authorization header" });
     const token = authHeader.replace("Bearer ", "");
     try {
-      const { data: { user }, error: authErr } = await getSupabaseAdmin2().auth.getUser(token);
-      if (authErr || !user) return res.status(401).json({ error: "Invalid session" });
+      const {
+        data: { user },
+        error: authErr
+      } = await getSupabaseAdmin2().auth.getUser(token);
+      if (authErr || !user)
+        return res.status(401).json({ error: "Invalid session" });
       const { data: platformMember, error: memberErr } = await getSupabaseAdmin2().from("platform_members").select("*, platform_roles(*)").eq("user_id", user.id).maybeSingle();
       if (memberErr || !platformMember) {
         return res.status(403).json({ error: "Forbidden: Not a platform member" });
@@ -3777,11 +5014,16 @@ async function createApp() {
   };
   app.get("/api/admin/me", async (req, res) => {
     const authHeader = req.headers.authorization;
-    if (!authHeader) return res.status(401).json({ error: "Missing authorization header" });
+    if (!authHeader)
+      return res.status(401).json({ error: "Missing authorization header" });
     const token = authHeader.replace("Bearer ", "");
     try {
-      const { data: { user }, error: authErr } = await getSupabaseAdmin2().auth.getUser(token);
-      if (authErr || !user) return res.status(401).json({ error: "Invalid session" });
+      const {
+        data: { user },
+        error: authErr
+      } = await getSupabaseAdmin2().auth.getUser(token);
+      if (authErr || !user)
+        return res.status(401).json({ error: "Invalid session" });
       const { data: tenantMemberships } = await getSupabaseAdmin2().from("memberships").select("*, tenants(*)").eq("user_id", user.id);
       const { data: platformMember } = await getSupabaseAdmin2().from("platform_members").select("*, platform_roles(*)").eq("user_id", user.id).maybeSingle();
       if (!platformMember) {
@@ -3825,144 +5067,237 @@ async function createApp() {
       return res.status(500).json({ error: "N\xE3o foi poss\xEDvel resolver a sess\xE3o administrativa." });
     }
   });
-  app.get("/api/workspace/me", authenticateRequest, resolveTenantContext, requireTenantPermission("workspace.access"), async (req, res) => {
-    const { tenantContext, user } = req;
-    res.json({
-      success: true,
-      user_id: user.id,
-      tenant: tenantContext.tenant.name,
-      permissions: tenantContext.permissions,
-      membership_id: tenantContext.membership.id
-    });
-  });
-  app.get("/api/admin/tenants", authenticateRequest, resolvePlatformContext, requirePlatformPermission("platform.access"), async (req, res) => {
-    res.redirect(307, "/api/admin/clients");
-  });
-  app.get("/api/admin/tenants/:id", authenticateRequest, resolvePlatformContext, requirePlatformPermission("platform.access"), async (req, res) => {
-    res.redirect(307, `/api/admin/clients/${encodeURIComponent(req.params.id)}`);
-  });
-  app.post("/api/admin/tenants/release-demo", requirePlatformAuth, async (req, res) => {
-    try {
-      const { platformContext } = req;
-      if (!platformContext.permissions.includes("platform.demos.manage") && platformContext.role?.key !== "admin") {
-        return res.status(403).json({ error: "Forbidden" });
-      }
-      const { tenantId, solutionIds, primaryColor, logoInitials } = req.body;
-      if (!Array.isArray(solutionIds) || solutionIds.length === 0) return res.status(400).json({ error: "Selecione ao menos uma solu\xE7\xE3o para o trial." });
-      const db = getSupabaseAdmin2();
-      const { data: lead, error: leadError } = await db.from("marketing_leads").select("*").eq("id", tenantId).single();
-      if (leadError || !lead) return res.status(404).json({ error: "Lead not found" });
-      const { data: leadAssignment } = await db.from("platform_lead_assignments").select("*").eq("lead_id", lead.id).maybeSingle();
-      if (platformContext.role?.key !== "admin") {
-        const managesTeam = leadAssignment && platformContext.managedTeams.some((team) => team.id === leadAssignment.team_id);
-        const ownsLead = leadAssignment?.owner_platform_member_id === platformContext.platformMember.id;
-        if (!managesTeam && !ownsLead) return res.status(403).json({ error: "Lead fora do seu escopo." });
-      }
-      const { data: { users }, error: usersError } = await db.auth.admin.listUsers({ page: 1, perPage: 1e3 });
-      if (usersError) throw usersError;
-      let user = users.find((candidate) => candidate.email?.toLowerCase() === lead.email.toLowerCase());
-      if (!user) {
-        const origin = process.env.APP_URL || req.headers.origin || `${req.protocol}://${req.get("host")}`;
-        const { data: inviteData, error: inviteError } = await db.auth.admin.inviteUserByEmail(lead.email, {
-          redirectTo: `${String(origin).replace(/\/$/, "")}/#/auth/accept-invite`,
-          data: { full_name: lead.name }
-        });
-        if (inviteError) throw inviteError;
-        user = inviteData.user;
-      }
-      const baseSlug = lead.company.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "").slice(0, 48) || "demo";
-      const slug = `${baseSlug}-${lead.id.replace(/-/g, "").slice(0, 8)}`;
-      let { data: tenant } = await db.from("tenants").select("*").eq("slug", slug).maybeSingle();
-      if (!tenant) {
-        const { data: provisionedTenantId, error: provisionError } = await db.rpc("provision_tenant", {
-          p_name: lead.company,
-          p_slug: slug,
-          p_owner_user_id: user.id
-        });
-        if (provisionError) throw provisionError;
-        const tenantResult = await db.from("tenants").select("*").eq("id", provisionedTenantId).single();
-        if (tenantResult.error) throw tenantResult.error;
-        tenant = tenantResult.data;
-      }
-      const expiresAt = new Date(Date.now() + 14 * 864e5).toISOString();
-      await db.from("tenants").update({ status: "trial", settings: { ...tenant.settings || {}, primaryColor, logoInitials, demo: true, demoExpiresAt: expiresAt } }).eq("id", tenant.id);
-      await db.from("tenant_solutions").delete().eq("tenant_id", tenant.id);
-      const { data: dbSolutions, error: solutionError } = await db.from("solutions").select("id,key").in("key", solutionIds);
-      if (solutionError) throw solutionError;
-      if (dbSolutions?.length) await db.from("tenant_solutions").insert(dbSolutions.map((solution) => ({ tenant_id: tenant.id, solution_id: solution.id, status: "trial" })));
-      if (leadAssignment) await db.from("platform_client_assignments").upsert({
-        tenant_id: tenant.id,
-        team_id: leadAssignment.team_id,
-        owner_platform_member_id: leadAssignment.owner_platform_member_id,
-        assigned_by_user_id: req.user.id,
-        assignment_type: "commercial",
-        status: "active"
-      }, { onConflict: "tenant_id,team_id,assignment_type" });
-      await db.from("marketing_leads").update({ status: "contacted" }).eq("id", lead.id);
-      await db.from("commercial_demos").upsert({
-        lead_id: lead.id,
-        tenant_id: tenant.id,
-        team_id: leadAssignment?.team_id || null,
-        owner_platform_member_id: leadAssignment?.owner_platform_member_id || null,
-        status: "active",
-        starts_at: (/* @__PURE__ */ new Date()).toISOString(),
-        expires_at: expiresAt,
-        approved_by_user_id: req.user.id,
-        approved_at: (/* @__PURE__ */ new Date()).toISOString()
-      }, { onConflict: "lead_id" });
-      await db.from("platform_audit_logs").insert({
-        actor_user_id: req.user.id,
-        action: "demo.released",
-        entity_type: "commercial_demos",
-        entity_id: lead.id,
-        team_id: leadAssignment?.team_id || null,
-        severity: "info",
-        metadata: { tenant_id: tenant.id, expires_at: expiresAt, solution_keys: solutionIds }
+  app.get(
+    "/api/workspace/me",
+    authenticateRequest,
+    resolveTenantContext,
+    requireTenantPermission("workspace.access"),
+    async (req, res) => {
+      const { tenantContext, user } = req;
+      res.json({
+        success: true,
+        user_id: user.id,
+        tenant: tenantContext.tenant.name,
+        permissions: tenantContext.permissions,
+        membership_id: tenantContext.membership.id
       });
-      res.json({ success: true, tenant: { ...tenant, status: "trial" }, expiresAt });
-    } catch (e) {
-      reportServerError(e, req, "demo_release");
-      res.status(500).json({ error: "N\xE3o foi poss\xEDvel liberar a demonstra\xE7\xE3o." });
     }
-  });
-  app.post("/api/admin/tenants/revoke-demo", requirePlatformAuth, async (req, res) => {
-    try {
-      const { platformContext } = req;
-      if (!platformContext.permissions.includes("platform.demos.manage") && platformContext.role?.key !== "admin") {
-        return res.status(403).json({ error: "Forbidden" });
-      }
-      const { tenantId } = req.body;
-      const db = getSupabaseAdmin2();
-      const { data: assignment } = await db.from("platform_client_assignments").select("*").eq("tenant_id", tenantId).eq("assignment_type", "commercial").maybeSingle();
-      if (platformContext.role?.key !== "admin") {
-        const managesTeam = assignment && platformContext.managedTeams.some((team) => team.id === assignment.team_id);
-        const ownsClient = assignment?.owner_platform_member_id === platformContext.platformMember.id;
-        if (!managesTeam && !ownsClient) return res.status(403).json({ error: "Demonstra\xE7\xE3o fora do seu escopo." });
-      }
-      await db.from("tenants").update({ status: "suspended" }).eq("id", tenantId);
-      await db.from("commercial_demos").update({ status: "revoked" }).eq("tenant_id", tenantId);
-      await db.from("platform_audit_logs").insert({ actor_user_id: req.user.id, action: "demo.revoked", entity_type: "commercial_demos", entity_id: tenantId, team_id: assignment?.team_id || null, severity: "warning" });
-      res.json({ success: true });
-    } catch (e) {
-      reportServerError(e, req, "demo_revoke");
-      res.status(500).json({ error: "N\xE3o foi poss\xEDvel revogar a demonstra\xE7\xE3o." });
+  );
+  app.get(
+    "/api/admin/tenants",
+    authenticateRequest,
+    resolvePlatformContext,
+    requirePlatformPermission("platform.access"),
+    async (req, res) => {
+      res.redirect(307, "/api/admin/clients");
     }
-  });
+  );
+  app.get(
+    "/api/admin/tenants/:id",
+    authenticateRequest,
+    resolvePlatformContext,
+    requirePlatformPermission("platform.access"),
+    async (req, res) => {
+      res.redirect(
+        307,
+        `/api/admin/clients/${encodeURIComponent(req.params.id)}`
+      );
+    }
+  );
+  app.post(
+    "/api/admin/tenants/release-demo",
+    requirePlatformAuth,
+    async (req, res) => {
+      try {
+        const { platformContext } = req;
+        if (!platformContext.permissions.includes("platform.demos.manage") && platformContext.role?.key !== "admin") {
+          return res.status(403).json({ error: "Forbidden" });
+        }
+        const { tenantId, solutionIds, primaryColor, logoInitials } = req.body;
+        if (!Array.isArray(solutionIds) || solutionIds.length === 0)
+          return res.status(400).json({ error: "Selecione ao menos uma solu\xE7\xE3o para o trial." });
+        const db = getSupabaseAdmin2();
+        const { data: lead, error: leadError } = await db.from("marketing_leads").select("*").eq("id", tenantId).single();
+        if (leadError || !lead)
+          return res.status(404).json({ error: "Lead not found" });
+        const { data: leadAssignment } = await db.from("platform_lead_assignments").select("*").eq("lead_id", lead.id).maybeSingle();
+        if (platformContext.role?.key !== "admin") {
+          const managesTeam = leadAssignment && platformContext.managedTeams.some(
+            (team) => team.id === leadAssignment.team_id
+          );
+          const ownsLead = leadAssignment?.owner_platform_member_id === platformContext.platformMember.id;
+          if (!managesTeam && !ownsLead)
+            return res.status(403).json({ error: "Lead fora do seu escopo." });
+        }
+        const {
+          data: { users },
+          error: usersError
+        } = await db.auth.admin.listUsers({ page: 1, perPage: 1e3 });
+        if (usersError) throw usersError;
+        let user = users.find(
+          (candidate) => candidate.email?.toLowerCase() === lead.email.toLowerCase()
+        );
+        if (!user) {
+          const origin = process.env.APP_URL || req.headers.origin || `${req.protocol}://${req.get("host")}`;
+          const { data: inviteData, error: inviteError } = await db.auth.admin.inviteUserByEmail(lead.email, {
+            redirectTo: `${String(origin).replace(/\/$/, "")}/#/auth/accept-invite`,
+            data: { full_name: lead.name }
+          });
+          if (inviteError) throw inviteError;
+          user = inviteData.user;
+        }
+        const baseSlug = lead.company.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "").slice(0, 48) || "demo";
+        const slug = `${baseSlug}-${lead.id.replace(/-/g, "").slice(0, 8)}`;
+        let { data: tenant } = await db.from("tenants").select("*").eq("slug", slug).maybeSingle();
+        if (!tenant) {
+          const { data: provisionedTenantId, error: provisionError } = await db.rpc("provision_tenant", {
+            p_name: lead.company,
+            p_slug: slug,
+            p_owner_user_id: user.id
+          });
+          if (provisionError) throw provisionError;
+          const tenantResult = await db.from("tenants").select("*").eq("id", provisionedTenantId).single();
+          if (tenantResult.error) throw tenantResult.error;
+          tenant = tenantResult.data;
+        }
+        const expiresAt = new Date(Date.now() + 14 * 864e5).toISOString();
+        await db.from("tenants").update({
+          status: "trial",
+          settings: {
+            ...tenant.settings || {},
+            primaryColor,
+            logoInitials,
+            demo: true,
+            demoExpiresAt: expiresAt
+          }
+        }).eq("id", tenant.id);
+        await db.from("tenant_solutions").delete().eq("tenant_id", tenant.id);
+        const { data: dbSolutions, error: solutionError } = await db.from("solutions").select("id,key").in("key", solutionIds);
+        if (solutionError) throw solutionError;
+        if (dbSolutions?.length)
+          await db.from("tenant_solutions").insert(
+            dbSolutions.map((solution) => ({
+              tenant_id: tenant.id,
+              solution_id: solution.id,
+              status: "trial"
+            }))
+          );
+        if (leadAssignment)
+          await db.from("platform_client_assignments").upsert(
+            {
+              tenant_id: tenant.id,
+              team_id: leadAssignment.team_id,
+              owner_platform_member_id: leadAssignment.owner_platform_member_id,
+              assigned_by_user_id: req.user.id,
+              assignment_type: "commercial",
+              status: "active"
+            },
+            { onConflict: "tenant_id,team_id,assignment_type" }
+          );
+        await db.from("marketing_leads").update({ status: "contacted" }).eq("id", lead.id);
+        await db.from("commercial_demos").upsert(
+          {
+            lead_id: lead.id,
+            tenant_id: tenant.id,
+            team_id: leadAssignment?.team_id || null,
+            owner_platform_member_id: leadAssignment?.owner_platform_member_id || null,
+            status: "active",
+            starts_at: (/* @__PURE__ */ new Date()).toISOString(),
+            expires_at: expiresAt,
+            approved_by_user_id: req.user.id,
+            approved_at: (/* @__PURE__ */ new Date()).toISOString()
+          },
+          { onConflict: "lead_id" }
+        );
+        await db.from("platform_audit_logs").insert({
+          actor_user_id: req.user.id,
+          action: "demo.released",
+          entity_type: "commercial_demos",
+          entity_id: lead.id,
+          team_id: leadAssignment?.team_id || null,
+          severity: "info",
+          metadata: {
+            tenant_id: tenant.id,
+            expires_at: expiresAt,
+            solution_keys: solutionIds
+          }
+        });
+        res.json({
+          success: true,
+          tenant: { ...tenant, status: "trial" },
+          expiresAt
+        });
+      } catch (e) {
+        reportServerError(e, req, "demo_release");
+        res.status(500).json({ error: "N\xE3o foi poss\xEDvel liberar a demonstra\xE7\xE3o." });
+      }
+    }
+  );
+  app.post(
+    "/api/admin/tenants/revoke-demo",
+    requirePlatformAuth,
+    async (req, res) => {
+      try {
+        const { platformContext } = req;
+        if (!platformContext.permissions.includes("platform.demos.manage") && platformContext.role?.key !== "admin") {
+          return res.status(403).json({ error: "Forbidden" });
+        }
+        const { tenantId } = req.body;
+        const db = getSupabaseAdmin2();
+        const { data: assignment } = await db.from("platform_client_assignments").select("*").eq("tenant_id", tenantId).eq("assignment_type", "commercial").maybeSingle();
+        if (platformContext.role?.key !== "admin") {
+          const managesTeam = assignment && platformContext.managedTeams.some(
+            (team) => team.id === assignment.team_id
+          );
+          const ownsClient = assignment?.owner_platform_member_id === platformContext.platformMember.id;
+          if (!managesTeam && !ownsClient)
+            return res.status(403).json({ error: "Demonstra\xE7\xE3o fora do seu escopo." });
+        }
+        await db.from("tenants").update({ status: "suspended" }).eq("id", tenantId);
+        await db.from("commercial_demos").update({ status: "revoked" }).eq("tenant_id", tenantId);
+        await db.from("platform_audit_logs").insert({
+          actor_user_id: req.user.id,
+          action: "demo.revoked",
+          entity_type: "commercial_demos",
+          entity_id: tenantId,
+          team_id: assignment?.team_id || null,
+          severity: "warning"
+        });
+        res.json({ success: true });
+      } catch (e) {
+        reportServerError(e, req, "demo_revoke");
+        res.status(500).json({ error: "N\xE3o foi poss\xEDvel revogar a demonstra\xE7\xE3o." });
+      }
+    }
+  );
   app.get("/api/admin/consultants", requirePlatformAuth, async (_req, res) => {
     res.redirect(307, "/api/admin/staff");
   });
   app.get("/api/admin/contracts", requirePlatformAuth, async (req, res) => {
     res.redirect(307, "/api/admin/commercial/contracts");
   });
-  app.use("/api/admin/teams", createAdminTeamsRouter(getSupabaseAdmin2, requirePlatformAuth));
-  app.use("/api/admin/leads", createAdminLeadsRouter(getSupabaseAdmin2, requirePlatformAuth));
+  app.use(
+    "/api/admin/teams",
+    createAdminTeamsRouter(getSupabaseAdmin2, requirePlatformAuth)
+  );
+  app.use(
+    "/api/admin/leads",
+    createAdminLeadsRouter(getSupabaseAdmin2, requirePlatformAuth)
+  );
   app.use("/api/admin/clients", createAdminClientsRouter(getSupabaseAdmin2));
   app.use("/api/admin", createAdminControlPlaneRouter(getSupabaseAdmin2));
-  app.use("/api/admin", createAdminOtherRouter(getSupabaseAdmin2, requirePlatformAuth));
+  app.use(
+    "/api/admin",
+    createAdminOtherRouter(getSupabaseAdmin2, requirePlatformAuth)
+  );
   const billingRouters = createBillingRouters(getSupabaseAdmin2);
   app.use("/api/webhooks", billingRouters.publicRouter);
   app.use("/api/admin", billingRouters.adminRouter);
   app.use("/api/internal/billing", billingRouters.internalRouter);
+  app.use(
+    "/api/public/integrity",
+    createIntegrityPublicRouter(getSupabaseAdmin2)
+  );
   app.use("/api/workspace/integrity", createIntegrityRouter(getSupabaseAdmin2));
   app.get("/api/admin/stats", requirePlatformAuth, async (req, res) => {
     try {
@@ -3972,30 +5307,74 @@ async function createApp() {
         db.from("platform_lead_assignments").select("*"),
         db.from("platform_client_assignments").select("*").eq("assignment_type", "commercial")
       ]);
-      const scopedLeads = platformContext.role?.key === "admin" ? leadAssignments.data || [] : (leadAssignments.data || []).filter((item) => canReadAssignedResource(platformContext, item, "member_lead_visibility"));
-      const scopedClients = platformContext.role?.key === "admin" ? clientAssignments.data || [] : (clientAssignments.data || []).filter((item) => canReadAssignedResource(platformContext, item, "member_client_visibility"));
-      const leadIds = [...new Set(scopedLeads.map((item) => item.lead_id))];
-      const tenantIds = [...new Set(scopedClients.map((item) => item.tenant_id))];
+      const scopedLeads = platformContext.role?.key === "admin" ? leadAssignments.data || [] : (leadAssignments.data || []).filter(
+        (item) => canReadAssignedResource(
+          platformContext,
+          item,
+          "member_lead_visibility"
+        )
+      );
+      const scopedClients = platformContext.role?.key === "admin" ? clientAssignments.data || [] : (clientAssignments.data || []).filter(
+        (item) => canReadAssignedResource(
+          platformContext,
+          item,
+          "member_client_visibility"
+        )
+      );
+      const leadIds = [
+        ...new Set(scopedLeads.map((item) => item.lead_id))
+      ];
+      const tenantIds = [
+        ...new Set(scopedClients.map((item) => item.tenant_id))
+      ];
       let leadsQuery = db.from("marketing_leads").select("id,status");
       let demosQuery = db.from("commercial_demos").select("id,status,lead_id");
       let proposalsQuery = db.from("commercial_proposals").select("id,status,lead_id,amount_cents");
-      let contractsQuery = db.from("commercial_contracts").select("id,status,tenant_id,amount_cents,cycle,team_id,owner_platform_member_id");
+      let contractsQuery = db.from("commercial_contracts").select(
+        "id,status,tenant_id,amount_cents,cycle,team_id,owner_platform_member_id"
+      );
       let tenantsQuery = db.from("tenants").select("id,status,onboarding_status");
       if (platformContext.role?.key !== "admin") {
-        if (!leadIds.length && !tenantIds.length) return res.json({ clients: 0, leads: 0, demos: 0, teams: platformContext.teams.length, proposals: 0, contracts: 0, conversionRate: 0, onboarding: 0, subscriptions: {}, overdue: 0, mrrCents: 0, alerts: [], leadsByStatus: {}, recentActivity: [] });
+        if (!leadIds.length && !tenantIds.length)
+          return res.json({
+            clients: 0,
+            leads: 0,
+            demos: 0,
+            teams: platformContext.teams.length,
+            proposals: 0,
+            contracts: 0,
+            conversionRate: 0,
+            onboarding: 0,
+            subscriptions: {},
+            overdue: 0,
+            mrrCents: 0,
+            alerts: [],
+            leadsByStatus: {},
+            recentActivity: []
+          });
         if (leadIds.length) {
           leadsQuery = leadsQuery.in("id", leadIds);
           demosQuery = demosQuery.in("lead_id", leadIds);
           proposalsQuery = proposalsQuery.in("lead_id", leadIds);
         } else {
-          leadsQuery = leadsQuery.eq("id", randomUUID2());
-          demosQuery = demosQuery.eq("id", randomUUID2());
-          proposalsQuery = proposalsQuery.eq("id", randomUUID2());
+          leadsQuery = leadsQuery.eq("id", randomUUID4());
+          demosQuery = demosQuery.eq("id", randomUUID4());
+          proposalsQuery = proposalsQuery.eq("id", randomUUID4());
         }
         if (tenantIds.length) tenantsQuery = tenantsQuery.in("id", tenantIds);
-        else tenantsQuery = tenantsQuery.eq("id", randomUUID2());
+        else tenantsQuery = tenantsQuery.eq("id", randomUUID4());
       }
-      const [leads, demos, proposals, contractsResult, tenants, teams, subscriptions, overdue, recentActivity] = await Promise.all([
+      const [
+        leads,
+        demos,
+        proposals,
+        contractsResult,
+        tenants,
+        teams,
+        subscriptions,
+        overdue,
+        recentActivity
+      ] = await Promise.all([
         leadsQuery,
         demosQuery,
         proposalsQuery,
@@ -4004,19 +5383,74 @@ async function createApp() {
         db.from("platform_teams").select("*", { count: "exact", head: true }).eq("status", "active"),
         db.from("billing_subscriptions").select("status,amount_cents,cycle,contract_id"),
         db.from("billing_payments").select("id,contract_id,status").eq("status", "overdue"),
-        db.from("commercial_activities").select("id,subject,activity_type,status,created_at,team_id,owner_platform_member_id").order("created_at", { ascending: false }).limit(10)
+        db.from("commercial_activities").select(
+          "id,subject,activity_type,status,created_at,team_id,owner_platform_member_id"
+        ).order("created_at", { ascending: false }).limit(10)
       ]);
-      const contracts = platformContext.role?.key === "admin" ? contractsResult.data || [] : (contractsResult.data || []).filter((item) => canReadAssignedResource(platformContext, item, "member_client_visibility"));
+      const contracts = platformContext.role?.key === "admin" ? contractsResult.data || [] : (contractsResult.data || []).filter(
+        (item) => canReadAssignedResource(
+          platformContext,
+          item,
+          "member_client_visibility"
+        )
+      );
       const contractIds = new Set(contracts.map((item) => item.id));
-      const scopedSubscriptions = (subscriptions.data || []).filter((item) => platformContext.role?.key === "admin" || contractIds.has(item.contract_id));
-      const scopedOverdue = (overdue.data || []).filter((item) => platformContext.role?.key === "admin" || contractIds.has(item.contract_id));
-      const cycleDivisor = { weekly: 52 / 12, biweekly: 26 / 12, monthly: 1, quarterly: 1 / 3, semiannual: 1 / 6, yearly: 1 / 12 };
-      const activeSubscriptions = scopedSubscriptions.filter((item) => item.status === "active");
-      const mrrCents = Math.round(activeSubscriptions.reduce((sum, item) => sum + Number(item.amount_cents || 0) * (cycleDivisor[item.cycle] || 0), 0));
-      const leadsByStatus = (leads.data || []).reduce((acc, item) => ({ ...acc, [item.status]: (acc[item.status] || 0) + 1 }), {});
-      const subscriptionStates = scopedSubscriptions.reduce((acc, item) => ({ ...acc, [item.status]: (acc[item.status] || 0) + 1 }), {});
-      const scopedRecent = platformContext.role?.key === "admin" ? recentActivity.data || [] : (recentActivity.data || []).filter((item) => canReadAssignedResource(platformContext, item, "member_lead_visibility"));
-      const alerts = [scopedOverdue.length ? { type: "overdue", count: scopedOverdue.length, label: "Pagamentos vencidos" } : null, subscriptionStates.past_due ? { type: "subscription", count: subscriptionStates.past_due, label: "Assinaturas em atraso" } : null].filter(Boolean);
+      const scopedSubscriptions = (subscriptions.data || []).filter(
+        (item) => platformContext.role?.key === "admin" || contractIds.has(item.contract_id)
+      );
+      const scopedOverdue = (overdue.data || []).filter(
+        (item) => platformContext.role?.key === "admin" || contractIds.has(item.contract_id)
+      );
+      const cycleDivisor = {
+        weekly: 52 / 12,
+        biweekly: 26 / 12,
+        monthly: 1,
+        quarterly: 1 / 3,
+        semiannual: 1 / 6,
+        yearly: 1 / 12
+      };
+      const activeSubscriptions = scopedSubscriptions.filter(
+        (item) => item.status === "active"
+      );
+      const mrrCents = Math.round(
+        activeSubscriptions.reduce(
+          (sum, item) => sum + Number(item.amount_cents || 0) * (cycleDivisor[item.cycle] || 0),
+          0
+        )
+      );
+      const leadsByStatus = (leads.data || []).reduce(
+        (acc, item) => ({
+          ...acc,
+          [item.status]: (acc[item.status] || 0) + 1
+        }),
+        {}
+      );
+      const subscriptionStates = scopedSubscriptions.reduce(
+        (acc, item) => ({
+          ...acc,
+          [item.status]: (acc[item.status] || 0) + 1
+        }),
+        {}
+      );
+      const scopedRecent = platformContext.role?.key === "admin" ? recentActivity.data || [] : (recentActivity.data || []).filter(
+        (item) => canReadAssignedResource(
+          platformContext,
+          item,
+          "member_lead_visibility"
+        )
+      );
+      const alerts = [
+        scopedOverdue.length ? {
+          type: "overdue",
+          count: scopedOverdue.length,
+          label: "Pagamentos vencidos"
+        } : null,
+        subscriptionStates.past_due ? {
+          type: "subscription",
+          count: subscriptionStates.past_due,
+          label: "Assinaturas em atraso"
+        } : null
+      ].filter(Boolean);
       res.json({
         clients: tenants.data?.length || 0,
         leads: leads.data?.length || 0,
@@ -4025,7 +5459,9 @@ async function createApp() {
         proposals: proposals.data?.length || 0,
         contracts: contracts.length,
         conversionRate: leads.data?.length ? Math.round(contracts.length / leads.data.length * 1e3) / 10 : 0,
-        onboarding: (tenants.data || []).filter((item) => item.onboarding_status === "in_progress").length,
+        onboarding: (tenants.data || []).filter(
+          (item) => item.onboarding_status === "in_progress"
+        ).length,
         subscriptions: subscriptionStates,
         overdue: scopedOverdue.length,
         mrrCents,
@@ -4063,11 +5499,16 @@ async function createApp() {
     }
   });
   installServerErrorHandler(app);
-  app.use((error, req, res, _next) => {
-    reportServerError(error, req, "unhandled_request");
-    if (res.headersSent) return;
-    res.status(500).json({ error: "Unexpected server error", requestId: req.requestId });
-  });
+  app.use(
+    (error, req, res, _next) => {
+      reportServerError(error, req, "unhandled_request");
+      if (res.headersSent) return;
+      res.status(500).json({
+        error: "Unexpected server error",
+        requestId: req.requestId
+      });
+    }
+  );
   if (process.env.NODE_ENV !== "production") {
     const { createServer: createViteServer } = await import("vite");
     const vite = await createViteServer({
@@ -4076,10 +5517,10 @@ async function createApp() {
     });
     app.use(vite.middlewares);
   } else {
-    const distPath = path.join(process.cwd(), "dist");
-    app.use(express2.static(distPath));
+    const distPath = path2.join(process.cwd(), "dist");
+    app.use(express3.static(distPath));
     app.get("*all", (req, res) => {
-      res.sendFile(path.join(distPath, "index.html"));
+      res.sendFile(path2.join(distPath, "index.html"));
     });
   }
   return app;
@@ -4099,8 +5540,8 @@ if (!process.env.VERCEL) {
 var appPromise = createApp();
 async function handler(req, res) {
   const app = await appPromise;
-  const path2 = typeof req.query.path === "string" ? req.query.path : "";
-  if (path2) {
+  const path3 = typeof req.query.path === "string" ? req.query.path : "";
+  if (path3) {
     const query = new URLSearchParams();
     for (const [key, value] of Object.entries(req.query)) {
       if (key === "path") continue;
@@ -4112,7 +5553,7 @@ async function handler(req, res) {
         query.set(key, value);
       }
     }
-    req.url = `/api/${path2}${query.size ? `?${query}` : ""}`;
+    req.url = `/api/${path3}${query.size ? `?${query}` : ""}`;
   }
   return app(req, res);
 }

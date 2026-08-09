@@ -1766,7 +1766,11 @@ export type Database = {
       files: {
         Row: {
           bucket: string
+          case_id: string | null
           created_at: string
+          delete_reason: string | null
+          deleted_at: string | null
+          deleted_by_membership_id: string | null
           id: string
           mime_type: string | null
           object_path: string
@@ -1775,10 +1779,15 @@ export type Database = {
           size_bytes: number | null
           tenant_id: string
           uploaded_by_membership_id: string | null
+          validation_status: string
         }
         Insert: {
           bucket: string
+          case_id?: string | null
           created_at?: string
+          delete_reason?: string | null
+          deleted_at?: string | null
+          deleted_by_membership_id?: string | null
           id?: string
           mime_type?: string | null
           object_path: string
@@ -1787,10 +1796,15 @@ export type Database = {
           size_bytes?: number | null
           tenant_id: string
           uploaded_by_membership_id?: string | null
+          validation_status?: string
         }
         Update: {
           bucket?: string
+          case_id?: string | null
           created_at?: string
+          delete_reason?: string | null
+          deleted_at?: string | null
+          deleted_by_membership_id?: string | null
           id?: string
           mime_type?: string | null
           object_path?: string
@@ -1799,8 +1813,23 @@ export type Database = {
           size_bytes?: number | null
           tenant_id?: string
           uploaded_by_membership_id?: string | null
+          validation_status?: string
         }
         Relationships: [
+          {
+            foreignKeyName: "files_case_id_fkey"
+            columns: ["case_id"]
+            isOneToOne: false
+            referencedRelation: "integrity_cases"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "files_deleted_by_membership_id_fkey"
+            columns: ["deleted_by_membership_id"]
+            isOneToOne: false
+            referencedRelation: "memberships"
+            referencedColumns: ["id"]
+          },
           {
             foreignKeyName: "files_tenant_id_fkey"
             columns: ["tenant_id"]
@@ -1819,27 +1848,62 @@ export type Database = {
       }
       integrity_attachments: {
         Row: {
+          case_id: string | null
           created_at: string
+          delete_reason: string | null
+          deleted_at: string | null
+          deleted_by_membership_id: string | null
+          description: string | null
+          evidence_kind: string
           file_id: string
           id: string
           report_id: string
           uploaded_by_type: string
+          visible_to_reporter: boolean
         }
         Insert: {
+          case_id?: string | null
           created_at?: string
+          delete_reason?: string | null
+          deleted_at?: string | null
+          deleted_by_membership_id?: string | null
+          description?: string | null
+          evidence_kind?: string
           file_id: string
           id?: string
           report_id: string
           uploaded_by_type: string
+          visible_to_reporter?: boolean
         }
         Update: {
+          case_id?: string | null
           created_at?: string
+          delete_reason?: string | null
+          deleted_at?: string | null
+          deleted_by_membership_id?: string | null
+          description?: string | null
+          evidence_kind?: string
           file_id?: string
           id?: string
           report_id?: string
           uploaded_by_type?: string
+          visible_to_reporter?: boolean
         }
         Relationships: [
+          {
+            foreignKeyName: "integrity_attachments_case_id_fkey"
+            columns: ["case_id"]
+            isOneToOne: false
+            referencedRelation: "integrity_cases"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "integrity_attachments_deleted_by_membership_id_fkey"
+            columns: ["deleted_by_membership_id"]
+            isOneToOne: false
+            referencedRelation: "memberships"
+            referencedColumns: ["id"]
+          },
           {
             foreignKeyName: "integrity_attachments_file_id_fkey"
             columns: ["file_id"]
@@ -1859,18 +1923,21 @@ export type Database = {
       integrity_case_assignments: {
         Row: {
           assigned_by_membership_id: string | null
+          case_id: string | null
           created_at: string
           membership_id: string
           report_id: string
         }
         Insert: {
           assigned_by_membership_id?: string | null
+          case_id?: string | null
           created_at?: string
           membership_id: string
           report_id: string
         }
         Update: {
           assigned_by_membership_id?: string | null
+          case_id?: string | null
           created_at?: string
           membership_id?: string
           report_id?: string
@@ -1881,6 +1948,13 @@ export type Database = {
             columns: ["assigned_by_membership_id"]
             isOneToOne: false
             referencedRelation: "memberships"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "integrity_case_assignments_case_id_fkey"
+            columns: ["case_id"]
+            isOneToOne: false
+            referencedRelation: "integrity_cases"
             referencedColumns: ["id"]
           },
           {
@@ -1899,9 +1973,62 @@ export type Database = {
           },
         ]
       }
+      integrity_case_conflicts: {
+        Row: {
+          active: boolean
+          case_id: string
+          created_at: string
+          created_by_membership_id: string | null
+          id: string
+          membership_id: string
+          reason: string
+        }
+        Insert: {
+          active?: boolean
+          case_id: string
+          created_at?: string
+          created_by_membership_id?: string | null
+          id?: string
+          membership_id: string
+          reason: string
+        }
+        Update: {
+          active?: boolean
+          case_id?: string
+          created_at?: string
+          created_by_membership_id?: string | null
+          id?: string
+          membership_id?: string
+          reason?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "integrity_case_conflicts_case_id_fkey"
+            columns: ["case_id"]
+            isOneToOne: false
+            referencedRelation: "integrity_cases"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "integrity_case_conflicts_created_by_membership_id_fkey"
+            columns: ["created_by_membership_id"]
+            isOneToOne: false
+            referencedRelation: "memberships"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "integrity_case_conflicts_membership_id_fkey"
+            columns: ["membership_id"]
+            isOneToOne: false
+            referencedRelation: "memberships"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       integrity_case_events: {
         Row: {
           actor_membership_id: string | null
+          case_id: string | null
           created_at: string
           event_type: string
           from_status: string | null
@@ -1913,6 +2040,7 @@ export type Database = {
         }
         Insert: {
           actor_membership_id?: string | null
+          case_id?: string | null
           created_at?: string
           event_type: string
           from_status?: string | null
@@ -1924,6 +2052,7 @@ export type Database = {
         }
         Update: {
           actor_membership_id?: string | null
+          case_id?: string | null
           created_at?: string
           event_type?: string
           from_status?: string | null
@@ -1942,6 +2071,13 @@ export type Database = {
             referencedColumns: ["id"]
           },
           {
+            foreignKeyName: "integrity_case_events_case_id_fkey"
+            columns: ["case_id"]
+            isOneToOne: false
+            referencedRelation: "integrity_cases"
+            referencedColumns: ["id"]
+          },
+          {
             foreignKeyName: "integrity_case_events_report_id_fkey"
             columns: ["report_id"]
             isOneToOne: false
@@ -1950,28 +2086,266 @@ export type Database = {
           },
         ]
       }
+      integrity_case_tasks: {
+        Row: {
+          assignee_membership_id: string | null
+          case_id: string
+          completed_at: string | null
+          completed_by_membership_id: string | null
+          created_at: string
+          created_by_membership_id: string
+          description: string | null
+          due_at: string | null
+          id: string
+          priority: string
+          reopened_at: string | null
+          status: string
+          title: string
+          updated_at: string
+        }
+        Insert: {
+          assignee_membership_id?: string | null
+          case_id: string
+          completed_at?: string | null
+          completed_by_membership_id?: string | null
+          created_at?: string
+          created_by_membership_id: string
+          description?: string | null
+          due_at?: string | null
+          id?: string
+          priority?: string
+          reopened_at?: string | null
+          status?: string
+          title: string
+          updated_at?: string
+        }
+        Update: {
+          assignee_membership_id?: string | null
+          case_id?: string
+          completed_at?: string | null
+          completed_by_membership_id?: string | null
+          created_at?: string
+          created_by_membership_id?: string
+          description?: string | null
+          due_at?: string | null
+          id?: string
+          priority?: string
+          reopened_at?: string | null
+          status?: string
+          title?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "integrity_case_tasks_assignee_membership_id_fkey"
+            columns: ["assignee_membership_id"]
+            isOneToOne: false
+            referencedRelation: "memberships"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "integrity_case_tasks_case_id_fkey"
+            columns: ["case_id"]
+            isOneToOne: false
+            referencedRelation: "integrity_cases"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "integrity_case_tasks_completed_by_membership_id_fkey"
+            columns: ["completed_by_membership_id"]
+            isOneToOne: false
+            referencedRelation: "memberships"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "integrity_case_tasks_created_by_membership_id_fkey"
+            columns: ["created_by_membership_id"]
+            isOneToOne: false
+            referencedRelation: "memberships"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      integrity_cases: {
+        Row: {
+          category_id: string | null
+          classification: string | null
+          closed_at: string | null
+          closure_reason: string | null
+          committee_id: string | null
+          conclusion: string | null
+          created_at: string
+          decided_at: string | null
+          decided_by_membership_id: string | null
+          final_classification: string | null
+          first_action_at: string | null
+          first_response_due_at: string | null
+          id: string
+          internal_justification: string | null
+          lock_version: number
+          measures_taken: string | null
+          owner_membership_id: string | null
+          priority: string
+          protocol: string
+          report_id: string
+          reporter_outcome: string | null
+          severity: string
+          sla_due_at: string | null
+          status: string
+          team_label: string | null
+          tenant_id: string
+          treatment_due_at: string | null
+          unit_id: string | null
+          updated_at: string
+        }
+        Insert: {
+          category_id?: string | null
+          classification?: string | null
+          closed_at?: string | null
+          closure_reason?: string | null
+          committee_id?: string | null
+          conclusion?: string | null
+          created_at?: string
+          decided_at?: string | null
+          decided_by_membership_id?: string | null
+          final_classification?: string | null
+          first_action_at?: string | null
+          first_response_due_at?: string | null
+          id?: string
+          internal_justification?: string | null
+          lock_version?: number
+          measures_taken?: string | null
+          owner_membership_id?: string | null
+          priority?: string
+          protocol: string
+          report_id: string
+          reporter_outcome?: string | null
+          severity?: string
+          sla_due_at?: string | null
+          status?: string
+          team_label?: string | null
+          tenant_id: string
+          treatment_due_at?: string | null
+          unit_id?: string | null
+          updated_at?: string
+        }
+        Update: {
+          category_id?: string | null
+          classification?: string | null
+          closed_at?: string | null
+          closure_reason?: string | null
+          committee_id?: string | null
+          conclusion?: string | null
+          created_at?: string
+          decided_at?: string | null
+          decided_by_membership_id?: string | null
+          final_classification?: string | null
+          first_action_at?: string | null
+          first_response_due_at?: string | null
+          id?: string
+          internal_justification?: string | null
+          lock_version?: number
+          measures_taken?: string | null
+          owner_membership_id?: string | null
+          priority?: string
+          protocol?: string
+          report_id?: string
+          reporter_outcome?: string | null
+          severity?: string
+          sla_due_at?: string | null
+          status?: string
+          team_label?: string | null
+          tenant_id?: string
+          treatment_due_at?: string | null
+          unit_id?: string | null
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "integrity_cases_category_id_fkey"
+            columns: ["category_id"]
+            isOneToOne: false
+            referencedRelation: "integrity_categories"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "integrity_cases_committee_id_fkey"
+            columns: ["committee_id"]
+            isOneToOne: false
+            referencedRelation: "integrity_committees"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "integrity_cases_decided_by_membership_id_fkey"
+            columns: ["decided_by_membership_id"]
+            isOneToOne: false
+            referencedRelation: "memberships"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "integrity_cases_owner_membership_id_fkey"
+            columns: ["owner_membership_id"]
+            isOneToOne: false
+            referencedRelation: "memberships"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "integrity_cases_report_id_fkey"
+            columns: ["report_id"]
+            isOneToOne: true
+            referencedRelation: "integrity_reports"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "integrity_cases_tenant_id_fkey"
+            columns: ["tenant_id"]
+            isOneToOne: false
+            referencedRelation: "tenants"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "integrity_cases_unit_id_fkey"
+            columns: ["unit_id"]
+            isOneToOne: false
+            referencedRelation: "integrity_units"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       integrity_categories: {
         Row: {
           active: boolean
+          color: string | null
           created_at: string
+          default_risk_level: string
+          description: string | null
           id: string
           name: string
+          sla_hours: number | null
           slug: string
           tenant_id: string
         }
         Insert: {
           active?: boolean
+          color?: string | null
           created_at?: string
+          default_risk_level?: string
+          description?: string | null
           id?: string
           name: string
+          sla_hours?: number | null
           slug: string
           tenant_id: string
         }
         Update: {
           active?: boolean
+          color?: string | null
           created_at?: string
+          default_risk_level?: string
+          description?: string | null
           id?: string
           name?: string
+          sla_hours?: number | null
           slug?: string
           tenant_id?: string
         }
@@ -1985,40 +2359,243 @@ export type Database = {
           },
         ]
       }
+      integrity_channel_categories: {
+        Row: {
+          active: boolean
+          category_id: string
+          channel_id: string
+          sort_order: number
+        }
+        Insert: {
+          active?: boolean
+          category_id: string
+          channel_id: string
+          sort_order?: number
+        }
+        Update: {
+          active?: boolean
+          category_id?: string
+          channel_id?: string
+          sort_order?: number
+        }
+        Relationships: [
+          {
+            foreignKeyName: "integrity_channel_categories_category_id_fkey"
+            columns: ["category_id"]
+            isOneToOne: false
+            referencedRelation: "integrity_categories"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "integrity_channel_categories_channel_id_fkey"
+            columns: ["channel_id"]
+            isOneToOne: false
+            referencedRelation: "integrity_channels"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       integrity_channels: {
         Row: {
           active: boolean
           allows_anonymous: boolean
+          allows_identified: boolean
+          attachment_policy: Json
+          branding: Json
           created_at: string
           id: string
+          instructions: string | null
+          introduction: string | null
           name: string
           public_slug: string
+          public_title: string | null
           tenant_id: string
           updated_at: string
         }
         Insert: {
           active?: boolean
           allows_anonymous?: boolean
+          allows_identified?: boolean
+          attachment_policy?: Json
+          branding?: Json
           created_at?: string
           id?: string
+          instructions?: string | null
+          introduction?: string | null
           name: string
           public_slug: string
+          public_title?: string | null
           tenant_id: string
           updated_at?: string
         }
         Update: {
           active?: boolean
           allows_anonymous?: boolean
+          allows_identified?: boolean
+          attachment_policy?: Json
+          branding?: Json
           created_at?: string
           id?: string
+          instructions?: string | null
+          introduction?: string | null
           name?: string
           public_slug?: string
+          public_title?: string | null
           tenant_id?: string
           updated_at?: string
         }
         Relationships: [
           {
             foreignKeyName: "integrity_channels_tenant_id_fkey"
+            columns: ["tenant_id"]
+            isOneToOne: false
+            referencedRelation: "tenants"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      integrity_committee_members: {
+        Row: {
+          active: boolean
+          committee_id: string
+          created_at: string
+          membership_id: string
+          role: string
+        }
+        Insert: {
+          active?: boolean
+          committee_id: string
+          created_at?: string
+          membership_id: string
+          role?: string
+        }
+        Update: {
+          active?: boolean
+          committee_id?: string
+          created_at?: string
+          membership_id?: string
+          role?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "integrity_committee_members_committee_id_fkey"
+            columns: ["committee_id"]
+            isOneToOne: false
+            referencedRelation: "integrity_committees"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "integrity_committee_members_membership_id_fkey"
+            columns: ["membership_id"]
+            isOneToOne: false
+            referencedRelation: "memberships"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      integrity_committees: {
+        Row: {
+          active: boolean
+          created_at: string
+          description: string | null
+          id: string
+          name: string
+          tenant_id: string
+          updated_at: string
+        }
+        Insert: {
+          active?: boolean
+          created_at?: string
+          description?: string | null
+          id?: string
+          name: string
+          tenant_id: string
+          updated_at?: string
+        }
+        Update: {
+          active?: boolean
+          created_at?: string
+          description?: string | null
+          id?: string
+          name?: string
+          tenant_id?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "integrity_committees_tenant_id_fkey"
+            columns: ["tenant_id"]
+            isOneToOne: false
+            referencedRelation: "tenants"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      integrity_public_rate_limits: {
+        Row: {
+          action: string
+          blocked_until: string | null
+          expires_at: string
+          key_hash: string
+          request_count: number
+          window_started_at: string
+        }
+        Insert: {
+          action: string
+          blocked_until?: string | null
+          expires_at: string
+          key_hash: string
+          request_count?: number
+          window_started_at: string
+        }
+        Update: {
+          action?: string
+          blocked_until?: string | null
+          expires_at?: string
+          key_hash?: string
+          request_count?: number
+          window_started_at?: string
+        }
+        Relationships: []
+      }
+      integrity_report_identities: {
+        Row: {
+          consented_at: string
+          created_at: string
+          email: string | null
+          name: string | null
+          phone: string | null
+          report_id: string
+          tenant_id: string
+        }
+        Insert: {
+          consented_at?: string
+          created_at?: string
+          email?: string | null
+          name?: string | null
+          phone?: string | null
+          report_id: string
+          tenant_id: string
+        }
+        Update: {
+          consented_at?: string
+          created_at?: string
+          email?: string | null
+          name?: string | null
+          phone?: string | null
+          report_id?: string
+          tenant_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "integrity_report_identities_report_id_fkey"
+            columns: ["report_id"]
+            isOneToOne: true
+            referencedRelation: "integrity_reports"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "integrity_report_identities_tenant_id_fkey"
             columns: ["tenant_id"]
             isOneToOne: false
             referencedRelation: "tenants"
@@ -2109,7 +2686,10 @@ export type Database = {
           reporter_mode: string
           risk_level: string | null
           status: string
+          subject: string | null
+          submitted_payload: Json
           tenant_id: string
+          unit_id: string | null
           updated_at: string
         }
         Insert: {
@@ -2123,7 +2703,10 @@ export type Database = {
           reporter_mode?: string
           risk_level?: string | null
           status?: string
+          subject?: string | null
+          submitted_payload?: Json
           tenant_id: string
+          unit_id?: string | null
           updated_at?: string
         }
         Update: {
@@ -2137,7 +2720,10 @@ export type Database = {
           reporter_mode?: string
           risk_level?: string | null
           status?: string
+          subject?: string | null
+          submitted_payload?: Json
           tenant_id?: string
+          unit_id?: string | null
           updated_at?: string
         }
         Relationships: [
@@ -2157,6 +2743,215 @@ export type Database = {
           },
           {
             foreignKeyName: "integrity_reports_tenant_id_fkey"
+            columns: ["tenant_id"]
+            isOneToOne: false
+            referencedRelation: "tenants"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "integrity_reports_unit_id_fkey"
+            columns: ["unit_id"]
+            isOneToOne: false
+            referencedRelation: "integrity_units"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      integrity_routing_rules: {
+        Row: {
+          active: boolean
+          assignee_membership_id: string | null
+          category_id: string | null
+          committee_id: string | null
+          created_at: string
+          id: string
+          name: string
+          priority: number
+          tenant_id: string
+          unit_id: string | null
+          updated_at: string
+        }
+        Insert: {
+          active?: boolean
+          assignee_membership_id?: string | null
+          category_id?: string | null
+          committee_id?: string | null
+          created_at?: string
+          id?: string
+          name: string
+          priority?: number
+          tenant_id: string
+          unit_id?: string | null
+          updated_at?: string
+        }
+        Update: {
+          active?: boolean
+          assignee_membership_id?: string | null
+          category_id?: string | null
+          committee_id?: string | null
+          created_at?: string
+          id?: string
+          name?: string
+          priority?: number
+          tenant_id?: string
+          unit_id?: string | null
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "integrity_routing_rules_assignee_membership_id_fkey"
+            columns: ["assignee_membership_id"]
+            isOneToOne: false
+            referencedRelation: "memberships"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "integrity_routing_rules_category_id_fkey"
+            columns: ["category_id"]
+            isOneToOne: false
+            referencedRelation: "integrity_categories"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "integrity_routing_rules_committee_id_fkey"
+            columns: ["committee_id"]
+            isOneToOne: false
+            referencedRelation: "integrity_committees"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "integrity_routing_rules_tenant_id_fkey"
+            columns: ["tenant_id"]
+            isOneToOne: false
+            referencedRelation: "tenants"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "integrity_routing_rules_unit_id_fkey"
+            columns: ["unit_id"]
+            isOneToOne: false
+            referencedRelation: "integrity_units"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      integrity_settings: {
+        Row: {
+          allows_anonymous: boolean
+          allows_identified: boolean
+          attachment_policy: Json
+          automatic_acknowledgement: string
+          branding: Json
+          configured_at: string | null
+          default_assignee_membership_id: string | null
+          default_committee_id: string | null
+          default_sla_hours: number
+          instructions: string | null
+          introduction: string
+          routing_rules: Json
+          tenant_id: string
+          treatment_sla_hours: number
+          updated_at: string
+          updated_by_membership_id: string | null
+        }
+        Insert: {
+          allows_anonymous?: boolean
+          allows_identified?: boolean
+          attachment_policy?: Json
+          automatic_acknowledgement?: string
+          branding?: Json
+          configured_at?: string | null
+          default_assignee_membership_id?: string | null
+          default_committee_id?: string | null
+          default_sla_hours?: number
+          instructions?: string | null
+          introduction?: string
+          routing_rules?: Json
+          tenant_id: string
+          treatment_sla_hours?: number
+          updated_at?: string
+          updated_by_membership_id?: string | null
+        }
+        Update: {
+          allows_anonymous?: boolean
+          allows_identified?: boolean
+          attachment_policy?: Json
+          automatic_acknowledgement?: string
+          branding?: Json
+          configured_at?: string | null
+          default_assignee_membership_id?: string | null
+          default_committee_id?: string | null
+          default_sla_hours?: number
+          instructions?: string | null
+          introduction?: string
+          routing_rules?: Json
+          tenant_id?: string
+          treatment_sla_hours?: number
+          updated_at?: string
+          updated_by_membership_id?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "integrity_settings_default_assignee_membership_id_fkey"
+            columns: ["default_assignee_membership_id"]
+            isOneToOne: false
+            referencedRelation: "memberships"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "integrity_settings_default_committee_id_fkey"
+            columns: ["default_committee_id"]
+            isOneToOne: false
+            referencedRelation: "integrity_committees"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "integrity_settings_tenant_id_fkey"
+            columns: ["tenant_id"]
+            isOneToOne: true
+            referencedRelation: "tenants"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "integrity_settings_updated_by_membership_id_fkey"
+            columns: ["updated_by_membership_id"]
+            isOneToOne: false
+            referencedRelation: "memberships"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      integrity_units: {
+        Row: {
+          active: boolean
+          code: string | null
+          created_at: string
+          id: string
+          name: string
+          tenant_id: string
+          updated_at: string
+        }
+        Insert: {
+          active?: boolean
+          code?: string | null
+          created_at?: string
+          id?: string
+          name: string
+          tenant_id: string
+          updated_at?: string
+        }
+        Update: {
+          active?: boolean
+          code?: string | null
+          created_at?: string
+          id?: string
+          name?: string
+          tenant_id?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "integrity_units_tenant_id_fkey"
             columns: ["tenant_id"]
             isOneToOne: false
             referencedRelation: "tenants"
@@ -5454,6 +6249,15 @@ export type Database = {
         }
         Returns: string
       }
+      authorize_integrity_reporter: {
+        Args: { p_access_secret: string; p_protocol: string }
+        Returns: {
+          case_id: string
+          report_id: string
+          status: string
+          tenant_id: string
+        }[]
+      }
       can_read_file: { Args: { p_file_id: string }; Returns: boolean }
       can_read_membership: {
         Args: { p_membership_id: string }
@@ -5471,6 +6275,15 @@ export type Database = {
           p_window_seconds?: number
         }
         Returns: boolean
+      }
+      check_integrity_public_rate_limit: {
+        Args: {
+          p_action: string
+          p_key_hash: string
+          p_limit: number
+          p_window_seconds: number
+        }
+        Returns: Json
       }
       claim_billing_webhook_events: {
         Args: { p_limit?: number }
@@ -5498,6 +6311,24 @@ export type Database = {
         }
       }
       current_membership_id: { Args: { p_tenant_id: string }; Returns: string }
+      decide_and_close_integrity_case: {
+        Args: {
+          p_actor_membership_id: string
+          p_case_id: string
+          p_conclusion: string
+          p_expected_lock_version: number
+          p_final_classification: string
+          p_internal_justification: string
+          p_measures_taken: string
+          p_reporter_outcome: string
+          p_tenant_id: string
+        }
+        Returns: {
+          lock_version: number
+          status: string
+        }[]
+      }
+      get_integrity_channel: { Args: { p_channel_slug: string }; Returns: Json }
       get_integrity_form: {
         Args: { p_channel_slug: string }
         Returns: {
@@ -5505,10 +6336,6 @@ export type Database = {
           category_slug: string
           channel_name: string
         }[]
-      }
-      get_integrity_channel: {
-        Args: { p_channel_slug: string }
-        Returns: Json
       }
       has_permission: {
         Args: { p_permission_key: string; p_tenant_id: string }
@@ -5598,11 +6425,11 @@ export type Database = {
           p_category_slug: string
           p_channel_slug: string
           p_description: string
-          p_identity?: Json | null
-          p_occurred_at?: string | null
+          p_identity?: Json
+          p_occurred_at?: string
           p_reporter_mode: string
           p_subject: string
-          p_unit_id?: string | null
+          p_unit_id?: string
         }
         Returns: Json
       }
@@ -5632,6 +6459,20 @@ export type Database = {
           p_phone?: string
         }
         Returns: string
+      }
+      transition_integrity_case: {
+        Args: {
+          p_actor_membership_id: string
+          p_case_id: string
+          p_expected_lock_version: number
+          p_reason: string
+          p_tenant_id: string
+          p_to_status: string
+        }
+        Returns: {
+          lock_version: number
+          status: string
+        }[]
       }
     }
     Enums: {

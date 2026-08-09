@@ -1,284 +1,601 @@
-import { Router } from 'express';
-import { z } from 'zod';
-import { canReadAssignedResource } from './authorization';
-import { auditContext, pageResult, parsePagination } from './operational';
-import { authenticateRequest, resolvePlatformContext, requirePlatformPermission } from './tenantAuth';
+import { Router } from "express";
+import { z } from "zod";
+import { canReadAssignedResource } from "./authorization";
+import { auditContext, pageResult, parsePagination } from "./operational";
+import {
+  authenticateRequest,
+  resolvePlatformContext,
+  requirePlatformPermission,
+} from "./tenantAuth";
 
 export function createAdminClientsRouter(getSupabaseAdmin: any) {
   const router = Router();
 
   // GET /api/admin/clients
-  router.get('/', authenticateRequest, resolvePlatformContext, requirePlatformPermission(['platform.clients.read', 'platform.commercial.read']), async (req: any, res: any) => {
-    try {
-      const { platformContext } = req;
-      const { page, pageSize, from, to } = parsePagination(req.query);
-      const paginated = req.query.page !== undefined;
-      let visibleTenantIds: string[] | null = null;
-      if (platformContext.role?.key !== 'admin') {
-        const visibleTeams = platformContext.teams
-          .filter((team: any) => platformContext.managedTeams.some((managed: any) => managed.id === team.id) || ['team', 'all'].includes(team.member_client_visibility))
-          .map((team: any) => team.id);
-        let assignmentQuery = getSupabaseAdmin().from('platform_client_assignments').select('tenant_id');
-        const clauses = [`owner_platform_member_id.eq.${platformContext.platformMember.id}`];
-        if (visibleTeams.length) clauses.push(`team_id.in.(${visibleTeams.join(',')})`);
-        assignmentQuery = assignmentQuery.or(clauses.join(','));
-        const assignmentResult = await assignmentQuery;
-        if (assignmentResult.error) throw assignmentResult.error;
-        visibleTenantIds = [...new Set<string>((assignmentResult.data || []).map((item: any) => String(item.tenant_id)))];
-        if (!visibleTenantIds.length) return res.json(paginated ? pageResult([], 0, page, pageSize) : []);
-      }
-
-      let query = getSupabaseAdmin()
-        .from('tenants')
-        .select('*, tenant_solutions(*, solutions(key,name)), platform_client_assignments(*, platform_teams(name), platform_members(user_id, platform_roles(key, name))), tenant_billing_state(*), tenant_domains(*), memberships(id,status,user_id,employment_level), departments(id,name,active)', { count: 'exact' })
-        .order('created_at', { ascending: false });
-      if (visibleTenantIds) query = query.in('id', visibleTenantIds);
-      if (typeof req.query.status === 'string' && req.query.status) {
-        query = query.eq('status', req.query.status);
-      } else {
-        query = query.in('status', ['active', 'trial', 'suspended', 'inactive']);
-      }
-      if (typeof req.query.search === 'string' && req.query.search.trim()) {
-        const term = req.query.search.trim().replace(/[%(),]/g, '').slice(0, 100);
-        query = query.or(`name.ilike.%${term}%,slug.ilike.%${term}%`);
-      }
-      if (paginated) query = query.range(from, to);
-
-      const { data, error, count } = await query;
-
-      if (error) throw error;
-      
-      const { data: usersData } = await getSupabaseAdmin().auth.admin.listUsers();
-      
-      let clients = data.map((c: any) => {
-        const assignment = c.platform_client_assignments?.[0];
-        let owner = null;
-        if (assignment?.platform_members?.user_id) {
-          const u = usersData?.users?.find((u: any) => u.id === assignment.platform_members.user_id);
-          if (u) owner = { email: u.email, name: u.user_metadata?.full_name };
+  router.get(
+    "/",
+    authenticateRequest,
+    resolvePlatformContext,
+    requirePlatformPermission([
+      "platform.clients.read",
+      "platform.commercial.read",
+    ]),
+    async (req: any, res: any) => {
+      try {
+        const { platformContext } = req;
+        const { page, pageSize, from, to } = parsePagination(req.query);
+        const paginated = req.query.page !== undefined;
+        let visibleTenantIds: string[] | null = null;
+        if (platformContext.role?.key !== "admin") {
+          const visibleTeams = platformContext.teams
+            .filter(
+              (team: any) =>
+                platformContext.managedTeams.some(
+                  (managed: any) => managed.id === team.id,
+                ) || ["team", "all"].includes(team.member_client_visibility),
+            )
+            .map((team: any) => team.id);
+          let assignmentQuery = getSupabaseAdmin()
+            .from("platform_client_assignments")
+            .select("tenant_id");
+          const clauses = [
+            `owner_platform_member_id.eq.${platformContext.platformMember.id}`,
+          ];
+          if (visibleTeams.length)
+            clauses.push(`team_id.in.(${visibleTeams.join(",")})`);
+          assignmentQuery = assignmentQuery.or(clauses.join(","));
+          const assignmentResult = await assignmentQuery;
+          if (assignmentResult.error) throw assignmentResult.error;
+          visibleTenantIds = [
+            ...new Set<string>(
+              (assignmentResult.data || []).map((item: any) =>
+                String(item.tenant_id),
+              ),
+            ),
+          ];
+          if (!visibleTenantIds.length)
+            return res.json(paginated ? pageResult([], 0, page, pageSize) : []);
         }
-        return { ...c, assignment, owner };
-      });
-      
-      res.json(paginated ? pageResult(clients, count, page, pageSize) : clients);
-    } catch (e: any) {
-      res.status(500).json({ error: e.message });
-    }
-  });
+
+        let query = getSupabaseAdmin()
+          .from("tenants")
+          .select(
+            "*, tenant_solutions(*, solutions(key,name)), platform_client_assignments(*, platform_teams(name), platform_members(user_id, platform_roles(key, name))), tenant_billing_state(*), tenant_domains(*), memberships(id,status,user_id,employment_level), departments(id,name,active)",
+            { count: "exact" },
+          )
+          .order("created_at", { ascending: false });
+        if (visibleTenantIds) query = query.in("id", visibleTenantIds);
+        if (typeof req.query.status === "string" && req.query.status) {
+          query = query.eq("status", req.query.status);
+        } else {
+          query = query.in("status", [
+            "active",
+            "trial",
+            "suspended",
+            "inactive",
+          ]);
+        }
+        if (typeof req.query.search === "string" && req.query.search.trim()) {
+          const term = req.query.search
+            .trim()
+            .replace(/[%(),]/g, "")
+            .slice(0, 100);
+          query = query.or(`name.ilike.%${term}%,slug.ilike.%${term}%`);
+        }
+        if (paginated) query = query.range(from, to);
+
+        const { data, error, count } = await query;
+
+        if (error) throw error;
+
+        const { data: usersData } =
+          await getSupabaseAdmin().auth.admin.listUsers();
+
+        let clients = data.map((c: any) => {
+          const assignment = c.platform_client_assignments?.[0];
+          let owner = null;
+          if (assignment?.platform_members?.user_id) {
+            const u = usersData?.users?.find(
+              (u: any) => u.id === assignment.platform_members.user_id,
+            );
+            if (u) owner = { email: u.email, name: u.user_metadata?.full_name };
+          }
+          return { ...c, assignment, owner };
+        });
+
+        res.json(
+          paginated ? pageResult(clients, count, page, pageSize) : clients,
+        );
+      } catch (e: any) {
+        res.status(500).json({ error: e.message });
+      }
+    },
+  );
 
   // Control-plane only: aggregate health, never report content or identities.
-  router.get('/:id/integrity-summary', authenticateRequest, resolvePlatformContext, requirePlatformPermission(['platform.clients.read', 'platform.commercial.read']), async (req: any, res: any) => {
-    try {
-      const db = getSupabaseAdmin();
-      const tenant = await db.from('tenants').select('id,status,platform_client_assignments(*)').eq('id', req.params.id).single();
-      if (tenant.error || !tenant.data) return res.status(404).json({ error: 'Cliente não encontrado.' });
-      if (req.platformContext.role?.key !== 'admin' && !canReadAssignedResource(req.platformContext, tenant.data.platform_client_assignments?.[0], 'member_client_visibility')) return res.status(403).json({ error: 'Forbidden' });
-      const [solution, settings, channels, cases, members, onboarding] = await Promise.all([
-        db.from('tenant_solutions').select('status,created_at,updated_at,solutions!inner(key)').eq('tenant_id', req.params.id).eq('solutions.key', 'integrity').maybeSingle(),
-        db.from('integrity_settings').select('configured_at,updated_at').eq('tenant_id', req.params.id).maybeSingle(),
-        db.from('integrity_channels').select('id,active').eq('tenant_id', req.params.id),
-        db.from('integrity_cases').select('status,sla_due_at,updated_at').eq('tenant_id', req.params.id),
-        db.from('memberships').select('id', { count: 'exact', head: true }).eq('tenant_id', req.params.id).eq('status', 'active'),
-        db.from('onboarding_runs').select('id,status,progress_percent,updated_at').eq('tenant_id', req.params.id).order('created_at', { ascending: false }).limit(1).maybeSingle(),
-      ]);
-      const failed = [solution, settings, channels, cases, members, onboarding].find((result: any) => result.error);
-      if (failed) throw failed.error;
-      const now = Date.now(); const rows = cases.data || [];
-      return res.json({
-        contracted: Boolean(solution.data), solution_status: solution.data?.status || 'not_contracted', activated_at: solution.data?.created_at || null,
-        configuration_complete: Boolean(settings.data?.configured_at), channels_total: channels.data?.length || 0,
-        channels_active: (channels.data || []).filter((channel: any) => channel.active).length, active_users: members.count || 0,
-        cases_total: rows.length, cases_open: rows.filter((item: any) => !['closed','archived'].includes(item.status)).length,
-        sla_overdue: rows.filter((item: any) => item.sla_due_at && new Date(item.sla_due_at).getTime() < now && !['closed','archived'].includes(item.status)).length,
-        last_use_at: rows.map((item: any) => item.updated_at).filter(Boolean).sort().at(-1) || settings.data?.updated_at || null,
-        onboarding: onboarding.data || null,
-        confidentiality_boundary: 'aggregate_only',
-      });
-    } catch (error: any) {
-      return res.status(500).json({ error: 'Não foi possível carregar a saúde do Integridade.' });
-    }
-  });
-
+  router.get(
+    "/:id/integrity-summary",
+    authenticateRequest,
+    resolvePlatformContext,
+    requirePlatformPermission([
+      "platform.clients.read",
+      "platform.commercial.read",
+    ]),
+    async (req: any, res: any) => {
+      try {
+        const db = getSupabaseAdmin();
+        const tenant = await db
+          .from("tenants")
+          .select("id,status,platform_client_assignments(*)")
+          .eq("id", req.params.id)
+          .single();
+        if (tenant.error || !tenant.data)
+          return res.status(404).json({ error: "Cliente não encontrado." });
+        if (
+          req.platformContext.role?.key !== "admin" &&
+          !canReadAssignedResource(
+            req.platformContext,
+            tenant.data.platform_client_assignments?.[0],
+            "member_client_visibility",
+          )
+        )
+          return res.status(403).json({ error: "Forbidden" });
+        const [
+          solution,
+          settings,
+          channels,
+          cases,
+          members,
+          onboarding,
+          storage,
+        ] = await Promise.all([
+          db
+            .from("tenant_solutions")
+            .select("status,created_at,updated_at,solutions!inner(key)")
+            .eq("tenant_id", req.params.id)
+            .eq("solutions.key", "integrity")
+            .maybeSingle(),
+          db
+            .from("integrity_settings")
+            .select("configured_at,updated_at")
+            .eq("tenant_id", req.params.id)
+            .maybeSingle(),
+          db
+            .from("integrity_channels")
+            .select("id,active")
+            .eq("tenant_id", req.params.id),
+          db
+            .from("integrity_cases")
+            .select(
+              "status,first_action_at,first_response_due_at,treatment_due_at,updated_at",
+            )
+            .eq("tenant_id", req.params.id),
+          db
+            .from("memberships")
+            .select("id", { count: "exact", head: true })
+            .eq("tenant_id", req.params.id)
+            .eq("status", "active"),
+          db
+            .from("onboarding_runs")
+            .select("id,status,progress_percent,updated_at")
+            .eq("tenant_id", req.params.id)
+            .order("created_at", { ascending: false })
+            .limit(1)
+            .maybeSingle(),
+          db
+            .from("files")
+            .select("size_bytes")
+            .eq("tenant_id", req.params.id)
+            .eq("bucket", "ordum-integrity")
+            .is("deleted_at", null),
+        ]);
+        const failed = [
+          solution,
+          settings,
+          channels,
+          cases,
+          members,
+          onboarding,
+          storage,
+        ].find((result: any) => result.error);
+        if (failed) throw failed.error;
+        const now = Date.now();
+        const rows = cases.data || [];
+        return res.json({
+          contracted: Boolean(solution.data),
+          solution_status: solution.data?.status || "not_contracted",
+          activated_at: solution.data?.created_at || null,
+          configuration_complete: Boolean(settings.data?.configured_at),
+          channels_total: channels.data?.length || 0,
+          channels_active: (channels.data || []).filter(
+            (channel: any) => channel.active,
+          ).length,
+          active_users: members.count || 0,
+          cases_total: rows.length,
+          cases_open: rows.filter(
+            (item: any) => !["closed", "archived"].includes(item.status),
+          ).length,
+          sla_overdue: rows.filter(
+            (item: any) =>
+              !["closed", "archived"].includes(item.status) &&
+              ((!item.first_action_at &&
+                item.first_response_due_at &&
+                new Date(item.first_response_due_at).getTime() < now) ||
+                (item.treatment_due_at &&
+                  new Date(item.treatment_due_at).getTime() < now)),
+          ).length,
+          storage_bytes: (storage.data || []).reduce(
+            (sum: number, item: any) => sum + Number(item.size_bytes || 0),
+            0,
+          ),
+          health: !solution.data
+            ? "not_contracted"
+            : !settings.data?.configured_at
+              ? "configuration_pending"
+              : !(channels.data || []).some((channel: any) => channel.active)
+                ? "channel_inactive"
+                : rows.some(
+                      (item: any) =>
+                        !["closed", "archived"].includes(item.status) &&
+                        item.treatment_due_at &&
+                        new Date(item.treatment_due_at).getTime() < now,
+                    )
+                  ? "attention"
+                  : "healthy",
+          operational_errors: null,
+          operational_errors_reason:
+            "Sem integração de erros por tenant disponível.",
+          last_use_at:
+            rows
+              .map((item: any) => item.updated_at)
+              .filter(Boolean)
+              .sort()
+              .at(-1) ||
+            settings.data?.updated_at ||
+            null,
+          onboarding: onboarding.data || null,
+          confidentiality_boundary: "aggregate_only",
+        });
+      } catch (error: any) {
+        return res
+          .status(500)
+          .json({ error: "Não foi possível carregar a saúde do Integridade." });
+      }
+    },
+  );
 
   // GET /api/admin/clients/:id
-  router.get('/:id', authenticateRequest, resolvePlatformContext, requirePlatformPermission(['platform.clients.read', 'platform.commercial.read']), async (req: any, res: any) => {
-    try {
-      const { platformContext } = req;
-      const clientId = req.params.id;
-      
-      const { data, error } = await getSupabaseAdmin()
-        .from('tenants')
-        .select('*, tenant_solutions(solution_id, status, solutions(key,name)), platform_client_assignments(*, platform_teams(name), platform_members(user_id, platform_roles(key, name))), tenant_domains(*), departments(*), memberships(id,user_id,status,employment_level,joined_at), tenant_billing_state(*), commercial_contracts(*, billing_subscriptions(*), billing_payments(*))')
-        .eq('id', clientId)
-        .single();
-        
-      if (error) throw error;
-      
-      const { data: usersData } = await getSupabaseAdmin().auth.admin.listUsers();
-      const assignment = data.platform_client_assignments?.[0];
-      let owner = null;
-      if (assignment?.platform_members?.user_id) {
-        const u = usersData?.users?.find((u: any) => u.id === assignment.platform_members.user_id);
-        if (u) owner = { email: u.email, name: u.user_metadata?.full_name };
+  router.get(
+    "/:id",
+    authenticateRequest,
+    resolvePlatformContext,
+    requirePlatformPermission([
+      "platform.clients.read",
+      "platform.commercial.read",
+    ]),
+    async (req: any, res: any) => {
+      try {
+        const { platformContext } = req;
+        const clientId = req.params.id;
+
+        const { data, error } = await getSupabaseAdmin()
+          .from("tenants")
+          .select(
+            "*, tenant_solutions(solution_id, status, solutions(key,name)), platform_client_assignments(*, platform_teams(name), platform_members(user_id, platform_roles(key, name))), tenant_domains(*), departments(*), memberships(id,user_id,status,employment_level,joined_at), tenant_billing_state(*), commercial_contracts(*, billing_subscriptions(*), billing_payments(*))",
+          )
+          .eq("id", clientId)
+          .single();
+
+        if (error) throw error;
+
+        const { data: usersData } =
+          await getSupabaseAdmin().auth.admin.listUsers();
+        const assignment = data.platform_client_assignments?.[0];
+        let owner = null;
+        if (assignment?.platform_members?.user_id) {
+          const u = usersData?.users?.find(
+            (u: any) => u.id === assignment.platform_members.user_id,
+          );
+          if (u) owner = { email: u.email, name: u.user_metadata?.full_name };
+        }
+
+        if (platformContext.role?.key !== "admin") {
+          if (
+            !canReadAssignedResource(
+              platformContext,
+              assignment,
+              "member_client_visibility",
+            )
+          )
+            return res.status(403).json({ error: "Forbidden" });
+        }
+
+        const { data: audit } = await getSupabaseAdmin()
+          .from("platform_audit_logs")
+          .select(
+            "id,action,severity,metadata,created_at,actor_user_id,request_id",
+          )
+          .eq("entity_id", clientId)
+          .order("created_at", { ascending: false })
+          .limit(50);
+        res.json({ ...data, assignment, owner, audit: audit || [] });
+      } catch (e: any) {
+        res.status(500).json({ error: e.message });
       }
-      
-      if (platformContext.role?.key !== 'admin') {
-        if (!canReadAssignedResource(platformContext, assignment, 'member_client_visibility')) return res.status(403).json({ error: 'Forbidden' });
-      }
-      
-      const { data: audit } = await getSupabaseAdmin().from('platform_audit_logs')
-        .select('id,action,severity,metadata,created_at,actor_user_id,request_id')
-        .eq('entity_id', clientId).order('created_at', { ascending: false }).limit(50);
-      res.json({ ...data, assignment, owner, audit: audit || [] });
-    } catch (e: any) {
-      res.status(500).json({ error: e.message });
-    }
-  });
+    },
+  );
 
   // POST /api/admin/clients/:id/assign
-  router.post('/:id/assign', authenticateRequest, resolvePlatformContext, requirePlatformPermission(['platform.clients.manage', 'platform.commercial.manage']), async (req: any, res: any) => {
-    try {
-      const { platformContext } = req;
-      const clientId = req.params.id;
-      const schema = z.object({ team_id: z.string().uuid(), owner_platform_member_id: z.string().uuid().optional().nullable(), reason: z.string().min(3) });
-      const parse = schema.safeParse(req.body);
-      if (!parse.success) return res.status(400).json({ error: 'Equipe e motivo são obrigatórios.', details: parse.error.issues });
-      const { team_id, owner_platform_member_id, reason } = parse.data;
-      if (!team_id || !reason) return res.status(400).json({ error: 'Equipe e motivo da transferência são obrigatórios.' });
-      const previous = await getSupabaseAdmin().from('platform_client_assignments').select('*')
-        .eq('tenant_id', clientId).eq('assignment_type', 'commercial').maybeSingle();
-      if (previous.error) throw previous.error;
-      
-      if (platformContext.role?.key !== 'admin') {
-        const isManager = platformContext.managedTeams.some((t: any) => t.id === team_id);
-        if (!isManager) return res.status(403).json({ error: 'Forbidden' });
-        if (!previous.data || !platformContext.managedTeams.some((team: any) => team.id === previous.data.team_id)) {
-          return res.status(403).json({ error: 'Cliente fora do escopo gerenciado.' });
+  router.post(
+    "/:id/assign",
+    authenticateRequest,
+    resolvePlatformContext,
+    requirePlatformPermission([
+      "platform.clients.manage",
+      "platform.commercial.manage",
+    ]),
+    async (req: any, res: any) => {
+      try {
+        const { platformContext } = req;
+        const clientId = req.params.id;
+        const schema = z.object({
+          team_id: z.string().uuid(),
+          owner_platform_member_id: z.string().uuid().optional().nullable(),
+          reason: z.string().min(3),
+        });
+        const parse = schema.safeParse(req.body);
+        if (!parse.success)
+          return res.status(400).json({
+            error: "Equipe e motivo são obrigatórios.",
+            details: parse.error.issues,
+          });
+        const { team_id, owner_platform_member_id, reason } = parse.data;
+        if (!team_id || !reason)
+          return res.status(400).json({
+            error: "Equipe e motivo da transferência são obrigatórios.",
+          });
+        const previous = await getSupabaseAdmin()
+          .from("platform_client_assignments")
+          .select("*")
+          .eq("tenant_id", clientId)
+          .eq("assignment_type", "commercial")
+          .maybeSingle();
+        if (previous.error) throw previous.error;
+
+        if (platformContext.role?.key !== "admin") {
+          const isManager = platformContext.managedTeams.some(
+            (t: any) => t.id === team_id,
+          );
+          if (!isManager) return res.status(403).json({ error: "Forbidden" });
+          if (
+            !previous.data ||
+            !platformContext.managedTeams.some(
+              (team: any) => team.id === previous.data.team_id,
+            )
+          ) {
+            return res
+              .status(403)
+              .json({ error: "Cliente fora do escopo gerenciado." });
+          }
         }
+        if (owner_platform_member_id) {
+          const target = await getSupabaseAdmin()
+            .from("platform_team_members")
+            .select("platform_member_id")
+            .eq("team_id", team_id)
+            .eq("platform_member_id", owner_platform_member_id)
+            .eq("status", "active")
+            .maybeSingle();
+          if (!target.data)
+            return res.status(400).json({
+              error: "O responsável precisa ser membro ativo da equipe.",
+            });
+        }
+
+        const { data, error } = await getSupabaseAdmin()
+          .from("platform_client_assignments")
+          .upsert(
+            {
+              tenant_id: clientId,
+              team_id,
+              owner_platform_member_id: owner_platform_member_id || null,
+              assigned_by_user_id: req.user.id,
+              assignment_type: "commercial",
+              status: "active",
+            },
+            { onConflict: "tenant_id,team_id,assignment_type" },
+          )
+          .select()
+          .single();
+
+        if (error) throw error;
+
+        await getSupabaseAdmin()
+          .from("platform_audit_logs")
+          .insert({
+            actor_user_id: req.user.id,
+            action: "client.assigned",
+            entity_type: "platform_client_assignments",
+            entity_id: clientId,
+            severity: "info",
+            team_id: team_id,
+            ...auditContext(req, {
+              result: "success",
+              reason,
+              before: previous.data
+                ? {
+                    team_id: previous.data.team_id,
+                    owner_platform_member_id:
+                      previous.data.owner_platform_member_id,
+                  }
+                : null,
+              after: {
+                team_id,
+                owner_platform_member_id: owner_platform_member_id || null,
+              },
+            }),
+          });
+
+        res.json(data);
+      } catch (e: any) {
+        res.status(500).json({ error: e.message });
       }
-      if (owner_platform_member_id) {
-        const target = await getSupabaseAdmin().from('platform_team_members').select('platform_member_id')
-          .eq('team_id', team_id).eq('platform_member_id', owner_platform_member_id).eq('status', 'active').maybeSingle();
-        if (!target.data) return res.status(400).json({ error: 'O responsável precisa ser membro ativo da equipe.' });
-      }
-      
-      const { data, error } = await getSupabaseAdmin()
-        .from('platform_client_assignments')
-        .upsert({
-          tenant_id: clientId,
-          team_id,
-          owner_platform_member_id: owner_platform_member_id || null,
-          assigned_by_user_id: req.user.id,
-          assignment_type: 'commercial',
-          status: 'active'
-        }, { onConflict: 'tenant_id,team_id,assignment_type' })
-        .select()
-        .single();
-        
-      if (error) throw error;
-      
-      await getSupabaseAdmin().from('platform_audit_logs').insert({
-        actor_user_id: req.user.id,
-        action: 'client.assigned',
-        entity_type: 'platform_client_assignments',
-        entity_id: clientId,
-        severity: 'info',
-        team_id: team_id,
-        ...auditContext(req, { result: 'success', reason, before: previous.data ? { team_id: previous.data.team_id, owner_platform_member_id: previous.data.owner_platform_member_id } : null, after: { team_id, owner_platform_member_id: owner_platform_member_id || null } })
-      });
-      
-      res.json(data);
-    } catch (e: any) {
-      res.status(500).json({ error: e.message });
-    }
-  });
+    },
+  );
 
   // POST /api/admin/clients/:id/suspend
-  router.post('/:id/suspend', authenticateRequest, resolvePlatformContext, requirePlatformPermission('platform.clients.manage'), async (req: any, res: any) => {
-    try {
-      const clientId = req.params.id;
-      const parse = z.object({ reason: z.string().min(5) }).safeParse(req.body);
-      if (!parse.success) return res.status(400).json({ error: 'Motivo da suspensão é obrigatório.' });
-      
-      const db = getSupabaseAdmin();
-      const existing = await db.from('tenants').select('status, lifecycle_status').eq('id', clientId).single();
-      if (existing.error || !existing.data) return res.status(404).json({ error: 'Cliente não encontrado.' });
-      if (existing.data.status === 'suspended') return res.status(400).json({ error: 'Cliente já está suspenso.' });
+  router.post(
+    "/:id/suspend",
+    authenticateRequest,
+    resolvePlatformContext,
+    requirePlatformPermission("platform.clients.manage"),
+    async (req: any, res: any) => {
+      try {
+        const clientId = req.params.id;
+        const parse = z
+          .object({ reason: z.string().min(5) })
+          .safeParse(req.body);
+        if (!parse.success)
+          return res
+            .status(400)
+            .json({ error: "Motivo da suspensão é obrigatório." });
 
-      const transitioned = await db.rpc('admin_transition_control_plane', {
-        p_entity_type: 'tenant',
-        p_entity_id: clientId,
-        p_to_status: 'suspended',
-        p_actor_user_id: req.user.id,
-        p_reason: parse.data.reason.trim(),
-        p_request_id: req.requestId || null,
-      });
-      if (transitioned.error) return res.status(409).json({ error: transitioned.error.message });
+        const db = getSupabaseAdmin();
+        const existing = await db
+          .from("tenants")
+          .select("status, lifecycle_status")
+          .eq("id", clientId)
+          .single();
+        if (existing.error || !existing.data)
+          return res.status(404).json({ error: "Cliente não encontrado." });
+        if (existing.data.status === "suspended")
+          return res.status(400).json({ error: "Cliente já está suspenso." });
 
-      const updated = await db.from('tenants').select('*').eq('id', clientId).single();
-      res.json({ success: true, tenant: updated.data });
-    } catch (e: any) {
-      res.status(500).json({ error: e.message });
-    }
-  });
+        const transitioned = await db.rpc("admin_transition_control_plane", {
+          p_entity_type: "tenant",
+          p_entity_id: clientId,
+          p_to_status: "suspended",
+          p_actor_user_id: req.user.id,
+          p_reason: parse.data.reason.trim(),
+          p_request_id: req.requestId || null,
+        });
+        if (transitioned.error)
+          return res.status(409).json({ error: transitioned.error.message });
+
+        const updated = await db
+          .from("tenants")
+          .select("*")
+          .eq("id", clientId)
+          .single();
+        res.json({ success: true, tenant: updated.data });
+      } catch (e: any) {
+        res.status(500).json({ error: e.message });
+      }
+    },
+  );
 
   // POST /api/admin/clients/:id/reactivate
-  router.post('/:id/reactivate', authenticateRequest, resolvePlatformContext, requirePlatformPermission('platform.clients.manage'), async (req: any, res: any) => {
-    try {
-      const clientId = req.params.id;
-      const parse = z.object({ reason: z.string().min(5) }).safeParse(req.body);
-      if (!parse.success) return res.status(400).json({ error: 'Motivo da reativação é obrigatório.' });
-      
-      const db = getSupabaseAdmin();
-      const existing = await db.from('tenants').select('status, lifecycle_status').eq('id', clientId).single();
-      if (existing.error || !existing.data) return res.status(404).json({ error: 'Cliente não encontrado.' });
-      if (existing.data.status === 'active') return res.status(400).json({ error: 'Cliente já está ativo.' });
+  router.post(
+    "/:id/reactivate",
+    authenticateRequest,
+    resolvePlatformContext,
+    requirePlatformPermission("platform.clients.manage"),
+    async (req: any, res: any) => {
+      try {
+        const clientId = req.params.id;
+        const parse = z
+          .object({ reason: z.string().min(5) })
+          .safeParse(req.body);
+        if (!parse.success)
+          return res
+            .status(400)
+            .json({ error: "Motivo da reativação é obrigatório." });
 
-      const transitioned = await db.rpc('admin_transition_control_plane', {
-        p_entity_type: 'tenant',
-        p_entity_id: clientId,
-        p_to_status: 'active',
-        p_actor_user_id: req.user.id,
-        p_reason: parse.data.reason.trim(),
-        p_request_id: req.requestId || null,
-      });
-      if (transitioned.error) return res.status(409).json({ error: transitioned.error.message });
+        const db = getSupabaseAdmin();
+        const existing = await db
+          .from("tenants")
+          .select("status, lifecycle_status")
+          .eq("id", clientId)
+          .single();
+        if (existing.error || !existing.data)
+          return res.status(404).json({ error: "Cliente não encontrado." });
+        if (existing.data.status === "active")
+          return res.status(400).json({ error: "Cliente já está ativo." });
 
-      const updated = await db.from('tenants').select('*').eq('id', clientId).single();
-      res.json({ success: true, tenant: updated.data });
-    } catch (e: any) {
-      res.status(500).json({ error: e.message });
-    }
-  });
+        const transitioned = await db.rpc("admin_transition_control_plane", {
+          p_entity_type: "tenant",
+          p_entity_id: clientId,
+          p_to_status: "active",
+          p_actor_user_id: req.user.id,
+          p_reason: parse.data.reason.trim(),
+          p_request_id: req.requestId || null,
+        });
+        if (transitioned.error)
+          return res.status(409).json({ error: transitioned.error.message });
+
+        const updated = await db
+          .from("tenants")
+          .select("*")
+          .eq("id", clientId)
+          .single();
+        res.json({ success: true, tenant: updated.data });
+      } catch (e: any) {
+        res.status(500).json({ error: e.message });
+      }
+    },
+  );
 
   // PUT /api/admin/clients/:id/solutions
-  router.put('/:id/solutions', authenticateRequest, resolvePlatformContext, requirePlatformPermission('platform.solutions.manage'), async (req: any, res: any) => {
-    try {
-      const clientId = req.params.id;
-      const parse = z.object({ solutionKeys: z.array(z.string()) }).safeParse(req.body);
-      if (!parse.success) return res.status(400).json({ error: 'solutionKeys deve ser uma lista de chaves válidas.' });
-      const { solutionKeys } = parse.data;
-      const before = await getSupabaseAdmin().from('tenant_solutions').select('solutions(key)').eq('tenant_id', clientId);
-      const replaced = await getSupabaseAdmin().rpc('admin_replace_tenant_solutions', {
-        p_tenant_id: clientId,
-        p_solution_keys: [...new Set(solutionKeys)],
-      });
-      if (replaced.error) throw replaced.error;
-      
-      await getSupabaseAdmin().from('platform_audit_logs').insert({
-        actor_user_id: req.user.id,
-        action: 'solution.updated',
-        entity_type: 'tenant_solutions',
-        entity_id: clientId,
-        severity: 'info',
-        ...auditContext(req, { result: 'success', before: before.data, after: { solutions: solutionKeys } })
-      });
-      
-      res.json({ success: true });
-    } catch (e: any) {
-      res.status(500).json({ error: e.message });
-    }
-  });
+  router.put(
+    "/:id/solutions",
+    authenticateRequest,
+    resolvePlatformContext,
+    requirePlatformPermission("platform.solutions.manage"),
+    async (req: any, res: any) => {
+      try {
+        const clientId = req.params.id;
+        const parse = z
+          .object({ solutionKeys: z.array(z.string()) })
+          .safeParse(req.body);
+        if (!parse.success)
+          return res.status(400).json({
+            error: "solutionKeys deve ser uma lista de chaves válidas.",
+          });
+        const { solutionKeys } = parse.data;
+        const before = await getSupabaseAdmin()
+          .from("tenant_solutions")
+          .select("solutions(key)")
+          .eq("tenant_id", clientId);
+        const replaced = await getSupabaseAdmin().rpc(
+          "admin_replace_tenant_solutions",
+          {
+            p_tenant_id: clientId,
+            p_solution_keys: [...new Set(solutionKeys)],
+          },
+        );
+        if (replaced.error) throw replaced.error;
+
+        await getSupabaseAdmin()
+          .from("platform_audit_logs")
+          .insert({
+            actor_user_id: req.user.id,
+            action: "solution.updated",
+            entity_type: "tenant_solutions",
+            entity_id: clientId,
+            severity: "info",
+            ...auditContext(req, {
+              result: "success",
+              before: before.data,
+              after: { solutions: solutionKeys },
+            }),
+          });
+
+        res.json({ success: true });
+      } catch (e: any) {
+        res.status(500).json({ error: e.message });
+      }
+    },
+  );
 
   return router;
 }
