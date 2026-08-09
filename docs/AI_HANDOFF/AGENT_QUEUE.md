@@ -2,8 +2,8 @@ Owner: codex
 Status: phase_4_partial
 Branch: fix/admin-functional-recovery
 Verified code SHA: d356bf1
-Preview deployment: pending for this SHA
-Preview URL: pending for this SHA
+Preview deployment: branch alias (Git integration)
+Preview URL: https://ordum-git-fix-admin-functional-recovery-ordum.vercel.app
 Scope: Fase 4 — Ordum Integridade Core
 
 Checks verified on 2026-08-09:
@@ -12,6 +12,7 @@ Checks verified on 2026-08-09:
 - secret scan, migration validation, lint, typecheck, 119 tests (118 pass, 1 live E2E skip) e build: PASS;
 - live queries existentes e bloqueios públicos de Storage/control-plane: PASS;
 - Supabase Security Advisor: nenhuma ocorrência referente às novas tabelas de Integridade.
+- Preview da branch: READY; raiz HTTP 200; API sem autenticação HTTP 401; canal inexistente com estado acionável; mobile sem overflow; console/page errors e logs 5xx: 0.
 
 Entregue neste pacote:
 - Report e Case separados, timeline imutável, tarefas, conflitos, identidade protegida, unidades e configurações tenant-scoped;

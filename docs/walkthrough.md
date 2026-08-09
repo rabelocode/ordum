@@ -9,6 +9,7 @@
 - O Admin da Ordum recebe apenas métricas agregadas e estado da solução; o endpoint não entrega descrição, mensagens, identidade ou evidências.
 - Validação transacional remota com rollback comprovou criação de Report + Case, segredo não plaintext, rejeição de credenciais inválidas e exclusão de nota interna da projeção pública.
 - Verificação: secret scan, migrations, lint, typecheck, 119 testes (118 aprovados e 1 E2E comercial live ignorado por configuração), build e live queries aprovados.
+- Preview da branch validado em desktop/mobile: conteúdo renderizado, sem tela branca, overlay, erro de console, overflow horizontal ou log 5xx; rotas protegidas rejeitam acesso sem token com HTTP 401.
 - Ainda não concluídos: Storage privado/anexos, rate limiting persistente, configuração avançada de comitê/roteamento, tarefas/decisão completas e E2E visual autenticado.
 
 ## 📋 Resumo da Implementação
