@@ -1540,7 +1540,7 @@ export function createIntegrityRouter(
       const updated = await db.from("integrity_settings").update({ channel_tested_at: testedAt }).eq("tenant_id", tenantId(req));
       if (updated.error) return res.status(500).json({ error: "O teste passou, mas não foi possível registrar o resultado." });
       await auditIntegrity(db, req, "integrity.channel.tested", "integrity_channels", channel.data.id, { public_slug: channel.data.public_slug, tested_at: testedAt });
-      return res.json({ passed: true, tested_at: testedAt, public_slug: channel.data.public_slug });
+      return res.json({ passed: true, tested_at: testedAt, slug: channel.data.public_slug, public_slug: channel.data.public_slug });
     }),
   );
 

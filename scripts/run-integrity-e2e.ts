@@ -92,16 +92,23 @@ async function runBrowserQa(scenarios: Array<{ name: string; user: FixtureUser; 
       const page = await context.newPage();
       page.on("console", (message) => { if (message.type() === "error") failures.push(`${scenario.name}: console ${message.text().slice(0, 120)}`); });
       page.on("response", (response) => { if (response.status() >= 500) failures.push(`${scenario.name}: HTTP ${response.status()} ${new URL(response.url()).pathname}`); });
-      await page.goto(`${APP_URL}/#/entrar`, { waitUntil: "networkidle" });
+      await page.goto(`${APP_URL}/#/login`, { waitUntil: "networkidle" });
       await page.locator('input[type="email"]').fill(scenario.user.email);
       await page.locator('input[type="password"]').fill(scenario.user.password);
       await page.locator('button[type="submit"]').click();
       await page.waitForURL(/#\/(workspace|admin)/, { timeout: 20000 });
-      await page.goto(`${APP_URL}/#/workspace/integridade`, { waitUntil: "networkidle" });
-      await page.getByRole("heading", { name: "Ordum Integridade" }).waitFor();
-      await page.getByRole("button", { name: "Casos", exact: true }).click();
+      await page.evaluate(() => { window.location.hash = "#/workspace/integridade"; });
+      await page.reload({ waitUntil: "networkidle" });
+      await page.getByRole("heading", { name: "Ordum Integridade", exact: true }).waitFor();
+      if (scenario.mobile) await page.locator('nav[aria-label="Áreas do Integridade"] button').nth(1).click();
+      else await page.getByRole("button", { name: "Casos", exact: true }).click();
       if (scenario.expectedCase) {
-        await page.getByText(subject, { exact: true }).first().waitFor();
+        try {
+          await page.getByText(subject, { exact: true }).first().waitFor({ timeout: 15000 });
+        } catch {
+          const visible = (await page.locator("body").innerText()).replace(/\s+/g, " ").slice(0, 500);
+          throw new Error(`${scenario.name}: caso esperado ausente na interface (${visible})`);
+        }
         if (!scenario.mobile && scenario.settings) {
           const download = page.waitForEvent("download");
           await page.getByRole("button", { name: "Exportar CSV" }).click();
@@ -229,7 +236,7 @@ export async function runIntegrityE2E(): Promise<Evidence> {
     expect(await workspace(`/cases/${caseRow.id}`, {}, unassignedInvestigator, tenantA.id), 200, "committee investigator read");
     expect(await workspace(`/settings/routing/${routing.id}`, { method: "PATCH", body: JSON.stringify({ name: "Rota piloto atualizada", category_id: category.id, unit_id: unit.id, assignee_membership_id: assignedInvestigator.membershipId, committee_id: committee.id, priority: 2, active: true, is_fallback: false, status: "active" }) }), 200, "routing update");
     const channelTest = expect(await workspace("/settings/channel-test", { method: "POST", body: "{}" }), 200, "channel readiness test");
-    if (channelTest.slug !== channelSlug || !channelTest.tested_at) throw new Error("teste do canal não persistido");
+    if ((channelTest.slug || channelTest.public_slug) !== channelSlug || !channelTest.tested_at) throw new Error("teste do canal não persistido");
     const configured = expect(await workspace("/settings"), 200, "configuration checklist");
     if (configured.configuration_status?.operational !== true) throw new Error("checklist de configuração não operacional");
     expect(await workspace(`/cases/${caseRow.id}/transitions`, { method: "POST", body: JSON.stringify({ to_status: "closed", reason: "inválida", lock_version: caseRow.lock_version }) }), 409, "invalid transition");

@@ -1922,6 +1922,7 @@ function NavButton({
 }) {
   return (
     <button
+      aria-label={typeof children === "string" ? children : undefined}
       onClick={onClick}
       className={`flex items-center gap-2 rounded-lg px-3 py-2 text-xs font-bold sm:text-sm ${active ? "bg-white text-[#3457D5] shadow-sm" : "text-[#626866]"}`}
     >
