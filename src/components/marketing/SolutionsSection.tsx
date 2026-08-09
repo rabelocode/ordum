@@ -89,7 +89,7 @@ export function SolutionsSection({ onOpenDemo }: SolutionsSectionProps) {
                 </span>
               </div>
               <h2 className="text-3xl sm:text-4xl font-extrabold text-[#202322] tracking-tight mb-5 leading-tight">
-                Canal 100% anônimo de denúncias.
+                Canal protegido para relatos anônimos.
               </h2>
               <p className="text-base sm:text-lg text-[#626866] leading-relaxed mb-8">
                 Receba denúncias sem identificar o relator e acompanhe cada caso por um protocolo seguro.

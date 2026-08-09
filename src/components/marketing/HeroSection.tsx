@@ -51,7 +51,7 @@ export function HeroSection({ onOpenDemo, onNavigateLogin }: HeroSectionProps) {
               transition={{ duration: 0.5, delay: 0.2 }}
               className="mt-6 text-base sm:text-lg text-[#626866] leading-relaxed max-w-xl"
             >
-              Canal 100% anônimo de denúncias, Portal do Colaborador e recrutamento em uma plataforma corporativa modular.
+              Canal protegido para relatos anônimos, Portal do Colaborador e recrutamento em uma plataforma corporativa modular.
             </motion.p>
 
             <motion.div 

@@ -2,7 +2,7 @@ export const solutionsData = [
   {
     id: "integrity",
     name: "Ordum Integridade",
-    category: "Canal 100% anônimo de denúncias",
+    category: "Canal protegido para relatos anônimos",
     shortDescription: "Receba denúncias sem identificar o relator e acompanhe cada caso por um protocolo seguro.",
     activities: ["Denunciar anonimamente", "Acompanhar por protocolo", "Tratar casos em área restrita"],
     color: "#3457D5",
