@@ -66,6 +66,39 @@ export function createAdminClientsRouter(getSupabaseAdmin: any) {
     }
   });
 
+  // Control-plane only: aggregate health, never report content or identities.
+  router.get('/:id/integrity-summary', authenticateRequest, resolvePlatformContext, requirePlatformPermission(['platform.clients.read', 'platform.commercial.read']), async (req: any, res: any) => {
+    try {
+      const db = getSupabaseAdmin();
+      const tenant = await db.from('tenants').select('id,status,platform_client_assignments(*)').eq('id', req.params.id).single();
+      if (tenant.error || !tenant.data) return res.status(404).json({ error: 'Cliente não encontrado.' });
+      if (req.platformContext.role?.key !== 'admin' && !canReadAssignedResource(req.platformContext, tenant.data.platform_client_assignments?.[0], 'member_client_visibility')) return res.status(403).json({ error: 'Forbidden' });
+      const [solution, settings, channels, cases, members, onboarding] = await Promise.all([
+        db.from('tenant_solutions').select('status,created_at,updated_at,solutions!inner(key)').eq('tenant_id', req.params.id).eq('solutions.key', 'integrity').maybeSingle(),
+        db.from('integrity_settings').select('configured_at,updated_at').eq('tenant_id', req.params.id).maybeSingle(),
+        db.from('integrity_channels').select('id,active').eq('tenant_id', req.params.id),
+        db.from('integrity_cases').select('status,sla_due_at,updated_at').eq('tenant_id', req.params.id),
+        db.from('memberships').select('id', { count: 'exact', head: true }).eq('tenant_id', req.params.id).eq('status', 'active'),
+        db.from('onboarding_runs').select('id,status,progress_percent,updated_at').eq('tenant_id', req.params.id).order('created_at', { ascending: false }).limit(1).maybeSingle(),
+      ]);
+      const failed = [solution, settings, channels, cases, members, onboarding].find((result: any) => result.error);
+      if (failed) throw failed.error;
+      const now = Date.now(); const rows = cases.data || [];
+      return res.json({
+        contracted: Boolean(solution.data), solution_status: solution.data?.status || 'not_contracted', activated_at: solution.data?.created_at || null,
+        configuration_complete: Boolean(settings.data?.configured_at), channels_total: channels.data?.length || 0,
+        channels_active: (channels.data || []).filter((channel: any) => channel.active).length, active_users: members.count || 0,
+        cases_total: rows.length, cases_open: rows.filter((item: any) => !['closed','archived'].includes(item.status)).length,
+        sla_overdue: rows.filter((item: any) => item.sla_due_at && new Date(item.sla_due_at).getTime() < now && !['closed','archived'].includes(item.status)).length,
+        last_use_at: rows.map((item: any) => item.updated_at).filter(Boolean).sort().at(-1) || settings.data?.updated_at || null,
+        onboarding: onboarding.data || null,
+        confidentiality_boundary: 'aggregate_only',
+      });
+    } catch (error: any) {
+      return res.status(500).json({ error: 'Não foi possível carregar a saúde do Integridade.' });
+    }
+  });
+
 
   // GET /api/admin/clients/:id
   router.get('/:id', authenticateRequest, resolvePlatformContext, requirePlatformPermission(['platform.clients.read', 'platform.commercial.read']), async (req: any, res: any) => {

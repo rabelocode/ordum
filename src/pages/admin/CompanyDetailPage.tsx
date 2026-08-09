@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { ArrowLeft, Loader2, Save, Ban, PlayCircle, X } from 'lucide-react';
+import { ArrowLeft, Loader2, Save, Ban, PlayCircle, X, ShieldCheck } from 'lucide-react';
 import { useAccess } from '../../core/auth/AccessContext';
 import { AssignLeadModal } from '../../components/admin/AssignLeadModal';
 import { DetailSkeleton } from '../../components/ui/LoadingSkeletons';
@@ -8,6 +8,7 @@ const TABS = [
   { id: 'overview', label: 'Visão Geral' },
   { id: 'entitlements', label: 'Entitlements' },
   { id: 'solutions', label: 'Soluções' },
+  { id: 'integrity', label: 'Integridade' },
   { id: 'owners', label: 'Responsáveis' },
   { id: 'domains', label: 'Domínios' },
   { id: 'units', label: 'Unidades' },
@@ -23,6 +24,7 @@ export function CompanyDetailPage({ tenantId }: { tenantId: string }) {
   const [isActioning, setIsActioning] = useState(false);
   const [solutionKeys, setSolutionKeys] = useState<string[]>([]);
   const [entitlements, setEntitlements] = useState<any>(null);
+  const [integritySummary, setIntegritySummary] = useState<any>(null);
   const [isAssignModalOpen, setIsAssignModalOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
@@ -47,6 +49,10 @@ export function CompanyDetailPage({ tenantId }: { tenantId: string }) {
           headers: { Authorization: `Bearer ${session.access_token}` }
         });
         if (entitlementResponse.ok) setEntitlements(await entitlementResponse.json());
+        const integrityResponse = await fetch(`/api/admin/clients/${tenantId}/integrity-summary`, {
+          headers: { Authorization: `Bearer ${session.access_token}` }
+        });
+        if (integrityResponse.ok) setIntegritySummary(await integrityResponse.json());
       } else {
         const errData = await response.json().catch(() => ({}));
         setError(errData.error || 'Falha ao carregar dados do cliente.');
@@ -310,6 +316,30 @@ export function CompanyDetailPage({ tenantId }: { tenantId: string }) {
                   </button>
                 </div>
               )}
+            </div>
+          )}
+
+          {activeTab === 'integrity' && (
+            <div className="space-y-6">
+              <div className="flex items-start gap-4 rounded-2xl border border-blue-100 bg-blue-50 p-5">
+                <ShieldCheck className="mt-0.5 h-6 w-6 text-[#3457D5]" />
+                <div><h2 className="font-bold text-[#202322]">Control plane do Integridade</h2><p className="mt-1 text-sm text-[#626866]">Somente configuração, entitlement e indicadores agregados. O conteúdo confidencial dos relatos não é disponibilizado ao Admin Ordum.</p></div>
+              </div>
+              {!integritySummary ? <div className="rounded-2xl border border-dashed p-10 text-center text-sm text-gray-500">Resumo operacional indisponível.</div> : <>
+                <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+                  {[
+                    ['Contratado', integritySummary.contracted ? 'Sim' : 'Não'], ['Status', integritySummary.solution_status],
+                    ['Configuração', integritySummary.configuration_complete ? 'Concluída' : 'Pendente'], ['Usuários ativos', integritySummary.active_users],
+                    ['Canais ativos', `${integritySummary.channels_active}/${integritySummary.channels_total}`], ['Casos agregados', integritySummary.cases_total],
+                    ['Casos abertos', integritySummary.cases_open], ['SLAs vencidos', integritySummary.sla_overdue],
+                  ].map(([label, value]) => <div key={String(label)} className="rounded-2xl border border-[#DDD8CF] bg-white p-5"><div className="text-xs font-bold uppercase tracking-wide text-gray-500">{label}</div><div className="mt-2 text-xl font-bold">{value ?? '—'}</div></div>)}
+                </div>
+                <div className="grid gap-4 md:grid-cols-3">
+                  <div className="rounded-xl bg-gray-50 p-4"><div className="text-xs text-gray-500">Ativado em</div><strong>{integritySummary.activated_at ? new Date(integritySummary.activated_at).toLocaleDateString('pt-BR') : '—'}</strong></div>
+                  <div className="rounded-xl bg-gray-50 p-4"><div className="text-xs text-gray-500">Último uso</div><strong>{integritySummary.last_use_at ? new Date(integritySummary.last_use_at).toLocaleString('pt-BR') : '—'}</strong></div>
+                  <div className="rounded-xl bg-gray-50 p-4"><div className="text-xs text-gray-500">Onboarding</div><strong>{integritySummary.onboarding ? `${integritySummary.onboarding.progress_percent}% · ${integritySummary.onboarding.status}` : 'Não iniciado'}</strong></div>
+                </div>
+              </>}
             </div>
           )}
 

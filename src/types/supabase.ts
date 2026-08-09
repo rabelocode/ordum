@@ -5506,6 +5506,10 @@ export type Database = {
           channel_name: string
         }[]
       }
+      get_integrity_channel: {
+        Args: { p_channel_slug: string }
+        Returns: Json
+      }
       has_permission: {
         Args: { p_permission_key: string; p_tenant_id: string }
         Returns: boolean
@@ -5572,6 +5576,10 @@ export type Database = {
           report_status: string
         }[]
       }
+      read_integrity_report_v2: {
+        Args: { p_access_secret: string; p_protocol: string }
+        Returns: Json
+      }
       safe_uuid: { Args: { p_value: string }; Returns: string }
       submit_integrity_report: {
         Args: {
@@ -5584,6 +5592,19 @@ export type Database = {
           access_secret: string
           protocol: string
         }[]
+      }
+      submit_integrity_report_v2: {
+        Args: {
+          p_category_slug: string
+          p_channel_slug: string
+          p_description: string
+          p_identity?: Json | null
+          p_occurred_at?: string | null
+          p_reporter_mode: string
+          p_subject: string
+          p_unit_id?: string | null
+        }
+        Returns: Json
       }
       submit_marketing_lead: {
         Args: {

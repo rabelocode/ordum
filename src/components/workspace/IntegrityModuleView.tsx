@@ -1,164 +1,106 @@
-import React, { useState, useEffect } from 'react';
-import { ArrowLeft, MessageSquare, AlertTriangle, ShieldCheck, Mail, Clock, Filter, Key } from 'lucide-react';
-import { supabase } from '../../lib/supabase'; // Assuming standard auth helper or access token
+import React, { useCallback, useEffect, useState } from 'react';
+import { AlertTriangle, ArrowLeft, BarChart3, CheckCircle2, Clock, MessageSquare, RefreshCw, Search, Settings, ShieldCheck, Users } from 'lucide-react';
+import { supabase } from '../../lib/supabase';
+import { Button } from '../ui/Button';
+import { Input } from '../ui/Input';
+import { Skeleton } from '../ui/Skeleton';
 
-export function IntegrityModuleView({ tenant, onBack }: { tenant: { id: string }; user: unknown; onBack: () => void }) {
-  const [selectedCaseId, setSelectedCaseId] = useState<string | null>(null);
-  
-  if (selectedCaseId) {
-    return <IntegrityCaseDetail caseId={selectedCaseId} onBack={() => setSelectedCaseId(null)} />;
+type Props = { tenant: { id: string; name?: string }; user: { permissions?: string[] } | unknown; onBack: () => void };
+type ApiState<T> = { data: T | null; loading: boolean; error: string };
+
+async function integrityApi<T>(tenantId: string, path: string, options: RequestInit = {}): Promise<T> {
+  const session = await supabase.auth.getSession();
+  const response = await fetch(`/api/workspace/integrity${path}`, { ...options, headers: { Authorization: `Bearer ${session.data.session?.access_token || ''}`, 'Content-Type': 'application/json', 'x-tenant-id': tenantId, ...options.headers } });
+  const body = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(body.error || 'Não foi possível concluir a operação.');
+  return body;
+}
+
+export function IntegrityModuleView({ tenant, user, onBack }: Props) {
+  const permissions = (user as any)?.permissions || [];
+  const canSettings = permissions.includes('integrity.settings.manage');
+  const canAssign = permissions.includes('integrity.cases.assign') || permissions.includes('integrity.cases.manage');
+  const [section, setSection] = useState<'dashboard' | 'cases' | 'settings'>('dashboard');
+  const [caseId, setCaseId] = useState<string | null>(null);
+  if (caseId) return <CaseDetail tenantId={tenant.id} caseId={caseId} canAssign={canAssign} onBack={() => setCaseId(null)} />;
+  return <div className="min-h-full bg-[#F6F5F2] text-[#202322]">
+    <header className="sticky top-0 z-10 flex flex-wrap items-center justify-between gap-3 border-b border-[#DDD8CF] bg-white/95 px-4 py-3 backdrop-blur sm:px-6"><div className="flex items-center gap-3"><button aria-label="Voltar" onClick={onBack} className="rounded-lg p-2 hover:bg-gray-100"><ArrowLeft className="h-4 w-4" /></button><div className="flex h-9 w-9 items-center justify-center rounded-xl bg-[#3457D5]/10"><ShieldCheck className="h-5 w-5 text-[#3457D5]" /></div><div><h1 className="font-bold">Ordum Integridade</h1><p className="text-xs text-[#626866]">Cockpit de tratamento</p></div></div><nav className="flex gap-1 rounded-xl bg-[#F6F5F2] p-1" aria-label="Áreas do Integridade"><NavButton active={section === 'dashboard'} onClick={() => setSection('dashboard')} icon={<BarChart3 className="h-4 w-4" />}>Visão geral</NavButton><NavButton active={section === 'cases'} onClick={() => setSection('cases')} icon={<ShieldCheck className="h-4 w-4" />}>Casos</NavButton>{canSettings && <NavButton active={section === 'settings'} onClick={() => setSection('settings')} icon={<Settings className="h-4 w-4" />}>Configurações</NavButton>}</nav></header>
+    {section === 'dashboard' && <Dashboard tenantId={tenant.id} onOpenCases={() => setSection('cases')} />}
+    {section === 'cases' && <CaseList tenantId={tenant.id} onSelect={setCaseId} />}
+    {section === 'settings' && canSettings && <SettingsPanel tenantId={tenant.id} />}
+  </div>;
+}
+
+function Dashboard({ tenantId, onOpenCases }: { tenantId: string; onOpenCases: () => void }) {
+  const [state, setState] = useState<ApiState<any>>({ data: null, loading: true, error: '' });
+  useEffect(() => { integrityApi<any>(tenantId, '/dashboard').then((data) => setState({ data, loading: false, error: '' })).catch((error) => setState({ data: null, loading: false, error: error.message })); }, [tenantId]);
+  if (state.loading) return <Panel><div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">{Array.from({ length: 8 }).map((_, index) => <Skeleton key={index} className="h-28 rounded-2xl" />)}</div><Skeleton className="mt-6 h-52 rounded-2xl" /></Panel>;
+  if (state.error) return <Panel><ErrorState message={state.error} /></Panel>;
+  const metrics = [
+    ['Abertos', state.data.open], ['Novos', state.data.received], ['Em triagem', state.data.triage], ['Em investigação', state.data.investigation],
+    ['Aguardando informação', state.data.waiting_information], ['Críticos', state.data.critical], ['SLA vencido', state.data.sla_overdue], ['Encerrados', state.data.closed],
+  ];
+  return <Panel><div className="mb-6 flex items-end justify-between gap-4"><div><h2 className="text-2xl font-bold">Visão operacional</h2><p className="mt-1 text-sm text-[#626866]">Indicadores calculados a partir dos casos reais deste tenant.</p></div><Button onClick={onOpenCases}>Abrir caixa de casos</Button></div><div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">{metrics.map(([label, value]) => <div key={label as string} className="rounded-2xl border border-[#DDD8CF] bg-white p-5"><div className="text-xs font-bold uppercase tracking-wider text-[#626866]">{label}</div><div className="mt-3 text-3xl font-bold">{value ?? '—'}</div></div>)}</div><div className="mt-6 grid gap-4 md:grid-cols-3"><Summary icon={<Clock />} label="Primeira ação média" value={state.data.average_first_action_hours == null ? '—' : `${state.data.average_first_action_hours}h`} /><Summary icon={<CheckCircle2 />} label="Resolução média" value={state.data.average_resolution_hours == null ? '—' : `${state.data.average_resolution_hours}h`} /><Summary icon={<AlertTriangle />} label="SLA nas próximas 24h" value={String(state.data.sla_due_soon ?? '—')} /></div><p className="mt-4 text-right text-xs text-[#626866]">Atualizado em {new Date(state.data.updated_at).toLocaleString('pt-BR')}</p></Panel>;
+}
+
+function CaseList({ tenantId, onSelect }: { tenantId: string; onSelect: (id: string) => void }) {
+  const [filters, setFilters] = useState({ search: '', status: '', severity: '', sla: '' });
+  const [page, setPage] = useState(1);
+  const [state, setState] = useState<ApiState<any>>({ data: null, loading: true, error: '' });
+  const load = useCallback(() => { setState((current) => ({ ...current, loading: true, error: '' })); const query = new URLSearchParams({ page: String(page), limit: '25', ...Object.fromEntries(Object.entries(filters).filter(([, value]) => value)) }); integrityApi<any>(tenantId, `/cases?${query}`).then((data) => setState({ data, loading: false, error: '' })).catch((error) => setState({ data: null, loading: false, error: error.message })); }, [tenantId, page, filters.search, filters.status, filters.severity, filters.sla]);
+  useEffect(load, [load]);
+  return <Panel><div className="mb-5"><h2 className="text-2xl font-bold">Caixa de casos</h2><p className="mt-1 text-sm text-[#626866]">Pesquisa, prioridade, risco e prazo em uma única fila.</p></div><div className="mb-5 grid gap-3 rounded-2xl border border-[#DDD8CF] bg-white p-4 md:grid-cols-4"><label className="relative md:col-span-1"><Search className="absolute left-3 top-3 h-4 w-4 text-gray-400" /><Input aria-label="Buscar protocolo ou assunto" className="pl-9" placeholder="Buscar" value={filters.search} onChange={(event) => { setPage(1); setFilters({ ...filters, search: event.target.value }); }} /></label><FilterSelect label="Status" value={filters.status} onChange={(value) => { setPage(1); setFilters({ ...filters, status: value }); }} options={[['received','Novo'],['triage','Triagem'],['investigation','Investigação'],['waiting_information','Aguardando'],['decision','Decisão'],['closed','Encerrado']]} /><FilterSelect label="Severidade" value={filters.severity} onChange={(value) => { setPage(1); setFilters({ ...filters, severity: value }); }} options={[['low','Baixa'],['medium','Média'],['high','Alta'],['critical','Crítica']]} /><FilterSelect label="SLA" value={filters.sla} onChange={(value) => { setPage(1); setFilters({ ...filters, sla: value }); }} options={[['due_soon','Próximas 24h'],['overdue','Vencido']]} /></div>{state.loading ? <div className="space-y-3">{Array.from({ length: 7 }).map((_, index) => <Skeleton key={index} className="h-16 rounded-xl" />)}</div> : state.error ? <ErrorState message={state.error} /> : state.data.cases.length === 0 ? <EmptyState /> : <><div className="overflow-hidden rounded-2xl border border-[#DDD8CF] bg-white"><div className="overflow-x-auto"><table className="w-full min-w-[820px] text-left text-sm"><thead className="bg-[#F6F5F2] text-xs uppercase tracking-wide text-[#626866]"><tr><th className="px-5 py-3">Protocolo</th><th>Assunto</th><th>Status</th><th>Severidade</th><th>Categoria</th><th>Unidade</th><th>SLA</th></tr></thead><tbody>{state.data.cases.map((item: any) => <tr key={item.id} tabIndex={0} onClick={() => onSelect(item.id)} onKeyDown={(event) => { if (event.key === 'Enter') onSelect(item.id); }} className="cursor-pointer border-t border-[#EEEAE3] hover:bg-blue-50/40 focus:bg-blue-50"><td className="px-5 py-4 font-mono font-bold text-[#3457D5]">{item.protocol}</td><td className="max-w-[240px] truncate">{item.integrity_reports?.subject || 'Sem assunto'}</td><td>{statusLabel(item.status)}</td><td><Risk value={item.severity} /></td><td>{item.integrity_categories?.name || '—'}</td><td>{item.integrity_units?.name || '—'}</td><td className={item.sla_due_at && new Date(item.sla_due_at) < new Date() && !['closed','archived'].includes(item.status) ? 'font-bold text-red-700' : ''}>{item.sla_due_at ? new Date(item.sla_due_at).toLocaleDateString('pt-BR') : '—'}</td></tr>)}</tbody></table></div></div><div className="mt-4 flex items-center justify-between text-sm"><span>{state.data.total} caso(s)</span><div className="flex gap-2"><Button variant="outline" disabled={page === 1} onClick={() => setPage(page - 1)}>Anterior</Button><Button variant="outline" disabled={page >= state.data.total_pages} onClick={() => setPage(page + 1)}>Próxima</Button></div></div></>}</Panel>;
+}
+
+function CaseDetail({ tenantId, caseId, canAssign, onBack }: { tenantId: string; caseId: string; canAssign: boolean; onBack: () => void }) {
+  const [state, setState] = useState<ApiState<any>>({ data: null, loading: true, error: '' });
+  const [timeline, setTimeline] = useState<any[]>([]); const [messages, setMessages] = useState<any[]>([]);
+  const [members, setMembers] = useState<any[]>([]); const [assignee, setAssignee] = useState(''); const [assignmentReason, setAssignmentReason] = useState('');
+  const [note, setNote] = useState(''); const [publicMessage, setPublicMessage] = useState(false); const [busy, setBusy] = useState(false); const [actionError, setActionError] = useState('');
+  const load = useCallback(async () => { setState((current) => ({ ...current, loading: true, error: '' })); try { const [detail, events, communication, memberData] = await Promise.all([integrityApi<any>(tenantId, `/cases/${caseId}`), integrityApi<any>(tenantId, `/cases/${caseId}/timeline`), integrityApi<any>(tenantId, `/cases/${caseId}/messages`), canAssign ? integrityApi<any>(tenantId, '/members') : Promise.resolve({ members: [] })]); setState({ data: detail.case, loading: false, error: '' }); setTimeline(events.events); setMessages(communication.messages); setMembers(memberData.members); } catch (error: any) { setState({ data: null, loading: false, error: error.message }); } }, [tenantId, caseId, canAssign]);
+  useEffect(() => { load(); }, [load]);
+  async function transition(to_status: string) { const reason = ['closed','reopened'].includes(to_status) ? note.trim() : note.trim() || undefined; setBusy(true); setActionError(''); try { await integrityApi(tenantId, `/cases/${caseId}/transitions`, { method: 'POST', body: JSON.stringify({ to_status, reason, lock_version: state.data.lock_version }) }); setNote(''); await load(); } catch (error: any) { setActionError(error.message); } finally { setBusy(false); } }
+  async function sendMessage(event: React.FormEvent) { event.preventDefault(); setBusy(true); setActionError(''); try { await integrityApi(tenantId, `/cases/${caseId}/messages`, { method: 'POST', body: JSON.stringify({ body: note, visible_to_reporter: publicMessage }) }); setNote(''); await load(); } catch (error: any) { setActionError(error.message); } finally { setBusy(false); } }
+  async function assign(event: React.FormEvent) { event.preventDefault(); setBusy(true); setActionError(''); try { await integrityApi(tenantId, `/cases/${caseId}/assignments`, { method: 'POST', body: JSON.stringify({ membership_id: assignee, reason: assignmentReason }) }); setAssignmentReason(''); await load(); } catch (error: any) { setActionError(error.message); } finally { setBusy(false); } }
+  if (state.loading) return <Panel><Skeleton className="h-16 rounded-xl" /><div className="mt-5 grid gap-5 lg:grid-cols-3"><Skeleton className="h-[520px] rounded-2xl lg:col-span-2" /><Skeleton className="h-[520px] rounded-2xl" /></div></Panel>;
+  if (state.error) return <Panel><button onClick={onBack} className="mb-4 flex items-center gap-2 text-sm"><ArrowLeft className="h-4 w-4" />Voltar</button><ErrorState message={state.error} /></Panel>;
+  const item = state.data; const report = item.integrity_reports;
+  return <div className="min-h-full bg-[#F6F5F2]"><header className="border-b border-[#DDD8CF] bg-white px-4 py-4 sm:px-6"><div className="mx-auto flex max-w-7xl flex-wrap items-center justify-between gap-4"><div className="flex items-center gap-3"><button aria-label="Voltar" onClick={onBack} className="rounded-lg p-2 hover:bg-gray-100"><ArrowLeft className="h-4 w-4" /></button><div><div className="font-mono text-sm font-bold text-[#3457D5]">{item.protocol}</div><h1 className="text-xl font-bold">{report.subject || 'Caso de Integridade'}</h1></div></div><div className="flex flex-wrap gap-2"><Risk value={item.severity} /><span className="rounded-full bg-gray-100 px-3 py-1 text-xs font-bold">{statusLabel(item.status)}</span></div></div></header><Panel>{actionError && <div role="alert" className="mb-4 rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-700">{actionError}</div>}<div className="grid gap-5 lg:grid-cols-[minmax(0,2fr)_minmax(300px,1fr)]"><div className="space-y-5"><Card title="Denúncia original"><dl className="mb-5 grid gap-4 text-sm sm:grid-cols-3"><Meta label="Categoria" value={item.integrity_categories?.name} /><Meta label="Unidade" value={item.integrity_units?.name} /><Meta label="Ocorrido em" value={report.occurred_at ? new Date(report.occurred_at).toLocaleDateString('pt-BR') : 'Não informado'} /></dl><p className="whitespace-pre-wrap text-sm leading-7 text-[#3F4543]">{report.description}</p></Card><Card title="Comunicação e notas"><div className="space-y-3">{messages.map((message) => <div key={message.id} className={`rounded-xl p-4 text-sm ${message.visible_to_reporter ? 'border border-blue-100 bg-blue-50' : 'border border-amber-100 bg-amber-50'}`}><div className="mb-2 text-xs font-bold">{message.visible_to_reporter ? 'Visível ao denunciante' : 'Nota interna'} · {new Date(message.created_at).toLocaleString('pt-BR')}</div><p className="whitespace-pre-wrap">{message.body}</p></div>)}</div><form onSubmit={sendMessage} className="mt-4 space-y-3"><textarea required minLength={2} maxLength={5000} value={note} onChange={(event) => setNote(event.target.value)} rows={4} className="w-full rounded-xl border border-[#DDD8CF] p-3 text-sm" placeholder="Escreva uma nota ou comunicação" /><label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={publicMessage} onChange={(event) => setPublicMessage(event.target.checked)} />Enviar ao denunciante</label><Button disabled={busy} type="submit"><MessageSquare className="mr-2 h-4 w-4" />Registrar mensagem</Button></form></Card></div><aside className="space-y-5"><Card title="Tratamento"><Meta label="Prioridade" value={item.priority} /><Meta label="SLA" value={item.sla_due_at ? new Date(item.sla_due_at).toLocaleString('pt-BR') : 'Não definido'} /><Meta label="Responsável" value={item.owner_membership_id ? 'Responsável atribuído' : 'Não atribuído'} />{canAssign && <form onSubmit={assign} className="mt-4 space-y-2 border-t pt-4"><label className="block text-xs font-bold">Atribuir responsável<select required value={assignee} onChange={(event) => setAssignee(event.target.value)} className="mt-1 w-full rounded-lg border border-[#DDD8CF] bg-white p-2 text-sm font-normal"><option value="">Selecione</option>{members.map((member) => <option key={member.id} value={member.id}>{member.name}</option>)}</select></label><Input required minLength={3} maxLength={500} value={assignmentReason} onChange={(event) => setAssignmentReason(event.target.value)} placeholder="Motivo da atribuição" /><Button type="submit" variant="outline" disabled={busy || !assignee}>Atribuir</Button></form>}<div className="mt-4 grid gap-2"><TransitionButtons status={item.status} disabled={busy} onTransition={transition} /></div>{['decision','closed'].includes(item.status) && <p className="mt-3 text-xs text-[#626866]">Para encerrar ou reabrir, escreva o motivo no campo de mensagem antes de confirmar.</p>}</Card><Card title="Timeline"><div className="max-h-[480px] space-y-4 overflow-auto">{timeline.map((event) => <div key={event.id} className="relative border-l-2 border-blue-100 pl-4 text-sm"><div className="font-bold">{eventLabel(event.event_type)}</div><div className="text-xs text-[#626866]">{new Date(event.created_at).toLocaleString('pt-BR')}</div>{event.note && <p className="mt-1 text-xs">{event.note}</p>}</div>)}</div></Card></aside></div></Panel></div>;
+}
+
+function SettingsPanel({ tenantId }: { tenantId: string }) {
+  const [state, setState] = useState<ApiState<any>>({ data: null, loading: true, error: '' }); const [saved, setSaved] = useState(''); const [busy, setBusy] = useState(false);
+  useEffect(() => { integrityApi<any>(tenantId, '/settings').then((data) => setState({ data, loading: false, error: '' })).catch((error) => setState({ data: null, loading: false, error: error.message })); }, [tenantId]);
+  if (state.loading) return <Panel><Skeleton className="h-[520px] rounded-2xl" /></Panel>;
+  if (state.error) return <Panel><ErrorState message={state.error} /></Panel>;
+  const settings = state.data.settings || { introduction: 'Este canal recebe relatos de integridade com tratamento confidencial.', instructions: '', allows_anonymous: true, allows_identified: false, default_sla_hours: 120, automatic_acknowledgement: 'Seu relato foi recebido e será analisado.', branding: {}, attachment_policy: {}, routing_rules: [] };
+  async function submit(event: React.FormEvent<HTMLFormElement>) { event.preventDefault(); setBusy(true); setSaved(''); const form = new FormData(event.currentTarget); try { const response = await integrityApi<any>(tenantId, '/settings', { method: 'PUT', body: JSON.stringify({ ...settings, introduction: form.get('introduction'), instructions: form.get('instructions') || null, allows_anonymous: form.get('allows_anonymous') === 'on', allows_identified: form.get('allows_identified') === 'on', default_sla_hours: Number(form.get('default_sla_hours')), automatic_acknowledgement: form.get('automatic_acknowledgement'), branding: settings.branding || {}, attachment_policy: settings.attachment_policy || {}, routing_rules: settings.routing_rules || [] }) }); setState({ data: { ...state.data, settings: response.settings }, loading: false, error: '' }); setSaved('Configurações salvas.'); } catch (error: any) { setSaved(error.message); } finally { setBusy(false); } }
+  return <Panel><div className="mb-6"><h2 className="text-2xl font-bold">Configurações do canal</h2><p className="mt-1 text-sm text-[#626866]">Políticas gerais do Integridade para este tenant.</p></div><form onSubmit={submit} className="max-w-3xl space-y-5 rounded-2xl border border-[#DDD8CF] bg-white p-6"><label className="block text-sm font-bold">Apresentação<textarea name="introduction" required minLength={10} defaultValue={settings.introduction} rows={4} className="mt-2 w-full rounded-xl border border-[#DDD8CF] p-3 font-normal" /></label><label className="block text-sm font-bold">Instruções<textarea name="instructions" defaultValue={settings.instructions || ''} rows={4} className="mt-2 w-full rounded-xl border border-[#DDD8CF] p-3 font-normal" /></label><div className="grid gap-4 sm:grid-cols-2"><label className="flex items-center gap-3 rounded-xl border p-4"><input name="allows_anonymous" type="checkbox" defaultChecked={settings.allows_anonymous} />Permitir relato anônimo</label><label className="flex items-center gap-3 rounded-xl border p-4"><input name="allows_identified" type="checkbox" defaultChecked={settings.allows_identified} />Permitir relato identificado</label></div><label className="block text-sm font-bold">SLA padrão em horas<Input name="default_sla_hours" type="number" min={1} max={8760} defaultValue={settings.default_sla_hours} className="mt-2" /></label><label className="block text-sm font-bold">Mensagem automática<textarea name="automatic_acknowledgement" required minLength={5} defaultValue={settings.automatic_acknowledgement} rows={3} className="mt-2 w-full rounded-xl border border-[#DDD8CF] p-3 font-normal" /></label>{saved && <p role="status" className="text-sm font-medium">{saved}</p>}<Button type="submit" disabled={busy}>{busy ? 'Salvando…' : 'Salvar configurações'}</Button><div className="grid gap-3 border-t pt-5 sm:grid-cols-3"><InfoCount icon={<ShieldCheck />} label="Canais" value={state.data.channels.length} /><InfoCount icon={<Users />} label="Unidades" value={state.data.units.length} /><InfoCount icon={<Settings />} label="Categorias" value={state.data.categories.length} /></div></form><SettingsCollections tenantId={tenantId} data={state.data} onCreated={(key, item) => setState({ data: { ...state.data, [key]: [...state.data[key], item] }, loading: false, error: '' })} /></Panel>;
+}
+
+function SettingsCollections({ tenantId, data, onCreated }: { tenantId: string; data: any; onCreated: (key: string, item: any) => void }) {
+  const [feedback, setFeedback] = useState('');
+  async function create(event: React.FormEvent<HTMLFormElement>, kind: 'channels' | 'categories' | 'units') {
+    event.preventDefault(); setFeedback(''); const formElement = event.currentTarget; const form = new FormData(formElement); const name = String(form.get('name') || '').trim(); const slug = String(form.get('slug') || '').trim();
+    const payload = kind === 'channels' ? { name, public_title: name, public_slug: slug, active: true, allows_anonymous: true, allows_identified: false } : kind === 'categories' ? { name, slug, description: null, default_risk_level: 'medium', sla_hours: null, active: true } : { name, code: slug || null, active: true };
+    try { const response = await integrityApi<any>(tenantId, `/settings/${kind}`, { method: 'POST', body: JSON.stringify(payload) }); const item = response[kind === 'channels' ? 'channel' : kind === 'categories' ? 'category' : 'unit']; onCreated(kind, item); formElement.reset(); setFeedback('Item criado com sucesso.'); } catch (error: any) { setFeedback(error.message); }
   }
-  
-  return <IntegrityCaseList tenantId={tenant.id} onBack={onBack} onSelectCase={setSelectedCaseId} />;
+  return <section className="mt-6 grid gap-4 lg:grid-cols-3"><CollectionCard title="Canais públicos" items={data.channels} render={(item) => <span><strong>{item.public_title || item.name}</strong><small className="block text-[#626866]">/#/canal/{item.public_slug}</small></span>}><QuickCreate onSubmit={(event) => create(event, 'channels')} nameLabel="Nome do canal" slugLabel="slug-publico" /></CollectionCard><CollectionCard title="Categorias" items={data.categories} render={(item) => <span><strong>{item.name}</strong><small className="block text-[#626866]">SLA: {item.sla_hours || 'padrão'}</small></span>}><QuickCreate onSubmit={(event) => create(event, 'categories')} nameLabel="Nova categoria" slugLabel="slug-categoria" /></CollectionCard><CollectionCard title="Unidades" items={data.units} render={(item) => <span><strong>{item.name}</strong><small className="block text-[#626866]">{item.code || 'Sem código'}</small></span>}><QuickCreate onSubmit={(event) => create(event, 'units')} nameLabel="Nova unidade" slugLabel="Código opcional" slugRequired={false} /></CollectionCard>{feedback && <p role="status" className="text-sm lg:col-span-3">{feedback}</p>}</section>;
 }
 
-function useApi(path: string, options?: RequestInit) {
-  const [data, setData] = useState<any>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState('');
+function CollectionCard({ title, items, render, children }: { title: string; items: any[]; render: (item: any) => React.ReactNode; children: React.ReactNode }) { return <div className="rounded-2xl border border-[#DDD8CF] bg-white p-5"><h3 className="font-bold">{title}</h3><div className="my-4 max-h-48 space-y-2 overflow-auto">{items.length ? items.map((item) => <div key={item.id} className="rounded-xl bg-[#F6F5F2] p-3 text-sm">{render(item)}</div>) : <p className="rounded-xl border border-dashed p-4 text-center text-xs text-[#626866]">Nenhum item configurado.</p>}</div>{children}</div>; }
+function QuickCreate({ onSubmit, nameLabel, slugLabel, slugRequired = true }: { onSubmit: (event: React.FormEvent<HTMLFormElement>) => void; nameLabel: string; slugLabel: string; slugRequired?: boolean }) { return <form onSubmit={onSubmit} className="space-y-2 border-t pt-4"><Input name="name" required minLength={2} placeholder={nameLabel} /><Input name="slug" required={slugRequired} pattern={slugRequired ? '[a-z0-9]+(?:-[a-z0-9]+)*' : undefined} placeholder={slugLabel} /><Button type="submit" size="sm" variant="integrity" className="w-full">Adicionar</Button></form>; }
 
-  const execute = async () => {
-    setLoading(true);
-    try {
-      const session = await supabase.auth.getSession();
-      const token = session.data.session?.access_token;
-      
-      const res = await fetch(`/api/workspace/integrity${path}`, {
-        ...options,
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json',
-          ...(options?.headers || {})
-        }
-      });
-      const resData = await res.json();
-      if (!res.ok) throw new Error(resData.error || 'Erro na requisição');
-      setData(resData);
-    } catch (e: any) {
-      setError(e.message);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  useEffect(() => {
-    execute();
-  }, [path]);
-
-  return { data, loading, error, refetch: execute };
-}
-
-function IntegrityCaseList({ tenantId, onBack, onSelectCase }: { tenantId: string, onBack: () => void, onSelectCase: (id: string) => void }) {
-  const [filters, setFilters] = useState({ status: '', risk_level: '', days_open_min: '' });
-  
-  const query = new URLSearchParams();
-  if (filters.status) query.append('status', filters.status);
-  if (filters.risk_level) query.append('risk_level', filters.risk_level);
-  if (filters.days_open_min) query.append('days_open_min', filters.days_open_min);
-
-  const { data, loading, error } = useApi(`/cases?${query.toString()}`, { headers: { 'x-tenant-id': tenantId } });
-
-  const calculateDaysOpen = (dateStr: string) => {
-    const diff = Date.now() - new Date(dateStr).getTime();
-    return Math.floor(diff / (1000 * 60 * 60 * 24));
-  };
-
-  return (
-    <div className="flex flex-col h-full bg-slate-50 dark:bg-slate-900 border-l border-slate-200 dark:border-slate-800">
-      <div className="flex h-14 shrink-0 items-center gap-3 border-b border-slate-200 dark:border-slate-800 px-4 bg-white dark:bg-slate-950">
-        <button onClick={onBack} className="p-2 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-md transition-colors"><ArrowLeft className="w-4 h-4" /></button>
-        <div className="flex items-center gap-2">
-            <ShieldCheck className="w-5 h-5 text-indigo-500" />
-            <h2 className="font-medium">Gestão de Casos (Integridade)</h2>
-        </div>
-      </div>
-      
-      <div className="p-4 flex gap-4 bg-white dark:bg-slate-950 border-b border-slate-200 dark:border-slate-800 shrink-0">
-         <select value={filters.status} onChange={e => setFilters({ ...filters, status: e.target.value })} className="px-3 py-1.5 border rounded text-sm bg-transparent dark:border-slate-700">
-            <option value="">Status: Todos</option>
-            <option value="received">Recebido</option>
-            <option value="triage">Em Triagem</option>
-            <option value="in_review">Em Análise</option>
-            <option value="resolved">Resolvido</option>
-         </select>
-         <select value={filters.risk_level} onChange={e => setFilters({ ...filters, risk_level: e.target.value })} className="px-3 py-1.5 border rounded text-sm bg-transparent dark:border-slate-700">
-            <option value="">Risco: Todos</option>
-            <option value="low">Baixo</option>
-            <option value="medium">Médio</option>
-            <option value="high">Alto</option>
-            <option value="critical">Crítico</option>
-         </select>
-         <select value={filters.days_open_min} onChange={e => setFilters({ ...filters, days_open_min: e.target.value })} className="px-3 py-1.5 border rounded text-sm bg-transparent dark:border-slate-700">
-            <option value="">Tempo em aberto: Indiferente</option>
-            <option value="7">Aberto há +7 dias</option>
-            <option value="30">Aberto há +30 dias</option>
-         </select>
-      </div>
-
-      <div className="flex-1 overflow-auto p-6">
-        {loading && <div className="text-slate-500 text-sm">Carregando painel de integridade...</div>}
-        {error && <div className="text-red-500 text-sm">{error}</div>}
-        
-        {data?.cases && (
-          <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg overflow-hidden">
-            <table className="w-full text-sm text-left">
-              <thead className="text-xs text-slate-500 uppercase bg-slate-50 dark:bg-slate-950 border-b border-slate-200 dark:border-slate-800">
-                <tr>
-                  <th className="px-6 py-3">Protocolo</th>
-                  <th className="px-6 py-3">Idade</th>
-                  <th className="px-6 py-3">Status</th>
-                  <th className="px-6 py-3">Severidade</th>
-                  <th className="px-6 py-3">Categoria</th>
-                  <th className="px-6 py-3">Responsáveis</th>
-                </tr>
-              </thead>
-              <tbody>
-                {data.cases.map((c: any) => (
-                  <tr key={c.id} onClick={() => onSelectCase(c.id)} className="bg-white dark:bg-slate-900 border-b dark:border-slate-800 hover:bg-slate-50 dark:hover:bg-slate-950 cursor-pointer">
-                    <td className="px-6 py-4 font-mono font-medium text-indigo-500">{c.protocol}</td>
-                    <td className="px-6 py-4">{calculateDaysOpen(c.created_at)} dias</td>
-                    <td className="px-6 py-4 capitalize">{c.status}</td>
-                    <td className="px-6 py-4 capitalize">{c.risk_level || '-'}</td>
-                    <td className="px-6 py-4">{c.integrity_categories?.name || '-'}</td>
-                    <td className="px-6 py-4">{c.integrity_case_assignments?.length || 0}</td>
-                  </tr>
-                ))}
-                {data.cases.length === 0 && (
-                   <tr><td colSpan={6} className="px-6 py-8 text-center text-slate-500">Nenhum caso encontrado para os filtros.</td></tr>
-                )}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </div>
-    </div>
-  );
-}
-
-function IntegrityCaseDetail({ caseId, onBack }: { caseId: string, onBack: () => void }) {
-   return (
-       <div className="flex flex-col h-full bg-slate-50 dark:bg-slate-900">
-         <div className="flex h-14 shrink-0 items-center justify-between border-b border-slate-200 dark:border-slate-800 px-4 bg-white dark:bg-slate-950">
-            <div className="flex items-center gap-3">
-               <button onClick={onBack} className="p-2 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-md"><ArrowLeft className="w-4 h-4" /></button>
-               <h2 className="font-medium">Detalhes do Caso</h2>
-            </div>
-         </div>
-         {/* Stub para manter simples e direto */}
-         <div className="p-8">
-            <h1 className="text-xl font-bold mb-4">Caso #{caseId.split('-')[0]}</h1>
-            <p className="text-sm text-slate-600 dark:text-slate-400 mb-8">Esta view orquestra Metadata, Timeline (Eventos) e Chat anônimo de mensagens.</p>
-            
-            <div className="p-4 rounded border border-yellow-200 bg-yellow-50 text-yellow-800 dark:bg-yellow-900/20 dark:border-yellow-700/50">
-                Painel detalhado acurado com os stubs transacionais:
-                <ul className="list-disc pl-5 mt-2 text-sm opacity-80">
-                    <li>Visualização de relatórios (via /api/workspace/integrity/cases/:id)</li>
-                    <li>Timeline Audit events (via /api/workspace/integrity/cases/:id/events)</li>
-                    <li>Canal de mensagens (via /api/workspace/integrity/cases/:id/messages)</li>
-                    <li>Designação (via /api/workspace/integrity/cases/:id/assignments)</li>
-                </ul>
-            </div>
-         </div>
-       </div>
-   );
-}
+function Panel({ children }: { children: React.ReactNode }) { return <main className="mx-auto max-w-7xl p-4 sm:p-6 lg:p-8">{children}</main>; }
+function NavButton({ active, onClick, icon, children }: { active: boolean; onClick: () => void; icon: React.ReactNode; children: React.ReactNode }) { return <button onClick={onClick} className={`flex items-center gap-2 rounded-lg px-3 py-2 text-xs font-bold sm:text-sm ${active ? 'bg-white text-[#3457D5] shadow-sm' : 'text-[#626866]'}`}>{icon}<span className="hidden sm:inline">{children}</span></button>; }
+function Summary({ icon, label, value }: { icon: React.ReactNode; label: string; value: string }) { return <div className="flex items-center gap-4 rounded-2xl border border-[#DDD8CF] bg-white p-5"><div className="text-[#3457D5]">{icon}</div><div><div className="text-xs text-[#626866]">{label}</div><strong className="text-xl">{value}</strong></div></div>; }
+function ErrorState({ message }: { message: string }) { return <div role="alert" className="rounded-2xl border border-red-200 bg-red-50 p-8 text-center text-red-700"><AlertTriangle className="mx-auto mb-3 h-7 w-7" />{message}</div>; }
+function EmptyState() { return <div className="rounded-2xl border-2 border-dashed border-[#DDD8CF] bg-white p-12 text-center"><ShieldCheck className="mx-auto h-9 w-9 text-[#3457D5]" /><h3 className="mt-3 font-bold">Nenhum caso encontrado</h3><p className="mt-1 text-sm text-[#626866]">Quando um relato for recebido, ele aparecerá aqui.</p></div>; }
+function FilterSelect({ label, value, onChange, options }: { label: string; value: string; onChange: (value: string) => void; options: string[][] }) { return <select aria-label={label} value={value} onChange={(event) => onChange(event.target.value)} className="rounded-xl border border-[#DDD8CF] bg-white px-3 text-sm"><option value="">{label}: todos</option>{options.map(([key, text]) => <option key={key} value={key}>{text}</option>)}</select>; }
+function Risk({ value }: { value: string }) { const classes = value === 'critical' ? 'bg-red-100 text-red-800' : value === 'high' ? 'bg-orange-100 text-orange-800' : value === 'low' ? 'bg-emerald-100 text-emerald-800' : 'bg-yellow-100 text-yellow-800'; return <span className={`rounded-full px-2.5 py-1 text-xs font-bold ${classes}`}>{({ low: 'Baixa', medium: 'Média', high: 'Alta', critical: 'Crítica' } as any)[value] || value}</span>; }
+function Card({ title, children }: { title: string; children: React.ReactNode }) { return <section className="rounded-2xl border border-[#DDD8CF] bg-white p-5"><h2 className="mb-4 font-bold">{title}</h2>{children}</section>; }
+function Meta({ label, value }: { label: string; value?: string | null }) { return <div className="mb-3"><dt className="text-xs text-[#626866]">{label}</dt><dd className="font-medium">{value || '—'}</dd></div>; }
+function InfoCount({ icon, label, value }: { icon: React.ReactNode; label: string; value: number }) { return <div className="flex items-center gap-3 rounded-xl bg-[#F6F5F2] p-3"><span className="text-[#3457D5]">{icon}</span><span><strong>{value}</strong><small className="ml-1 text-[#626866]">{label}</small></span></div>; }
+function TransitionButtons({ status, disabled, onTransition }: { status: string; disabled: boolean; onTransition: (status: string) => void }) { const next = ({ received: [['triage','Iniciar triagem']], triage: [['investigation','Iniciar investigação'],['waiting_information','Solicitar informação']], investigation: [['waiting_information','Aguardar informação'],['decision','Registrar decisão']], waiting_information: [['investigation','Retomar investigação']], decision: [['closed','Encerrar caso']], closed: [['reopened','Reabrir caso']], reopened: [['triage','Nova triagem']] } as Record<string,string[][]>)[status] || []; return <>{next.map(([key,label]) => <Button key={key} variant={key === 'closed' ? 'default' : 'outline'} disabled={disabled} onClick={() => onTransition(key)}>{label}</Button>)}</>; }
+function statusLabel(status: string) { return ({ received: 'Novo', triage: 'Em triagem', investigation: 'Em investigação', waiting_information: 'Aguardando informação', decision: 'Em decisão', closed: 'Encerrado', reopened: 'Reaberto', archived: 'Arquivado' } as Record<string,string>)[status] || status; }
+function eventLabel(event: string) { return ({ report_received: 'Relato recebido', status_changed: 'Status alterado', assigned: 'Responsável atribuído', conflict_registered: 'Conflito de interesse registrado', reporter_message_sent: 'Mensagem enviada ao denunciante', internal_note_added: 'Nota interna registrada' } as Record<string,string>)[event] || event; }

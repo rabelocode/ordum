@@ -1,0 +1,42 @@
+export const INTEGRITY_TRANSITIONS: Record<string, readonly string[]> = {
+  received: ['triage'], triage: ['investigation', 'waiting_information', 'closed'],
+  investigation: ['waiting_information', 'decision', 'closed'], waiting_information: ['investigation', 'decision', 'closed'],
+  decision: ['closed', 'investigation'], closed: ['reopened', 'archived'], reopened: ['triage', 'investigation'], archived: [],
+};
+
+export function canTransitionIntegrityCase(from: string, to: string) {
+  return (INTEGRITY_TRANSITIONS[from] || []).includes(to);
+}
+
+export function integrityTransitionNeedsReason(to: string) {
+  return ['closed', 'reopened'].includes(to);
+}
+
+export function canAssignIntegrityCase(input: { membershipActive: boolean; sameTenant: boolean; activeConflict: boolean }) {
+  return input.membershipActive && input.sameTenant && !input.activeConflict;
+}
+
+export function integritySlaDueAt(createdAt: Date, hours: number) {
+  if (!Number.isInteger(hours) || hours < 1 || hours > 8760) throw new Error('invalid_sla_hours');
+  return new Date(createdAt.getTime() + hours * 3_600_000);
+}
+
+export function publicIntegrityMessages<T extends { visible_to_reporter: boolean }>(messages: T[]) {
+  return messages.filter((message) => message.visible_to_reporter);
+}
+
+export function integrityDashboard(cases: Array<{ status: string; severity: string; sla_due_at?: string | null; created_at: string; first_action_at?: string | null; closed_at?: string | null }>, now = new Date()) {
+  const open = (item: { status: string }) => !['closed', 'archived'].includes(item.status);
+  const averageHours = (values: number[]) => values.length ? Math.round(values.reduce((sum, value) => sum + value, 0) / values.length / 3_600_000) : null;
+  return {
+    total: cases.length, open: cases.filter(open).length, received: cases.filter((item) => item.status === 'received').length,
+    triage: cases.filter((item) => item.status === 'triage').length, investigation: cases.filter((item) => item.status === 'investigation').length,
+    waiting_information: cases.filter((item) => item.status === 'waiting_information').length,
+    critical: cases.filter((item) => item.severity === 'critical' && open(item)).length,
+    sla_overdue: cases.filter((item) => item.sla_due_at && new Date(item.sla_due_at) < now && open(item)).length,
+    sla_due_soon: cases.filter((item) => item.sla_due_at && new Date(item.sla_due_at) >= now && new Date(item.sla_due_at).getTime() <= now.getTime() + 86_400_000 && open(item)).length,
+    closed: cases.filter((item) => item.status === 'closed').length,
+    average_first_action_hours: averageHours(cases.filter((item) => item.first_action_at).map((item) => new Date(item.first_action_at!).getTime() - new Date(item.created_at).getTime())),
+    average_resolution_hours: averageHours(cases.filter((item) => item.closed_at).map((item) => new Date(item.closed_at!).getTime() - new Date(item.created_at).getTime())),
+  };
+}
