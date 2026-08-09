@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
+import { chromium } from "@playwright/test";
 
 const SUPABASE_URL = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || "";
 const SECRET = process.env.SUPABASE_SECRET_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY || "";
@@ -80,6 +81,49 @@ async function cleanup(db: SupabaseClient, runId: string, tenantIds: string[], u
     if (!auth.error) errors.push(`auth residual: ${userId}`);
   }
   if (errors.length) throw new Error(errors.join("; "));
+}
+
+async function runBrowserQa(scenarios: Array<{ name: string; user: FixtureUser; expectedCase: boolean; mobile?: boolean; settings?: boolean }>, subject: string) {
+  const browser = await chromium.launch({ headless: true });
+  const failures: string[] = [];
+  try {
+    for (const scenario of scenarios) {
+      const context = await browser.newContext({ viewport: scenario.mobile ? { width: 390, height: 844 } : { width: 1440, height: 1000 }, acceptDownloads: true });
+      const page = await context.newPage();
+      page.on("console", (message) => { if (message.type() === "error") failures.push(`${scenario.name}: console ${message.text().slice(0, 120)}`); });
+      page.on("response", (response) => { if (response.status() >= 500) failures.push(`${scenario.name}: HTTP ${response.status()} ${new URL(response.url()).pathname}`); });
+      await page.goto(`${APP_URL}/#/entrar`, { waitUntil: "networkidle" });
+      await page.locator('input[type="email"]').fill(scenario.user.email);
+      await page.locator('input[type="password"]').fill(scenario.user.password);
+      await page.locator('button[type="submit"]').click();
+      await page.waitForURL(/#\/(workspace|admin)/, { timeout: 20000 });
+      await page.goto(`${APP_URL}/#/workspace/integridade`, { waitUntil: "networkidle" });
+      await page.getByRole("heading", { name: "Ordum Integridade" }).waitFor();
+      await page.getByRole("button", { name: "Casos", exact: true }).click();
+      if (scenario.expectedCase) {
+        await page.getByText(subject, { exact: true }).first().waitFor();
+        if (!scenario.mobile && scenario.settings) {
+          const download = page.waitForEvent("download");
+          await page.getByRole("button", { name: "Exportar CSV" }).click();
+          await download;
+        }
+      } else {
+        await page.getByRole("heading", { name: "Nenhum caso encontrado" }).waitFor();
+      }
+      if (scenario.settings) {
+        await page.getByRole("button", { name: "Configurações" }).click();
+        await page.getByRole("heading", { name: "Configurações do canal" }).waitFor();
+        await page.getByRole("button", { name: "Testar prontidão do canal" }).click();
+        await page.getByText(/Canal validado com sucesso/).waitFor();
+      } else if (await page.getByRole("button", { name: "Configurações" }).count()) {
+        failures.push(`${scenario.name}: configurações expostas sem permissão`);
+      }
+      await context.close();
+    }
+  } finally {
+    await browser.close();
+  }
+  if (failures.length) throw new Error(`browser QA: ${failures.join("; ")}`);
 }
 
 export async function runIntegrityE2E(): Promise<Evidence> {
@@ -173,6 +217,13 @@ export async function runIntegrityE2E(): Promise<Evidence> {
     evidence.rlsUnassignedDenied = true;
     evidence.rlsCrossTenantDenied = true;
     evidence.rlsIdentityDenied = true;
+    await runBrowserQa([
+      { name: "tenant_admin_desktop", user: adminA, expectedCase: true, settings: true },
+      { name: "compliance_desktop", user: compliance, expectedCase: true, settings: true },
+      { name: "investigator_assigned_mobile", user: assignedInvestigator, expectedCase: true, mobile: true },
+      { name: "investigator_unassigned_desktop", user: unassignedInvestigator, expectedCase: false },
+    ], reportBody.subject);
+    evidence.browserQa = true;
     expect(await workspace(`/settings/committees/${committee.id}`, { method: "PATCH", body: JSON.stringify({ name: "Comitê de Ética", description: "Comitê do piloto", member_ids: [assignedInvestigator.membershipId], active: false, status: "inactive" }) }), 409, "committee orphan protection");
     expect(await workspace(`/settings/committees/${committee.id}`, { method: "PATCH", body: JSON.stringify({ name: "Comitê de Ética e Conduta", description: "Comitê do piloto", member_ids: [assignedInvestigator.membershipId, unassignedInvestigator.membershipId], active: true, status: "active" }) }), 200, "committee update");
     expect(await workspace(`/cases/${caseRow.id}`, {}, unassignedInvestigator, tenantA.id), 200, "committee investigator read");
