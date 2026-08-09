@@ -2330,7 +2330,7 @@ function createAdminClientsRouter(getSupabaseAdmin2) {
           onboarding,
           storage
         ] = await Promise.all([
-          db.from("tenant_solutions").select("status,created_at,updated_at,solutions!inner(key)").eq("tenant_id", req.params.id).eq("solutions.key", "integrity").maybeSingle(),
+          db.from("tenant_solutions").select("status,created_at,updated_at,solutions!inner(key)").eq("tenant_id", req.params.id).eq("solutions.key", "integridade").maybeSingle(),
           db.from("integrity_settings").select("configured_at,updated_at").eq("tenant_id", req.params.id).maybeSingle(),
           db.from("integrity_channels").select("id,active").eq("tenant_id", req.params.id),
           db.from("integrity_cases").select(
@@ -3819,7 +3819,7 @@ function createIntegrityRouter(getSupabaseAdmin2, authOverrides) {
   router.use(
     auth.authenticateRequest,
     auth.resolveTenantContext,
-    auth.requireTenantSolution("integrity")
+    auth.requireTenantSolution("integridade")
   );
   const asyncHandler = (fn) => (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
   const requireAny = (...permissions) => (req, res, next) => {

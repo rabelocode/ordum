@@ -12,17 +12,16 @@ import {
   ShieldCheck,
   Users,
 } from "lucide-react";
-import { supabase } from "../../lib/supabase";
 import { Button } from "../ui/Button";
 import { Input } from "../ui/Input";
 import { Skeleton } from "../ui/Skeleton";
+import { integrityApi, integrityFileApi, type ApiState } from "./integrityApi";
 
 type Props = {
   tenant: { id: string; name?: string };
   user: { permissions?: string[] } | unknown;
   onBack: () => void;
 };
-type ApiState<T> = { data: T | null; loading: boolean; error: string };
 
 function operationalDueAt(item: any) {
   const candidates = [
@@ -30,51 +29,6 @@ function operationalDueAt(item: any) {
     item.treatment_due_at,
   ].filter(Boolean) as string[];
   return candidates.sort()[0] || item.sla_due_at || null;
-}
-
-async function integrityApi<T>(
-  tenantId: string,
-  path: string,
-  options: RequestInit = {},
-): Promise<T> {
-  const session = await supabase.auth.getSession();
-  const response = await fetch(`/api/workspace/integrity${path}`, {
-    ...options,
-    headers: {
-      Authorization: `Bearer ${session.data.session?.access_token || ""}`,
-      "Content-Type": "application/json",
-      "x-tenant-id": tenantId,
-      ...options.headers,
-    },
-  });
-  const body = await response.json().catch(() => ({}));
-  if (!response.ok)
-    throw new Error(body.error || "Não foi possível concluir a operação.");
-  return body;
-}
-
-async function integrityFileApi<T>(
-  tenantId: string,
-  path: string,
-  file: File,
-  headers: Record<string, string> = {},
-): Promise<T> {
-  const session = await supabase.auth.getSession();
-  const response = await fetch(`/api/workspace/integrity${path}`, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${session.data.session?.access_token || ""}`,
-      "x-tenant-id": tenantId,
-      "Content-Type": file.type,
-      "x-file-name": file.name,
-      ...headers,
-    },
-    body: file,
-  });
-  const body = await response.json().catch(() => ({}));
-  if (!response.ok)
-    throw new Error(body.error || "Não foi possível enviar o arquivo.");
-  return body;
 }
 
 export function IntegrityModuleView({ tenant, user, onBack }: Props) {

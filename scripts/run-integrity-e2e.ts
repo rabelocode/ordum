@@ -90,6 +90,9 @@ export async function runIntegrityE2E(): Promise<Evidence> {
 
   const runId = `integrity_e2e_${Date.now()}_${crypto.randomBytes(4).toString("hex")}`;
   const evidence: Evidence = { runId, previewHealth: health.status };
+  const legacy = await createClient(SUPABASE_URL, PUBLISHABLE).rpc("get_integrity_channel", { p_channel_slug: "cutover-probe" });
+  if (!legacy.error || !/permission denied/i.test(legacy.error.message)) throw new Error("RPC público legado continua acessível ao navegador");
+  evidence.legacyRpcBlocked = true;
   const tenantIds: string[] = [];
   const userIds: string[] = [];
   let platformUser: string | undefined;
@@ -109,7 +112,7 @@ export async function runIntegrityE2E(): Promise<Evidence> {
     const blocked = await createUser(db, runId, "blocked", tenantA.id, emptyRole.id);
     userIds.push(adminA.id, adminB.id, blocked.id);
     const platformRole = value(await db.from("platform_roles").select("id").eq("key", "admin").single(), "platform admin role");
-    value(await db.from("platform_members").insert({ user_id: adminA.id, role_id: platformRole.id, status: "active", relationship_type: "employee" }).select("id").single(), "platform fixture");
+    value(await db.from("platform_members").insert({ user_id: adminA.id, role_id: platformRole.id, status: "active", relationship_type: "partner" }).select("id").single(), "platform fixture");
     platformUser = adminA.id;
     const workspace = (path: string, options?: RequestInit, user = adminA, tenant = tenantA.id) => request(`/api/workspace/integrity${path}`, options, user.token, tenant);
     const publicApi = (path: string, options?: RequestInit) => request(`/api/public/integrity${path}`, options);
@@ -128,11 +131,12 @@ export async function runIntegrityE2E(): Promise<Evidence> {
     const submitted = expect(await publicApi("/reports", { method: "POST", body: JSON.stringify(reportBody) }), 201, "anonymous report");
     if (!submitted.protocol || !submitted.access_secret || submitted.access_secret.length < 24) throw new Error("protocolo/segredo ausente");
     evidence.reportHttp = 201;
-    const report = value(await db.from("integrity_reports").select("id,access_secret_hash,reporter_mode").eq("protocol", submitted.protocol).single(), "report stored");
-    if (!report.access_secret_hash || report.access_secret_hash === submitted.access_secret) throw new Error("segredo não foi armazenado como hash");
+    const report = value(await db.from("integrity_reports").select("id,reporter_mode").eq("protocol", submitted.protocol).single(), "report stored");
+    const secret = value(await db.from("integrity_report_secrets").select("secret_hash").eq("report_id", report.id).single(), "secret stored");
+    if (!secret.secret_hash || secret.secret_hash === submitted.access_secret) throw new Error("segredo não foi armazenado como hash");
     const identified = expect(await publicApi("/reports", { method: "POST", body: JSON.stringify({ ...reportBody, subject: "Relato identificado descartável", reporter_mode: "identified", identity: { name: "Pessoa E2E", email: `${runId}@ordum-test.internal` } }) }), 201, "identified report");
-    const identityCount = await db.from("integrity_report_identities").select("id", { count: "exact", head: true }).eq("report_id", value(await db.from("integrity_reports").select("id").eq("protocol", identified.protocol).single(), "identified stored").id);
-    if (identityCount.error || identityCount.count !== 1) throw new Error("identidade separada não persistida");
+    const identityCount = await db.from("integrity_report_identities").select("report_id").eq("report_id", value(await db.from("integrity_reports").select("id").eq("protocol", identified.protocol).single(), "identified stored").id);
+    if (identityCount.error || identityCount.data?.length !== 1) throw new Error(`identidade separada não persistida: ${identityCount.error?.message || `count=${identityCount.data?.length}`}`);
     expect(await publicApi("/track", { method: "POST", body: JSON.stringify({ protocol: submitted.protocol, secret: "x".repeat(24) }) }), 404, "wrong secret");
     const tracked = expect(await publicApi("/track", { method: "POST", body: JSON.stringify({ protocol: submitted.protocol, secret: submitted.access_secret }) }), 200, "valid tracking").tracking;
     if (!tracked) throw new Error("tracking vazio");
@@ -170,7 +174,8 @@ export async function runIntegrityE2E(): Promise<Evidence> {
     if ((await fetch(publicSigned.url)).status !== 200) throw new Error("public signed URL inválida");
 
     const directList = await fetch(`${SUPABASE_URL}/storage/v1/object/list/ordum-integrity`, { method: "POST", headers: { apikey: PUBLISHABLE, authorization: `Bearer ${PUBLISHABLE}`, "content-type": "application/json" }, body: JSON.stringify({ prefix: tenantA.id, limit: 100 }) });
-    if (directList.ok) throw new Error("enumeração pública do bucket permitida");
+    const directObjects = await directList.json().catch(() => []);
+    if (directList.ok && Array.isArray(directObjects) && directObjects.length > 0) throw new Error("enumeração pública do bucket permitida");
     transition = expect(await workspace(`/cases/${caseRow.id}/transitions`, { method: "POST", body: JSON.stringify({ to_status: "decision", lock_version: transition.lock_version }) }), 200, "decision transition");
     const closed = expect(await workspace(`/cases/${caseRow.id}/decision`, { method: "POST", body: JSON.stringify({ final_classification: "Procedente", conclusion: "Conclusão interna confidencial E2E", measures_taken: "Providências internas E2E", internal_justification: "Fundamentação interna confidencial E2E", reporter_outcome: "Tratamento concluído e providências adotadas.", lock_version: transition.lock_version }) }), 200, "decision close");
     const afterClose = expect(await publicApi("/track", { method: "POST", body: JSON.stringify({ protocol: submitted.protocol, secret: submitted.access_secret }) }), 200, "closed tracking").tracking;
@@ -179,7 +184,7 @@ export async function runIntegrityE2E(): Promise<Evidence> {
     const reopened = expect(await workspace(`/cases/${caseRow.id}/transitions`, { method: "POST", body: JSON.stringify({ to_status: "reopened", reason: "Nova evidência recebida", lock_version: closed.lock_version }) }), 200, "reopen");
     if (reopened.status !== "reopened") throw new Error("reabertura não persistida");
     const timeline = expect(await workspace(`/cases/${caseRow.id}/timeline`), 200, "timeline").events;
-    for (const event of ["report_received", "routed", "task_created", "task_completed", "task_reopened", "case_decided", "status_changed"]) {
+    for (const event of ["report_received", "routed", "task_created", "task_completed", "task_reopened", "decision_recorded", "status_changed"]) {
       if (!timeline.some((item: any) => item.event_type === event)) throw new Error(`timeline sem ${event}`);
     }
     const summary = expect(await request(`/api/admin/clients/${tenantA.id}/integrity-summary`, {}, adminA.token), 200, "admin summary");
