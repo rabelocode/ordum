@@ -1,37 +1,35 @@
 Owner: chatgpt_backend
 Status: ready_for_review
 Branch: fix/admin-functional-recovery
-Head: a2ba60f387f7bb5d2b9a82b038a22cbfb655161c
+Head: 852809ddbfe26c4d11cfdd0756355a500ebc665d
 Implemented:
-- Storage privado `ordum-integrity`, upload autenticado e público controlado, validação de MIME/assinatura/tamanho, URLs assinadas por 120 segundos e exclusão auditada.
-- Rate limiting persistente serverless para envio, acompanhamento, mensagens e upload público, com chave HMAC sem IP/protocolo em claro.
-- Tarefas de investigação, conclusão interna separada do resultado comunicável, reabertura motivada, comitês, roteamento automático, conflitos e timeline.
-- SLA de primeira ação e tratamento, filtros/indicadores operacionais, cockpit e detalhe responsivo com skeletons, estados vazios, feedback e confirmação sem `window.prompt`.
-- Control plane agregado no Admin Ordum com saúde, armazenamento, SLA e fronteira explícita sem conteúdo confidencial.
-- Mensagem pública de anonimato corrigida para não prometer anonimato absoluto.
+- Cutover dos canais públicos para `/api/public/integrity`; RPCs legados de canal, submissão, acompanhamento e mensagem revogados de `anon`/`authenticated` e restritos a `service_role`.
+- Contrato do catálogo corrigido para a chave canônica `integridade` no workspace e no resumo do Admin.
+- Runner live descartável `test:integrity-e2e` com runId, fixtures isoladas, cleanup obrigatório e verificação de resíduos.
+- E2E cobre anônimo/identificado, protocolo+segredo hash, roteamento/comitê, triagem, atribuição, conflito, tarefas, mensagens, Storage privado, signed URLs, SLA, decisão, reabertura, RBAC, cross-tenant, rate limit e control/data plane.
+- Cliente HTTP/tipos do Integridade extraídos de `IntegrityModuleView.tsx` para `integrityApi.ts`, primeiro corte de modularização sem mudança funcional.
 Database:
-- `20260809141338_integrity_operational_phase4b`: applied.
-- `20260809141818_integrity_operational_sla_defaults`: applied.
-- `20260809142426_integrity_operational_fk_indexes`: applied.
-- Bucket remoto: privado, 10 MB, allowlist MIME; nenhuma policy direta permite enumerar `ordum-integrity`.
-- Advisors revisados: rate-limit/secrets sem policy é fail-closed intencional; índices novos aplicados; RPCs públicos legados permanecem como blocker de cutover.
+- `20260809154240_integrity_e2e_fixture_cleanup`: applied; cleanup permitido somente a `service_role`, runId estrito e tenants E2E marcados.
+- `20260809160030_integrity_public_api_cutover`: applied oficialmente.
+- RPC legado direto com publishable key: permission denied; fluxo novo server-side permanece funcional.
+- Canais ativos após cleanup: 0; tenants/Auth E2E residuais: 0/0; Storage E2E residual: 0.
+- Security advisor: nenhum aviso de RPC público do Integridade após cutover; `integrity_public_rate_limits` e `integrity_report_secrets` sem policy permanecem fail-closed/service-role-only intencionalmente. Avisos fora do pacote permanecem no backlog.
 Tests:
-- Secret scan PASS: 282 arquivos rastreados.
-- Migration validation PASS: 20 migrations ordenadas.
-- Lint/typecheck PASS.
-- Testes PASS: 136 aprovados, 0 falhas, 1 live E2E comercial explicitamente ignorado (137 total).
-- Build cliente, servidor e Vercel PASS; live queries PASS.
-- QA SQL remoto do rate limit: 3 permitidas, 2 bloqueadas, resíduos 0.
+- Secret scan PASS: 286 arquivos rastreados.
+- Migration validation PASS: 22 migrations ordenadas.
+- Lint/typecheck PASS; build cliente/servidor/Vercel PASS.
+- Suite PASS: 136 aprovados, 0 falhas, 1 live E2E comercial explicitamente ignorado.
+- Live E2E final PASS: run `integrity_e2e_1786291679050_c2715946`; report HTTP 201; rate limit HTTP 429 na tentativa 21; cleanup/resíduos 0.
 Preview:
-- READY — dpl_22xxuQSSNgJqXWGNT5yps2CC1bec
-- https://ordum-9hgooclwj-ordum.vercel.app
+- READY — dpl_ET1Zi9xpwkksPPxj2JpRcnsgn7kW
+- https://ordum-evbnenukz-ordum.vercel.app
 QA:
-- Raiz com conteúdo, sem overlay, erros ou warnings de console; mensagem de anonimato revisada presente.
-- Canal inexistente exibe estado acionável; viewport 390x844 sem overflow ou tela branca.
-- GET canal inexistente: HTTP 404; POST acompanhamento inválido: HTTP 404; logs 5xx do deployment: 0.
-- Supabase remoto: bucket privado confirmado e rate limit persistente executado com cleanup confirmado.
+- Fluxo funcional completo validado por API e banco no Preview final; signed URLs retornaram arquivo e enumeração anônima não revelou objetos.
+- Admin integrity-summary retornou somente agregados com `confidentiality_boundary=aggregate_only`.
+- Mobile 390x844: canal indisponível renderizou estado acionável, largura/scrollWidth 390/390, sem tela branca; login desktop renderizado sem overflow.
+- Logs 5xx do deployment final no período de QA: 0.
 Blockers:
-- Revogar os RPCs públicos legados de submissão/acompanhamento somente após merge/deploy do novo frontend; revogação antecipada quebraria a produção atual e permitiria bypass do rate limit até o cutover.
-- Fluxo completo autenticado com evidência real não foi executado por ausência de fixture/conta de homologação descartável autorizada; nenhum dado real foi poluído.
+- Nenhum blocker externo para o pacote 4C.
+- Gaps para pacote seguinte: extrair detalhe/configurações do `IntegrityModuleView.tsx`; completar edição/arquivamento de comitês e regras; formalizar papel de investigador com leitura apenas de casos atribuídos no API/RLS.
 Suggested next package:
-- Cutover coordenado dos endpoints públicos com revogação dos RPCs legados e E2E autenticado em tenant de homologação descartável.
+- Fase 4D: RBAC atribuído, lifecycle das configurações e conclusão da modularização do workspace Integridade.
