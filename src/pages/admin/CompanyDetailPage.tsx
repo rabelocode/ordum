@@ -455,6 +455,10 @@ export function CompanyDetailPage({ tenantId }: { tenantId: string }) {
                         integritySummary.contracted ? "Sim" : "Não",
                       ],
                       ["Status", integritySummary.solution_status],
+                      ["Plano", integritySummary.plan?.name || "—"],
+                      ["Entitlement", integritySummary.entitlement?.status || "—"],
+                      ["Implantação", integritySummary.deployment_state || "não iniciada"],
+                      ["Versão da configuração", `v${integritySummary.product_configuration_version || 1}`],
                       [
                         "Configuração",
                         integritySummary.configuration_complete
@@ -525,6 +529,10 @@ export function CompanyDetailPage({ tenantId }: { tenantId: string }) {
                       : integritySummary.operational_errors}
                     . Fronteira de confidencialidade: somente dados agregados.
                   </p>
+                  <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-[#DDD8CF] bg-white p-4">
+                    <p className="text-sm text-[#626866]">O workspace só pode ser aberto quando este administrador também possui membership explícita no tenant. Não existe impersonation silenciosa.</p>
+                    {integritySummary.workspace_access?.available ? <a href={integritySummary.workspace_access.href} className="rounded-xl bg-[#202322] px-4 py-2 text-sm font-bold text-white">Abrir workspace autorizado</a> : <span className="rounded-full bg-amber-50 px-3 py-2 text-xs font-bold text-amber-800">Membership do tenant necessária</span>}
+                  </div>
                 </>
               )}
             </div>

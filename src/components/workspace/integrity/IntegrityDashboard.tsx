@@ -2,11 +2,11 @@ import { useCallback, useEffect, useState } from "react";
 import { AlertTriangle, CheckCircle2, Clock, RefreshCw } from "lucide-react";
 import { Button } from "../../ui/Button";
 import { Skeleton } from "../../ui/Skeleton";
-import { integrityApi } from "../integrityApi";
+import { integrityApi, integrityDownload } from "../integrityApi";
 
 type Option = { id: string; name: string };
-type Filters = { period: string; status: string; severity: string; category_id: string; unit_id: string; committee_id: string; owner_id: string };
-const initialFilters: Filters = { period: "30", status: "", severity: "", category_id: "", unit_id: "", committee_id: "", owner_id: "" };
+type Filters = { period: string; status: string; severity: string; category_id: string; unit_id: string; department_id:string; committee_id: string; owner_id: string };
+const initialFilters: Filters = { period: "30", status: "", severity: "", category_id: "", unit_id: "", department_id:"", committee_id: "", owner_id: "" };
 
 export function IntegrityDashboard({ tenantId, onOpenCases }: { tenantId: string; onOpenCases: () => void }) {
   const [filters, setFilters] = useState(initialFilters);
@@ -37,7 +37,7 @@ export function IntegrityDashboard({ tenantId, onOpenCases }: { tenantId: string
   return <Panel>
     <div className="mb-5 flex flex-wrap items-end justify-between gap-3">
       <div><h2 className="text-2xl font-bold">Cockpit operacional</h2><p className="mt-1 text-sm text-[#626866]">Indicadores reais, agregados e sem exposição de identidade.</p></div>
-      <div className="flex gap-2"><Button variant="outline" disabled={state.loading} onClick={load}><RefreshCw className={`mr-2 h-4 w-4 ${state.loading ? "animate-spin" : ""}`} />Atualizar</Button><Button onClick={onOpenCases}>Abrir casos</Button></div>
+      <div className="flex flex-wrap gap-2"><Button variant="outline" disabled={state.loading} onClick={load}><RefreshCw className={`mr-2 h-4 w-4 ${state.loading ? "animate-spin" : ""}`} />Atualizar</Button><Button variant="outline" onClick={()=>{const query=new URLSearchParams(Object.fromEntries(Object.entries(filters).filter(([key,value])=>key!=="period"&&value)));if(filters.period)query.set("from",new Date(Date.now()-Number(filters.period)*864e5).toISOString());void integrityDownload(tenantId,`/reports/executive.pdf?${query}`,"integridade-executivo.pdf");}}>PDF executivo</Button><Button variant="outline" onClick={()=>{const query=new URLSearchParams(Object.fromEntries(Object.entries(filters).filter(([key,value])=>key!=="period"&&value)));if(filters.period)query.set("from",new Date(Date.now()-Number(filters.period)*864e5).toISOString());void integrityDownload(tenantId,`/reports/executive.csv?${query}`,"integridade-executivo.csv");}}>CSV executivo</Button><Button onClick={onOpenCases}>Abrir casos</Button></div>
     </div>
     <div className="mb-5 grid gap-2 rounded-2xl border border-[#DDD8CF] bg-white p-4 sm:grid-cols-2 xl:grid-cols-4">
       <Select label="Período" value={filters.period} onChange={(period) => setFilters({ ...filters, period })} options={[["7", "7 dias"], ["30", "30 dias"], ["90", "90 dias"], ["365", "12 meses"]]} empty={false} />
@@ -45,6 +45,7 @@ export function IntegrityDashboard({ tenantId, onOpenCases }: { tenantId: string
       <Select label="Severidade" value={filters.severity} onChange={(severity) => setFilters({ ...filters, severity })} options={[["low", "Baixa"], ["medium", "Média"], ["high", "Alta"], ["critical", "Crítica"]]} />
       <OptionsSelect label="Categoria" value={filters.category_id} items={options.categories} onChange={(category_id) => setFilters({ ...filters, category_id })} />
       <OptionsSelect label="Unidade/setor" value={filters.unit_id} items={options.units} onChange={(unit_id) => setFilters({ ...filters, unit_id })} />
+      <OptionsSelect label="Departamento" value={filters.department_id} items={options.departments || []} onChange={(department_id) => setFilters({ ...filters, department_id })} />
       <OptionsSelect label="Comitê" value={filters.committee_id} items={options.committees} onChange={(committee_id) => setFilters({ ...filters, committee_id })} />
       <OptionsSelect label="Responsável" value={filters.owner_id} items={options.owners} onChange={(owner_id) => setFilters({ ...filters, owner_id })} />
       <Button variant="outline" onClick={() => setFilters(initialFilters)}>Limpar filtros</Button>
@@ -60,6 +61,8 @@ export function IntegrityDashboard({ tenantId, onOpenCases }: { tenantId: string
       <Distribution title="Por categoria" rows={data.by_category} />
       <Distribution title="Por unidade/setor" rows={data.by_unit} />
       <Distribution title="Por severidade" rows={data.by_severity} />
+      <Distribution title="Por departamento" rows={data.by_department} />
+      <Distribution title="Anônimo × identificado" rows={data.by_reporter_mode} />
     </div>
     <div className="mt-5 rounded-2xl border border-[#DDD8CF] bg-white p-5"><h3 className="font-bold">Evolução temporal</h3><div className="mt-4 flex h-36 items-end gap-1 overflow-x-auto" aria-label="Volume diário de casos">{(data.evolution || []).length ? data.evolution.map((row: any) => <div key={row.date} className="group flex min-w-5 flex-1 flex-col items-center justify-end"><span className="sr-only">{row.date}: {row.count}</span><div title={`${row.date}: ${row.count}`} className="w-full min-w-3 rounded-t bg-[#3457D5]" style={{ height: `${Math.max(6, row.count * 14)}px` }} /></div>) : <p className="self-center text-sm text-[#626866]">Ainda não há dados no período.</p>}</div></div>
     <p className="mt-4 text-right text-xs text-[#626866]">Atualizado em {new Date(data.updated_at).toLocaleString("pt-BR")}</p>

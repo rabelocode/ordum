@@ -8,6 +8,7 @@ import { createAdminTeamsRouter } from "./src/server/adminTeamsRouter";
 import { createBillingRouters } from "./src/server/billing/router";
 import { createIntegrityRouter } from "./src/server/integrityRouter";
 import { createIntegrityPublicRouter } from "./src/server/integrityPublicRouter";
+import { createIntegrityInternalRouter } from "./src/server/integrityOperations";
 import { createClient } from "@supabase/supabase-js";
 import dotenv from "dotenv";
 import cors from "cors";
@@ -88,6 +89,8 @@ export async function createApp() {
     }
     return _supabaseAdmin;
   };
+
+  app.use("/api/internal/integrity", createIntegrityInternalRouter(getSupabaseAdmin));
 
   // Simple auth middleware for API routes
   const requirePlatformAuth = async (

@@ -13,6 +13,8 @@ import {
 } from "../domain/integrity";
 import { validateIntegrityEvidence } from "../domain/integrity-files";
 import { createIntegrityDossierPdf } from "./integrityDossierPdf";
+import { createIntegrityExecutivePdf } from "./integrityExecutivePdf";
+import { integrityDeploymentState, routingExplanation } from "../domain/integrity-phase4g";
 
 const listSchema = z.object({
   search: z.string().trim().max(120).optional(),
@@ -20,6 +22,7 @@ const listSchema = z.object({
   severity: z.string().max(20).optional(),
   category_id: z.string().uuid().optional(),
   unit_id: z.string().uuid().optional(),
+  department_id: z.string().uuid().optional(),
   owner_id: z.string().uuid().optional(),
   committee_id: z.string().uuid().optional(),
   from: z.string().datetime().optional(),
@@ -43,6 +46,7 @@ const dashboardSchema = z.object({
   severity: z.string().max(20).optional(),
   category_id: z.string().uuid().optional(),
   unit_id: z.string().uuid().optional(),
+  department_id: z.string().uuid().optional(),
   owner_id: z.string().uuid().optional(),
   committee_id: z.string().uuid().optional(),
   from: z.string().datetime().optional(),
@@ -83,6 +87,8 @@ const settingsSchema = z.object({
   message_retention_days: z.number().int().min(30).max(7300).default(1825),
   post_closure_action: z.enum(["archive", "anonymize"]).default("archive"),
   anonymization_enabled: z.boolean().default(false),
+  alert_lead_hours: z.number().int().min(1).max(720).default(24),
+  stale_case_hours: z.number().int().min(24).max(8760).default(168),
 });
 const conflictSchema = z.object({
   membership_id: z.string().uuid(),
@@ -100,6 +106,8 @@ const channelSchema = z.object({
   active: z.boolean().default(true),
   allows_anonymous: z.boolean(),
   allows_identified: z.boolean(),
+  privacy_notice: z.string().trim().max(4000).nullable().optional(),
+  confirmation_message: z.string().trim().max(2000).nullable().optional(),
 });
 const categorySchema = z.object({
   id: z.string().uuid().optional(),
@@ -119,7 +127,11 @@ const unitSchema = z.object({
   name: z.string().trim().min(2).max(120),
   code: z.string().trim().max(40).nullable().optional(),
   active: z.boolean().default(true),
+  is_headquarters: z.boolean().default(false),
+  responsible_membership_id: z.string().uuid().nullable().optional(),
 });
+const departmentSchema = z.object({ id:z.string().uuid().optional(),unit_id:z.string().uuid(),name:z.string().trim().min(2).max(120),code:z.string().trim().max(40).nullable().optional(),responsible_membership_id:z.string().uuid().nullable().optional(),active:z.boolean().default(true) });
+const customFieldSchema = z.object({ id:z.string().uuid().optional(),channel_id:z.string().uuid().nullable().optional(),field_key:z.string().regex(/^[a-z][a-z0-9_]{1,63}$/),label:z.string().trim().min(2).max(120),help_text:z.string().trim().max(500).nullable().optional(),field_type:z.enum(["short_text","long_text","single_select","multi_select","date","boolean"]),required:z.boolean().default(false),options:z.array(z.string().trim().min(1).max(120)).max(50).default([]),active:z.boolean().default(true),sort_order:z.number().int().min(0).max(1000).default(0) }).refine(value=>!["single_select","multi_select"].includes(value.field_type)||value.options.length>0,{message:"Campos de seleção exigem opções."});
 const taskSchema = z.object({
   title: z.string().trim().min(2).max(200),
   description: z.string().trim().max(2000).nullable().optional(),
@@ -163,16 +175,25 @@ const routingSchema = z
     name: z.string().trim().min(2).max(120),
     category_id: z.string().uuid().nullable().optional(),
     unit_id: z.string().uuid().nullable().optional(),
+    department_id: z.string().uuid().nullable().optional(),
+    severity: z.enum(["low","medium","high","critical"]).nullable().optional(),
+    reporter_mode: z.enum(["anonymous","identified"]).nullable().optional(),
+    requires_conflict: z.boolean().nullable().optional(),
     assignee_membership_id: z.string().uuid().nullable().optional(),
     committee_id: z.string().uuid().nullable().optional(),
     priority: z.number().int().min(0).max(10000).default(100),
     active: z.boolean().default(true),
     is_fallback: z.boolean().default(false),
+    target_sla_hours: z.number().int().min(1).max(17520).nullable().optional(),
+    target_priority: z.enum(["low","normal","high","urgent"]).nullable().optional(),
+    escalation_committee_id: z.string().uuid().nullable().optional(),
+    escalation_membership_id: z.string().uuid().nullable().optional(),
+    collaborator_ids: z.array(z.string().uuid()).max(50).default([]),
   })
   .refine((value) => value.assignee_membership_id || value.committee_id, {
     message: "Defina um responsável ou comitê.",
   })
-  .refine((value) => !value.is_fallback || (!value.category_id && !value.unit_id), {
+  .refine((value) => !value.is_fallback || (!value.category_id && !value.unit_id && !value.department_id && !value.severity && !value.reporter_mode && value.requires_conflict == null), {
     message: "A regra fallback não pode restringir categoria ou unidade.",
   });
 const routingUpdateSchema = routingSchema.extend({
@@ -181,6 +202,10 @@ const routingUpdateSchema = routingSchema.extend({
 const routingPreviewSchema = z.object({
   category_id: z.string().uuid().nullable().optional(),
   unit_id: z.string().uuid().nullable().optional(),
+  department_id: z.string().uuid().nullable().optional(),
+  severity: z.enum(["low","medium","high","critical"]).nullable().optional(),
+  reporter_mode: z.enum(["anonymous","identified"]).nullable().optional(),
+  has_conflict: z.boolean().default(false),
 });
 const collaboratorSchema = z.object({
   membership_id: z.string().uuid(),
@@ -258,6 +283,29 @@ export function createIntegrityRouter(
     if (result.error) throw result.error;
   }
 
+  async function validateRoutingReferences(db: any, tenant: string, value: z.infer<typeof routingSchema>) {
+    const membershipIds = [...new Set([
+      value.assignee_membership_id,
+      value.escalation_membership_id,
+      ...value.collaborator_ids,
+    ].filter(Boolean))] as string[];
+    const committeeIds = [...new Set([value.committee_id, value.escalation_committee_id].filter(Boolean))] as string[];
+    const [members, committees, categories, units, departments] = await Promise.all([
+      membershipIds.length ? db.from("memberships").select("id").eq("tenant_id", tenant).eq("status", "active").in("id", membershipIds) : Promise.resolve({ data: [], error: null }),
+      committeeIds.length ? db.from("integrity_committees").select("id").eq("tenant_id", tenant).eq("status", "active").in("id", committeeIds) : Promise.resolve({ data: [], error: null }),
+      value.category_id ? db.from("integrity_categories").select("id").eq("tenant_id", tenant).eq("id", value.category_id).eq("active", true) : Promise.resolve({ data: [], error: null }),
+      value.unit_id ? db.from("integrity_units").select("id").eq("tenant_id", tenant).eq("id", value.unit_id).eq("active", true) : Promise.resolve({ data: [], error: null }),
+      value.department_id ? db.from("integrity_departments").select("id,unit_id").eq("tenant_id", tenant).eq("id", value.department_id).eq("active", true) : Promise.resolve({ data: [], error: null }),
+    ]);
+    if ([members, committees, categories, units, departments].some((result: any) => result.error)) return "Não foi possível validar as referências da regra.";
+    if (members.data.length !== membershipIds.length) return "Todos os responsáveis e colaboradores devem estar ativos neste tenant.";
+    if (committees.data.length !== committeeIds.length) return "Todos os comitês devem estar ativos neste tenant.";
+    if (value.category_id && categories.data.length !== 1) return "Categoria inválida para este tenant.";
+    if (value.unit_id && units.data.length !== 1) return "Unidade inválida para este tenant.";
+    if (value.department_id && (departments.data.length !== 1 || (value.unit_id && departments.data[0].unit_id !== value.unit_id))) return "Departamento inválido para a unidade selecionada.";
+    return null;
+  }
+
   async function matchingReportIds(db: any, tenant: string, search?: string) {
     if (!search) return [] as string[];
     const text = search.replace(/[%_,]/g, "").trim();
@@ -333,7 +381,7 @@ export function createIntegrityRouter(
       let caseQuery = db
           .from("integrity_cases")
           .select(
-            "id,status,severity,sla_due_at,first_response_due_at,treatment_due_at,first_action_at,closed_at,created_at,category_id,unit_id,owner_membership_id,committee_id,integrity_categories(name),integrity_units(name)",
+            "id,status,severity,sla_due_at,first_response_due_at,treatment_due_at,first_action_at,closed_at,created_at,category_id,unit_id,department_id,owner_membership_id,committee_id,integrity_reports(reporter_mode),integrity_categories(name),integrity_units(name),integrity_departments(name)",
           )
           .eq("tenant_id", tenantId(req));
       caseQuery = (await scopeCaseQuery(caseQuery, db, req)).query;
@@ -341,6 +389,7 @@ export function createIntegrityRouter(
       if (filters.severity) caseQuery = caseQuery.eq("severity", filters.severity);
       if (filters.category_id) caseQuery = caseQuery.eq("category_id", filters.category_id);
       if (filters.unit_id) caseQuery = caseQuery.eq("unit_id", filters.unit_id);
+      if (filters.department_id) caseQuery = caseQuery.eq("department_id", filters.department_id);
       if (filters.owner_id) caseQuery = caseQuery.eq("owner_membership_id", filters.owner_id);
       if (filters.committee_id) caseQuery = caseQuery.eq("committee_id", filters.committee_id);
       if (filters.from) caseQuery = caseQuery.gte("created_at", filters.from);
@@ -373,7 +422,7 @@ export function createIntegrityRouter(
       const reopenedCases = new Set((reopened.data || []).map((item: any) => item.case_id)).size;
       const completedCases = rows.filter((item: any) => item.closed_at).length;
       return res.json({
-        ...integrityDashboard(rows),
+        ...integrityDashboard(rows.map((item:any)=>({...item,reporter_mode:item.integrity_reports?.reporter_mode}))),
         tasks_overdue: overdueTasks.count || 0,
         conflicts_pending: conflicts.count || 0,
         reopened_cases: reopenedCases,
@@ -428,13 +477,14 @@ export function createIntegrityRouter(
     asyncHandler(async (req, res) => {
       const db = getSupabaseAdmin();
       const tenant = tenantId(req);
-      const [categories, units, committees, memberships] = await Promise.all([
+      const [categories, units, departments, committees, memberships] = await Promise.all([
         db.from("integrity_categories").select("id,name").eq("tenant_id", tenant).eq("active", true).order("name"),
         db.from("integrity_units").select("id,name").eq("tenant_id", tenant).eq("active", true).order("name"),
+        db.from("integrity_departments").select("id,name,unit_id").eq("tenant_id", tenant).eq("active", true).order("name"),
         db.from("integrity_committees").select("id,name").eq("tenant_id", tenant).eq("status", "active").order("name"),
         db.from("memberships").select("id,user_id").eq("tenant_id", tenant).eq("status", "active"),
       ]);
-      if (categories.error || units.error || committees.error || memberships.error)
+      if (categories.error || units.error || departments.error || committees.error || memberships.error)
         return res.status(500).json({ error: "Não foi possível carregar os filtros." });
       const userIds = (memberships.data || []).map((item: any) => item.user_id);
       const profiles = userIds.length
@@ -445,6 +495,7 @@ export function createIntegrityRouter(
       return res.json({
         categories: categories.data || [],
         units: units.data || [],
+        departments: departments.data || [],
         committees: committees.data || [],
         owners: (memberships.data || []).map((item: any) => ({ id: item.id, name: names.get(item.user_id) || "Membro do tenant" })),
       });
@@ -466,7 +517,7 @@ export function createIntegrityRouter(
       let query = db
         .from("integrity_cases")
         .select(
-          "id,protocol,status,severity,priority,sla_due_at,first_response_due_at,treatment_due_at,first_action_at,created_at,updated_at,owner_membership_id,committee_id,lock_version,integrity_categories(name),integrity_units(name),integrity_committees(name),integrity_reports!inner(subject)",
+          "id,protocol,status,severity,priority,sla_due_at,first_response_due_at,treatment_due_at,first_action_at,created_at,updated_at,owner_membership_id,committee_id,department_id,lock_version,integrity_categories(name),integrity_units(name),integrity_departments(name),integrity_committees(name),integrity_reports!inner(subject)",
           { count: "exact" },
         )
         .eq("tenant_id", tenantId(req));
@@ -482,6 +533,7 @@ export function createIntegrityRouter(
       if (q.severity) query = query.eq("severity", q.severity);
       if (q.category_id) query = query.eq("category_id", q.category_id);
       if (q.unit_id) query = query.eq("unit_id", q.unit_id);
+      if (q.department_id) query = query.eq("department_id", q.department_id);
       if (q.owner_id) query = query.eq("owner_membership_id", q.owner_id);
       if (q.committee_id) query = query.eq("committee_id", q.committee_id);
       if (q.from) query = query.gte("created_at", q.from);
@@ -865,6 +917,30 @@ export function createIntegrityRouter(
           .from("integrity_cases")
           .update({ owner_membership_id: null })
           .eq("id", req.params.id);
+      const [caseContext, reportContext, conflictRules] = await Promise.all([
+        db.from("integrity_cases").select("category_id,unit_id,department_id,severity").eq("id", req.params.id).eq("tenant_id", tenantId(req)).single(),
+        db.from("integrity_reports").select("reporter_mode").eq("id", found.data.report_id).eq("tenant_id", tenantId(req)).single(),
+        db.from("integrity_routing_rules").select("*").eq("tenant_id", tenantId(req)).eq("status", "active").eq("active", true).eq("requires_conflict", true).order("priority").order("created_at"),
+      ]);
+      if ([caseContext, reportContext, conflictRules].some((result: any) => result.error))
+        return res.status(500).json({ error: "Conflito registrado, mas o escalonamento não pôde ser avaliado." });
+      const escalationRule = (conflictRules.data || []).find((rule: any) =>
+        (!rule.category_id || rule.category_id === caseContext.data.category_id) &&
+        (!rule.unit_id || rule.unit_id === caseContext.data.unit_id) &&
+        (!rule.department_id || rule.department_id === caseContext.data.department_id) &&
+        (!rule.severity || rule.severity === caseContext.data.severity) &&
+        (!rule.reporter_mode || rule.reporter_mode === reportContext.data.reporter_mode),
+      );
+      if (escalationRule?.escalation_membership_id || escalationRule?.escalation_committee_id) {
+        const escalationUpdate: Record<string, string> = {};
+        if (escalationRule.escalation_membership_id !== parsed.data.membership_id) escalationUpdate.owner_membership_id = escalationRule.escalation_membership_id;
+        if (escalationRule.escalation_committee_id) escalationUpdate.committee_id = escalationRule.escalation_committee_id;
+        if (Object.keys(escalationUpdate).length) {
+          const escalated = await db.from("integrity_cases").update(escalationUpdate).eq("id", req.params.id).eq("tenant_id", tenantId(req));
+          if (escalated.error) return res.status(500).json({ error: "Conflito registrado, mas o escalonamento falhou." });
+          await db.from("integrity_case_events").insert({ report_id: found.data.report_id, case_id: req.params.id, event_type: "routing_escalated", actor_membership_id: membershipId(req), metadata: { rule_id: escalationRule.id, reason: "conflict_registered", assigned_committee: Boolean(escalationUpdate.committee_id), assigned_owner: Boolean(escalationUpdate.owner_membership_id) } });
+        }
+      }
       const event = await db.from("integrity_case_events").insert({
         report_id: found.data.report_id,
         case_id: req.params.id,
@@ -1448,10 +1524,13 @@ export function createIntegrityRouter(
         channels,
         categories,
         units,
+        departments,
+        customFields,
         members,
         committees,
         committeeMembers,
         routingRules,
+        routingCollaborators,
       ] = await Promise.all([
         db
           .from("integrity_settings")
@@ -1473,6 +1552,8 @@ export function createIntegrityRouter(
           .select("*")
           .eq("tenant_id", tenantId(req))
           .order("name"),
+        db.from("integrity_departments").select("*").eq("tenant_id",tenantId(req)).order("name"),
+        db.from("integrity_custom_fields").select("*").eq("tenant_id",tenantId(req)).order("sort_order"),
         db
           .from("memberships")
           .select("id,user_id,status")
@@ -1494,16 +1575,20 @@ export function createIntegrityRouter(
           .select("*")
           .eq("tenant_id", tenantId(req))
           .order("priority"),
+        db.from("integrity_routing_rule_collaborators").select("rule_id,membership_id").eq("tenant_id",tenantId(req)),
       ]);
       const failed = [
         settings,
         channels,
         categories,
         units,
+        departments,
+        customFields,
         members,
         committees,
         committeeMembers,
         routingRules,
+        routingCollaborators,
       ].find((result: any) => result.error);
       if (failed)
         return res
@@ -1537,10 +1622,12 @@ export function createIntegrityRouter(
         channels: channels.data || [],
         categories: categories.data || [],
         units: units.data || [],
+        departments: departments.data || [],
+        custom_fields: customFields.data || [],
         members: namedMembers,
         committees: committees.data || [],
         committee_members: committeeMembers.data || [],
-        routing_rules: routingRules.data || [],
+        routing_rules: (routingRules.data || []).map((rule:any)=>({...rule,collaborator_ids:(routingCollaborators.data||[]).filter((item:any)=>item.rule_id===rule.id).map((item:any)=>item.membership_id),explanation:routingExplanation(rule)})),
         configuration_status: {
           operational: checks.every((item) => item.complete),
           completed: checks.filter((item) => item.complete).length,
@@ -1605,7 +1692,7 @@ export function createIntegrityRouter(
       const db = getSupabaseAdmin();
       const [settings, channel, categories, committees, routing] = await Promise.all([
         db.from("integrity_settings").select("allows_anonymous,allows_identified,default_sla_hours,treatment_sla_hours,communication_policy").eq("tenant_id", tenantId(req)).maybeSingle(),
-        db.from("integrity_channels").select("id,public_slug,active").eq("tenant_id", tenantId(req)).eq("active", true).limit(1).maybeSingle(),
+        db.from("integrity_channels").select("id,public_slug,active").eq("tenant_id", tenantId(req)).order("created_at").limit(1).maybeSingle(),
         db.from("integrity_categories").select("id", { count: "exact", head: true }).eq("tenant_id", tenantId(req)).eq("active", true),
         db.from("integrity_committees").select("id", { count: "exact", head: true }).eq("tenant_id", tenantId(req)).eq("status", "active"),
         db.from("integrity_routing_rules").select("id", { count: "exact", head: true }).eq("tenant_id", tenantId(req)).eq("status", "active").eq("active", true),
@@ -1614,7 +1701,7 @@ export function createIntegrityRouter(
       if (failed) return res.status(500).json({ error: "Não foi possível testar a configuração." });
       const missing: string[] = [];
       if (!settings.data || (!settings.data.allows_anonymous && !settings.data.allows_identified)) missing.push("modo de identificação");
-      if (!channel.data) missing.push("canal ativo");
+      if (!channel.data) missing.push("canal configurado");
       if (!categories.count) missing.push("categoria ativa");
       if (!committees.count) missing.push("comitê ativo");
       if (!routing.count) missing.push("regra de roteamento");
@@ -1687,9 +1774,6 @@ export function createIntegrityRouter(
       await auditIntegrity(db, req, id ? "integrity.channel.updated" : "integrity.channel.created", "integrity_channels", saved.data.id, {
         after: { public_slug: saved.data.public_slug, active: saved.data.active, allows_anonymous: saved.data.allows_anonymous, allows_identified: saved.data.allows_identified },
       });
-      if (saved.data.active) {
-        await db.from("integrity_settings").update({ channel_published_at: new Date().toISOString() }).eq("tenant_id", tenantId(req));
-      }
       return res.status(id ? 200 : 201).json({ channel: saved.data });
     }),
   );
@@ -1753,6 +1837,10 @@ export function createIntegrityRouter(
           .json({ error: "Unidade inválida.", issues: parsed.error.issues });
       const db = getSupabaseAdmin();
       const { id, ...values } = parsed.data;
+      if (values.responsible_membership_id) {
+        const responsible = await db.from("memberships").select("id").eq("id", values.responsible_membership_id).eq("tenant_id", tenantId(req)).eq("status", "active").maybeSingle();
+        if (!responsible.data) return res.status(400).json({ error: "Responsável deve estar ativo neste tenant." });
+      }
       const query = id
         ? db
             .from("integrity_units")
@@ -1770,6 +1858,10 @@ export function createIntegrityRouter(
               ? "Esta unidade já existe."
               : "Não foi possível salvar a unidade.",
         });
+      if (values.is_headquarters) {
+        const cleared = await db.from("integrity_units").update({ is_headquarters: false }).eq("tenant_id", tenantId(req)).eq("is_headquarters", true).neq("id", saved.data.id);
+        if (cleared.error) return res.status(500).json({ error: "Unidade salva, mas a matriz anterior não pôde ser atualizada." });
+      }
       await auditIntegrity(db, req, id ? "integrity.unit.updated" : "integrity.unit.created", "integrity_units", saved.data.id, {
         after: { name: saved.data.name, code: saved.data.code, active: saved.data.active },
       });
@@ -1848,6 +1940,7 @@ export function createIntegrityRouter(
         return res.status(400).json({ error: "Regra de roteamento inválida." });
       const db = getSupabaseAdmin();
       const value = parsed.data;
+      const { collaborator_ids, ...ruleValues } = value;
       let conflictQuery = db.from("integrity_routing_rules").select("id,name")
         .eq("tenant_id", tenantId(req)).eq("status", "active").eq("priority", value.priority)
         .eq("is_fallback", value.is_fallback);
@@ -1856,37 +1949,21 @@ export function createIntegrityRouter(
       const conflicting = await conflictQuery.limit(1);
       if (conflicting.error) return res.status(500).json({ error: "Não foi possível validar conflitos de roteamento." });
       if (conflicting.data?.length) return res.status(409).json({ error: `Conflito com a regra ${conflicting.data[0].name}. Ajuste escopo ou prioridade.` });
-      if (value.assignee_membership_id) {
-        const member = await db
-          .from("memberships")
-          .select("id")
-          .eq("id", value.assignee_membership_id)
-          .eq("tenant_id", tenantId(req))
-          .eq("status", "active")
-          .maybeSingle();
-        if (!member.data)
-          return res.status(400).json({ error: "Responsável inválido." });
-      }
-      if (value.committee_id) {
-        const committee = await db
-          .from("integrity_committees")
-          .select("id")
-          .eq("id", value.committee_id)
-          .eq("tenant_id", tenantId(req))
-          .eq("active", true)
-          .maybeSingle();
-        if (!committee.data)
-          return res.status(400).json({ error: "Comitê inválido." });
-      }
+      const referenceError = await validateRoutingReferences(db, tenantId(req), value);
+      if (referenceError) return res.status(400).json({ error: referenceError });
       const rule = await db
         .from("integrity_routing_rules")
-        .insert({ tenant_id: tenantId(req), ...value, status: value.active ? "active" : "inactive" })
+        .insert({ tenant_id: tenantId(req), ...ruleValues, status: value.active ? "active" : "inactive" })
         .select("*")
         .single();
       if (rule.error)
         return res
           .status(500)
           .json({ error: "Não foi possível criar a regra." });
+      if (collaborator_ids.length) {
+        const linked = await db.from("integrity_routing_rule_collaborators").insert(collaborator_ids.map((id) => ({ rule_id: rule.data.id, membership_id: id, tenant_id: tenantId(req) })));
+        if (linked.error) return res.status(500).json({ error: "Regra criada, mas colaboradores não puderam ser vinculados." });
+      }
       await auditIntegrity(db, req, "integrity.routing.created", "integrity_routing_rules", rule.data.id, {
         after: { name: rule.data.name, category_id: rule.data.category_id, unit_id: rule.data.unit_id, committee_id: rule.data.committee_id, assignee_membership_id: rule.data.assignee_membership_id, priority: rule.data.priority, is_fallback: rule.data.is_fallback },
       });
@@ -1956,16 +2033,20 @@ export function createIntegrityRouter(
       if (rules.error) return res.status(500).json({ error: "Não foi possível simular o roteamento." });
       const candidates = (rules.data || []).filter((rule: any) =>
         (!rule.category_id || rule.category_id === parsed.data.category_id) &&
-        (!rule.unit_id || rule.unit_id === parsed.data.unit_id),
+        (!rule.unit_id || rule.unit_id === parsed.data.unit_id) &&
+        (!rule.department_id || rule.department_id === parsed.data.department_id) &&
+        (!rule.severity || rule.severity === parsed.data.severity) &&
+        (!rule.reporter_mode || rule.reporter_mode === parsed.data.reporter_mode) &&
+        (rule.requires_conflict == null || rule.requires_conflict === parsed.data.has_conflict),
       ).sort((a: any, b: any) => {
         if (a.is_fallback !== b.is_fallback) return a.is_fallback ? 1 : -1;
-        const specificity = (rule: any) => Number(Boolean(rule.category_id)) + Number(Boolean(rule.unit_id));
+        const specificity = (rule: any) => ["category_id","unit_id","department_id","severity","reporter_mode","requires_conflict"].filter((key) => rule[key] != null).length;
         return specificity(b) - specificity(a) || a.priority - b.priority || a.created_at.localeCompare(b.created_at);
       });
       const selected = candidates[0] || null;
-      const selectedSpecificity = selected ? Number(Boolean(selected.category_id)) + Number(Boolean(selected.unit_id)) : -1;
-      const conflicts = selected ? candidates.filter((rule: any) => rule.id !== selected.id && rule.is_fallback === selected.is_fallback && rule.priority === selected.priority && Number(Boolean(rule.category_id)) + Number(Boolean(rule.unit_id)) === selectedSpecificity) : [];
-      return res.json({ selected, conflicts, matched: candidates.length, deterministic: conflicts.length === 0 });
+      const selectedSpecificity = selected ? ["category_id","unit_id","department_id","severity","reporter_mode","requires_conflict"].filter((key) => selected[key] != null).length : -1;
+      const conflicts = selected ? candidates.filter((rule: any) => rule.id !== selected.id && rule.is_fallback === selected.is_fallback && rule.priority === selected.priority && ["category_id","unit_id","department_id","severity","reporter_mode","requires_conflict"].filter((key) => rule[key] != null).length === selectedSpecificity) : [];
+      return res.json({ selected: selected ? { ...selected, explanation: routingExplanation(selected) } : null, conflicts, matched: candidates.length, deterministic: conflicts.length === 0 });
     }),
   );
 
@@ -1980,6 +2061,9 @@ export function createIntegrityRouter(
         .eq("tenant_id", tenantId(req)).maybeSingle();
       if (!current.data) return res.status(404).json({ error: "Regra não encontrada." });
       const value = parsed.data;
+      const { collaborator_ids, ...ruleValues } = value;
+      const referenceError = await validateRoutingReferences(db, tenantId(req), value);
+      if (referenceError) return res.status(400).json({ error: referenceError });
       let conflictQuery = db.from("integrity_routing_rules").select("id,name").eq("tenant_id", tenantId(req))
         .neq("id", req.params.id).eq("status", "active").eq("priority", value.priority).eq("is_fallback", value.is_fallback);
       conflictQuery = value.category_id ? conflictQuery.eq("category_id", value.category_id) : conflictQuery.is("category_id", null);
@@ -1989,13 +2073,19 @@ export function createIntegrityRouter(
       if (value.status === "active" && conflicting.data?.length)
         return res.status(409).json({ error: `Conflito com a regra ${conflicting.data[0].name}.` });
       const saved = await db.from("integrity_routing_rules").update({
-        ...value,
+        ...ruleValues,
         active: value.status === "active",
         archived_at: value.status === "archived" ? new Date().toISOString() : null,
         archived_by_membership_id: value.status === "archived" ? membershipId(req) : null,
         updated_at: new Date().toISOString(),
       }).eq("id", req.params.id).eq("tenant_id", tenantId(req)).select("*").single();
       if (saved.error) return res.status(saved.error.code === "23505" ? 409 : 500).json({ error: "Não foi possível atualizar a regra." });
+      const removed = await db.from("integrity_routing_rule_collaborators").delete().eq("rule_id", req.params.id);
+      if (removed.error) return res.status(500).json({ error: "Regra atualizada, mas colaboradores não puderam ser sincronizados." });
+      if (collaborator_ids.length) {
+        const linked = await db.from("integrity_routing_rule_collaborators").insert(collaborator_ids.map((id) => ({ rule_id: req.params.id, membership_id: id, tenant_id: tenantId(req) })));
+        if (linked.error) return res.status(500).json({ error: "Regra atualizada, mas colaboradores não puderam ser sincronizados." });
+      }
       await auditIntegrity(db, req, "integrity.routing.updated", "integrity_routing_rules", req.params.id, {
         after: { name: saved.data.name, status: saved.data.status, priority: saved.data.priority, category_id: saved.data.category_id, unit_id: saved.data.unit_id, committee_id: saved.data.committee_id, assignee_membership_id: saved.data.assignee_membership_id, is_fallback: saved.data.is_fallback },
       });
@@ -2290,6 +2380,57 @@ export function createIntegrityRouter(
       return res.send(pdf);
     }),
   );
+
+  router.get(
+    "/deployment",
+    requireAny("integrity.settings.manage", "integrity.deployment.manage"),
+    asyncHandler(async (req, res) => {
+      const db=getSupabaseAdmin(); const tenant=tenantId(req);
+      const [settings,channels,categories,units,departments,committees,committeeMembers,rules,templates,members,onboarding]=await Promise.all([
+        db.from("integrity_settings").select("*").eq("tenant_id",tenant).maybeSingle(),db.from("integrity_channels").select("id,active,public_slug").eq("tenant_id",tenant),db.from("integrity_categories").select("id").eq("tenant_id",tenant).eq("active",true),db.from("integrity_units").select("id").eq("tenant_id",tenant).eq("active",true),db.from("integrity_departments").select("id").eq("tenant_id",tenant).eq("active",true),db.from("integrity_committees").select("id,status").eq("tenant_id",tenant),db.from("integrity_committee_members").select("committee_id").eq("active",true),db.from("integrity_routing_rules").select("id,requires_conflict,escalation_committee_id,escalation_membership_id").eq("tenant_id",tenant).eq("active",true).eq("status","active"),db.from("integrity_templates").select("template_type").eq("tenant_id",tenant).eq("active",true),db.from("memberships").select("id").eq("tenant_id",tenant).eq("status","active"),db.from("onboarding_runs").select("id,status,onboarding_items(id,step_key,status)").eq("tenant_id",tenant).order("created_at",{ascending:false}).limit(1).maybeSingle(),
+      ]);
+      if([settings,channels,categories,units,departments,committees,committeeMembers,rules,templates,members,onboarding].some((item:any)=>item.error))return res.status(500).json({error:"Não foi possível consolidar a implantação."});
+      const activeCommittees=(committees.data||[]).filter((item:any)=>item.status==="active");
+      const checks=[
+        {key:"organization_data",label:"Dados e identidade do canal",complete:Boolean((req as any).tenantContext?.tenant?.name&&settings.data?.introduction)},
+        {key:"integrity_units",label:"Unidades e filiais",complete:Boolean(units.data?.length)},
+        {key:"integrity_departments",label:"Departamentos e setores",complete:Boolean(departments.data?.length)},
+        {key:"integrity_categories",label:"Categorias de denúncia",complete:Boolean(categories.data?.length)},
+        {key:"integrity_severity",label:"Severidades e prioridades",complete:Boolean(categories.data?.length)},
+        {key:"integrity_committee",label:"Comitês responsáveis",complete:activeCommittees.some((committee:any)=>(committeeMembers.data||[]).some((member:any)=>member.committee_id===committee.id))},
+        {key:"integrity_investigators",label:"Usuários e responsabilidades",complete:Boolean(members.data?.length)},
+        {key:"integrity_routing",label:"Regras de roteamento",complete:Boolean(rules.data?.length)},
+        {key:"integrity_sla",label:"SLA e alertas",complete:Boolean(settings.data?.default_sla_hours&&settings.data?.treatment_sla_hours&&settings.data?.alert_lead_hours)},
+        {key:"integrity_conflicts",label:"Conflitos e escalonamento",complete:(rules.data||[]).some((item:any)=>item.requires_conflict!=null||item.escalation_committee_id||item.escalation_membership_id)},
+        {key:"integrity_communication",label:"Templates de comunicação",complete:["reporter_message","information_request"].every(type=>(templates.data||[]).some((item:any)=>item.template_type===type))},
+        {key:"integrity_anonymity",label:"Política de anonimato",complete:Boolean(settings.data?.allows_anonymous||settings.data?.allows_identified)},
+        {key:"integrity_retention",label:"Política de retenção",complete:Boolean(settings.data?.retention_days)},
+        {key:"integrity_channel",label:"Canal configurado",complete:Boolean((channels.data||[]).length)},
+        {key:"integrity_channel_test",label:"Teste do canal",complete:Boolean(settings.data?.channel_tested_at)},
+        {key:"integrity_publish",label:"Publicação",complete:Boolean(settings.data?.channel_published_at&&(channels.data||[]).some((item:any)=>item.active))},
+      ];
+      const state=integrityDeploymentState(checks.map(({key,complete})=>({key:key==="integrity_publish"?"published":key==="integrity_channel_test"?"channel_test":key.replace("integrity_","") ,complete})));
+      if(settings.data?.deployment_state!==state)await db.from("integrity_settings").update({deployment_state:state,deployment_updated_at:new Date().toISOString()}).eq("tenant_id",tenant);
+      const items=onboarding.data?.onboarding_items||[];
+      for(const check of checks){const item=items.find((candidate:any)=>candidate.step_key===check.key);if(item&&item.status!=="completed"&&check.complete)await db.from("onboarding_items").update({status:"completed",completed_at:new Date().toISOString(),observation:"Sincronizado pelo wizard do Integridade."}).eq("id",item.id);}
+      return res.json({state,completed:checks.filter(item=>item.complete).length,total:checks.length,steps:checks,onboarding_run_id:onboarding.data?.id||null,channel_url:(channels.data||[]).find((item:any)=>item.active)?.public_slug?`/#/canal/${(channels.data||[]).find((item:any)=>item.active).public_slug}`:null});
+    }),
+  );
+
+  router.post("/settings/channel-publish",requireAny("integrity.settings.manage","integrity.deployment.manage"),asyncHandler(async(req,res)=>{const db=getSupabaseAdmin();const [settings,channel,categories,routing,committee]=await Promise.all([db.from("integrity_settings").select("channel_tested_at").eq("tenant_id",tenantId(req)).maybeSingle(),db.from("integrity_channels").select("id,public_slug").eq("tenant_id",tenantId(req)).order("created_at").limit(1).maybeSingle(),db.from("integrity_categories").select("id",{count:"exact",head:true}).eq("tenant_id",tenantId(req)).eq("active",true),db.from("integrity_routing_rules").select("id",{count:"exact",head:true}).eq("tenant_id",tenantId(req)).eq("active",true).eq("status","active"),db.from("integrity_committees").select("id",{count:"exact",head:true}).eq("tenant_id",tenantId(req)).eq("status","active")]);if([settings,channel,categories,routing,committee].some((item:any)=>item.error))return res.status(500).json({error:"Não foi possível validar a publicação."});if(!settings.data?.channel_tested_at||!channel.data||!categories.count||!routing.count||!committee.count)return res.status(409).json({error:"Conclua e teste a configuração antes de publicar."});const publishedAt=new Date().toISOString();const [enabled,updated]=await Promise.all([db.from("integrity_channels").update({active:true,updated_at:publishedAt}).eq("id",channel.data.id).eq("tenant_id",tenantId(req)),db.from("integrity_settings").update({channel_published_at:publishedAt,deployment_state:"published",deployment_updated_at:publishedAt}).eq("tenant_id",tenantId(req))]);if(enabled.error||updated.error)return res.status(500).json({error:"Não foi possível publicar o canal."});await auditIntegrity(db,req,"integrity.channel.published","integrity_channels",channel.data.id,{public_slug:channel.data.public_slug,published_at:publishedAt});return res.json({published:true,public_slug:channel.data.public_slug,published_at:publishedAt});}));
+
+  router.get(
+    "/pending",
+    requireAny("integrity.pending.read","integrity.cases.read","integrity.cases.read_assigned"),
+    asyncHandler(async(req,res)=>{const db=getSupabaseAdmin();const now=new Date();let cases=db.from("integrity_cases").select("id,report_id,protocol,status,owner_membership_id,committee_id,updated_at,first_response_due_at,treatment_due_at,retention_state").eq("tenant_id",tenantId(req)).not("status","in","(closed,archived)");cases=(await scopeCaseQuery(cases,db,req)).query;const result=await cases; if(result.error)return res.status(500).json({error:"Não foi possível carregar as pendências."});const ids=(result.data||[]).map((item:any)=>item.id);const reportIds=(result.data||[]).map((item:any)=>item.report_id);const [tasks,conflicts,messages,recommendations]=await Promise.all([ids.length?db.from("integrity_case_tasks").select("id,case_id,title,due_at,status").in("case_id",ids).in("status",["open","in_progress"]):Promise.resolve({data:[],error:null}),ids.length?db.from("integrity_case_conflicts").select("id,case_id").in("case_id",ids).eq("active",true):Promise.resolve({data:[],error:null}),reportIds.length?db.from("integrity_report_messages").select("id,report_id,author_type,created_at").in("report_id",reportIds).order("created_at",{ascending:false}):Promise.resolve({data:[],error:null}),ids.length?db.from("integrity_case_events").select("case_id,event_type").in("case_id",ids).eq("event_type","decision_recommended"):Promise.resolve({data:[],error:null})]);if([tasks,conflicts,messages,recommendations].some((item:any)=>item.error))return res.status(500).json({error:"Não foi possível consolidar a fila."});const items:any[]=[];for(const item of result.data||[]){const due=item.first_response_due_at||item.treatment_due_at;if(!item.owner_membership_id&&!item.committee_id)items.push({kind:"unassigned",label:"Caso sem responsável",case_id:item.id,protocol:item.protocol,priority:"high"});if(due&&new Date(due)<now)items.push({kind:"sla_overdue",label:"SLA vencido",case_id:item.id,protocol:item.protocol,priority:"urgent",due_at:due});else if(due&&new Date(due).getTime()-now.getTime()<86400000)items.push({kind:"sla_due_soon",label:"SLA próximo",case_id:item.id,protocol:item.protocol,priority:"high",due_at:due});if(now.getTime()-new Date(item.updated_at).getTime()>7*86400000)items.push({kind:"stale",label:"Caso sem movimentação",case_id:item.id,protocol:item.protocol,priority:"normal"});if(item.status==="decision"&&(recommendations.data||[]).some((event:any)=>event.case_id===item.id))items.push({kind:"decision",label:"Recomendação aguardando decisão",case_id:item.id,protocol:item.protocol,priority:"high"});const caseMessages=(messages.data||[]).filter((message:any)=>message.report_id===item.report_id);if(caseMessages[0]?.author_type==="reporter")items.push({kind:"external_message",label:"Mensagem externa sem resposta",case_id:item.id,protocol:item.protocol,priority:"high"});}for(const task of tasks.data||[])if(task.due_at&&new Date(task.due_at)<now){const item=(result.data||[]).find((candidate:any)=>candidate.id===task.case_id);items.push({kind:"task_overdue",label:`Tarefa vencida: ${task.title}`,case_id:task.case_id,protocol:item?.protocol,priority:"high",due_at:task.due_at});}for(const conflict of conflicts.data||[]){const item=(result.data||[]).find((candidate:any)=>candidate.id===conflict.case_id);items.push({kind:"conflict",label:"Conflito de interesse pendente",case_id:conflict.case_id,protocol:item?.protocol,priority:"urgent"});}return res.json({items,counts:items.reduce((acc:any,item:any)=>(acc[item.kind]=(acc[item.kind]||0)+1,acc),{}),updated_at:now.toISOString()});}),
+  );
+
+  router.post("/settings/departments",requireAny("integrity.settings.manage"),asyncHandler(async(req,res)=>{const parsed=departmentSchema.safeParse(req.body);if(!parsed.success)return res.status(400).json({error:"Setor inválido.",issues:parsed.error.issues});const db=getSupabaseAdmin();const{id,...values}=parsed.data;const unit=await db.from("integrity_units").select("id").eq("id",values.unit_id).eq("tenant_id",tenantId(req)).maybeSingle();if(!unit.data)return res.status(400).json({error:"Unidade inválida."});if(values.responsible_membership_id){const responsible=await db.from("memberships").select("id").eq("id",values.responsible_membership_id).eq("tenant_id",tenantId(req)).eq("status","active").maybeSingle();if(!responsible.data)return res.status(400).json({error:"Responsável deve estar ativo neste tenant."});}const query=id?db.from("integrity_departments").update({...values,updated_at:new Date().toISOString()}).eq("id",id).eq("tenant_id",tenantId(req)):db.from("integrity_departments").insert({...values,tenant_id:tenantId(req)});const saved=await query.select("*").single();if(saved.error)return res.status(saved.error.code==="23505"?409:500).json({error:"Não foi possível salvar o setor."});await auditIntegrity(db,req,id?"integrity.department.updated":"integrity.department.created","integrity_departments",saved.data.id,{unit_id:saved.data.unit_id,name:saved.data.name,active:saved.data.active});return res.status(id?200:201).json({department:saved.data});}));
+  router.post("/settings/custom-fields",requireAny("integrity.settings.manage"),asyncHandler(async(req,res)=>{const parsed=customFieldSchema.safeParse(req.body);if(!parsed.success)return res.status(400).json({error:"Campo adicional inválido.",issues:parsed.error.issues});const db=getSupabaseAdmin();const{id,...values}=parsed.data;if(values.channel_id){const channel=await db.from("integrity_channels").select("id").eq("id",values.channel_id).eq("tenant_id",tenantId(req)).maybeSingle();if(!channel.data)return res.status(400).json({error:"Canal inválido."});}const query=id?db.from("integrity_custom_fields").update({...values,updated_at:new Date().toISOString()}).eq("id",id).eq("tenant_id",tenantId(req)):db.from("integrity_custom_fields").insert({...values,tenant_id:tenantId(req)});const saved=await query.select("*").single();if(saved.error)return res.status(saved.error.code==="23505"?409:500).json({error:"Não foi possível salvar o campo adicional."});await auditIntegrity(db,req,id?"integrity.custom_field.updated":"integrity.custom_field.created","integrity_custom_fields",saved.data.id,{field_key:saved.data.field_key,field_type:saved.data.field_type,required:saved.data.required});return res.status(id?200:201).json({custom_field:saved.data});}));
+
+  router.get("/reports/executive.:format",requireAny("integrity.executive.export","integrity.exports.execute"),asyncHandler(async(req,res)=>{const format=req.params.format;if(!["csv","pdf"].includes(format))return res.status(404).end();const parsed=dashboardSchema.safeParse(req.query);if(!parsed.success)return res.status(400).json({error:"Filtros inválidos."});const db=getSupabaseAdmin();let query=db.from("integrity_cases").select("id,status,severity,created_at,first_action_at,closed_at,owner_membership_id,category_id,unit_id,department_id,integrity_reports(reporter_mode),integrity_categories(name),integrity_units(name),integrity_departments(name)").eq("tenant_id",tenantId(req));const f=parsed.data;if(f.status)query=query.eq("status",f.status);if(f.severity)query=query.eq("severity",f.severity);if(f.category_id)query=query.eq("category_id",f.category_id);if(f.unit_id)query=query.eq("unit_id",f.unit_id);if(f.department_id)query=query.eq("department_id",f.department_id);if(f.from)query=query.gte("created_at",f.from);if(f.to)query=query.lte("created_at",f.to);const result=await query.limit(5000);if(result.error)return res.status(500).json({error:"Não foi possível gerar o relatório executivo."});const aggregate=integrityDashboard((result.data||[]).map((item:any)=>({...item,reporter_mode:item.integrity_reports?.reporter_mode})));await auditIntegrity(db,req,"integrity.executive_report.exported","integrity_settings",tenantId(req),{format,filters:f,rows:(result.data||[]).length,aggregate_only:true});const metrics=[["Recebidas",aggregate.total],["Abertas",aggregate.open],["Encerradas",aggregate.closed],["Sem responsável",aggregate.unassigned],["Tempo médio até primeira ação",aggregate.average_first_action_hours==null?"—":`${aggregate.average_first_action_hours}h`],["Tempo médio até conclusão",aggregate.average_resolution_hours==null?"—":`${aggregate.average_resolution_hours}h`]] as Array<[string,string|number]>;if(format==="csv"){const rows=[["indicador","valor"],...metrics,["",""],["distribuição","item","quantidade"],...[["categoria",aggregate.by_category],["unidade",aggregate.by_unit],["setor",aggregate.by_department],["severidade",aggregate.by_severity],["identificação",aggregate.by_reporter_mode]].flatMap(([name,data]:any)=>(data||[]).map((row:any)=>[name,row.label,row.count]))];const csv=rows.map(row=>row.map(csvCell).join(",")).join("\r\n");res.setHeader("content-type","text/csv; charset=utf-8");res.setHeader("content-disposition",'attachment; filename="integridade-executivo.csv"');return res.send(`\ufeff${csv}`);}const pdf=createIntegrityExecutivePdf({organization:(req as any).tenantContext?.tenant?.name||"Organização",period:`${f.from||"início"} a ${f.to||"agora"}`,generatedAt:new Date().toLocaleString("pt-BR",{timeZone:"America/Sao_Paulo"}),filters:Object.entries(f).filter(([,value])=>value).map(([key,value])=>`${key}: ${value}`),metrics:metrics.map(([label,value])=>({label,value})),distributions:[{title:"Por categoria",rows:aggregate.by_category},{title:"Por unidade",rows:aggregate.by_unit},{title:"Por setor",rows:aggregate.by_department},{title:"Por severidade",rows:aggregate.by_severity}]});res.setHeader("content-type","application/pdf");res.setHeader("content-disposition",'attachment; filename="integridade-executivo.pdf"');res.setHeader("cache-control","private, no-store");return res.send(pdf);}));
+
+  router.post("/retention/:id/review",requireAny("integrity.retention.manage"),asyncHandler(async(req,res)=>{const parsed=z.object({decision:z.enum(["archive","keep_active","defer"]),reason:z.string().trim().min(3).max(1000),defer_until:z.string().datetime().nullable().optional()}).safeParse(req.body);if(!parsed.success)return res.status(400).json({error:"Revisão de retenção inválida."});const db=getSupabaseAdmin();const found=await findCase(db,req,req.params.id,"id,tenant_id,report_id,retention_state");if(!found.data)return res.status(404).json({error:"Caso não encontrado."});if(parsed.data.decision==="defer"&&!parsed.data.defer_until)return res.status(400).json({error:"Informe a nova data de revisão."});const review=await db.from("integrity_retention_reviews").insert({tenant_id:tenantId(req),case_id:req.params.id,reviewed_by_membership_id:membershipId(req),...parsed.data}).select("id").single();if(review.error)return res.status(500).json({error:"Não foi possível registrar a revisão."});const updates=parsed.data.decision==="archive"?{retention_state:"archived",archived_at:new Date().toISOString()}:{retention_state:"active",retention_due_at:parsed.data.decision==="defer"?parsed.data.defer_until:null};const updated=await db.from("integrity_cases").update(updates).eq("id",req.params.id);if(updated.error)return res.status(500).json({error:"A revisão foi registrada, mas o lifecycle não pôde ser atualizado."});await db.from("integrity_case_events").insert({report_id:found.data.report_id,case_id:req.params.id,event_type:"retention_reviewed",actor_membership_id:membershipId(req),note:parsed.data.reason,metadata:{decision:parsed.data.decision,defer_until:parsed.data.defer_until||null}});return res.json({reviewed:true,decision:parsed.data.decision});}));
 
   return router;
 }

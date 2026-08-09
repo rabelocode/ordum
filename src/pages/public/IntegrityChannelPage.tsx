@@ -25,6 +25,10 @@ type Channel = {
     description?: string;
   }>;
   units: Array<{ id: string; name: string }>;
+  departments?: Array<{ id:string;unit_id:string;name:string }>;
+  custom_fields?: Array<{id:string;field_key:string;label:string;help_text?:string;field_type:string;required:boolean;options?:string[]}>;
+  privacy_notice?: string;
+  confirmation_message?: string;
   attachment_policy?: {
     enabled?: boolean;
     max_files?: number;
@@ -34,6 +38,8 @@ type Channel = {
 type Tracking = {
   protocol: string;
   status: string;
+  status_code?: string;
+  action_required?: boolean;
   created_at: string;
   closed_at?: string;
   messages: Array<{
@@ -80,6 +86,7 @@ export function IntegrityChannelPage({ slug }: { slug: string }) {
     reporter_mode: "anonymous",
     category: "",
     unit_id: "",
+    department_id: "",
     subject: "",
     description: "",
     occurred_at: "",
@@ -87,6 +94,7 @@ export function IntegrityChannelPage({ slug }: { slug: string }) {
     email: "",
     phone: "",
   });
+  const [customValues,setCustomValues]=useState<Record<string,unknown>>({});
   const [credentials, setCredentials] = useState({ protocol: "", secret: "" });
   const [reply, setReply] = useState("");
   const [attachment, setAttachment] = useState<File | null>(null);
@@ -141,6 +149,8 @@ export function IntegrityChannelPage({ slug }: { slug: string }) {
           description: form.description,
           occurred_at: form.occurred_at || null,
           unit_id: form.unit_id || null,
+          department_id: form.department_id || null,
+          custom_fields: customValues,
           identity:
             form.reporter_mode === "identified"
               ? { name: form.name, email: form.email, phone: form.phone }
@@ -332,8 +342,7 @@ export function IntegrityChannelPage({ slug }: { slug: string }) {
             <ShieldCheck className="mx-auto h-14 w-14 text-emerald-600" />
             <h2 className="mt-4 text-2xl font-bold">Relato recebido</h2>
             <p className="mt-2 text-sm text-[#626866]">
-              Guarde os dois dados abaixo. A chave é exibida apenas agora e não
-              pode ser recuperada.
+              {channel.confirmation_message || "Seu relato foi recebido com segurança."} Guarde os dois dados abaixo. A chave é exibida apenas agora e não pode ser recuperada.
             </p>
             <div className="mt-6 space-y-4 rounded-xl bg-[#F6F5F2] p-5 text-left">
               <Credential label="Protocolo" value={result.protocol} visible />
@@ -455,7 +464,7 @@ export function IntegrityChannelPage({ slug }: { slug: string }) {
                   <select
                     value={form.unit_id}
                     onChange={(e) =>
-                      setForm({ ...form, unit_id: e.target.value })
+                      setForm({ ...form, unit_id: e.target.value, department_id: "" })
                     }
                     className="w-full rounded-xl border border-[#DDD8CF] bg-[#FAF8F3] px-3 py-2.5 text-sm outline-none focus-visible:ring-2 focus-visible:ring-[#3457D5]"
                   >
@@ -468,6 +477,7 @@ export function IntegrityChannelPage({ slug }: { slug: string }) {
                   </select>
                 </Field>
               )}
+              {form.unit_id && (channel.departments || []).some((item)=>item.unit_id===form.unit_id) && <Field label="Departamento ou setor"><select value={form.department_id} onChange={(event)=>setForm({...form,department_id:event.target.value})} className="w-full rounded-xl border border-[#DDD8CF] bg-[#FAF8F3] px-3 py-2.5 text-sm"><option value="">Não informar</option>{(channel.departments||[]).filter((item)=>item.unit_id===form.unit_id).map((item)=><option key={item.id} value={item.id}>{item.name}</option>)}</select></Field>}
               <Field label="Assunto">
                 <Input
                   required
@@ -502,6 +512,7 @@ export function IntegrityChannelPage({ slug }: { slug: string }) {
                   }
                 />
               </Field>
+              {(channel.custom_fields||[]).map((field)=><CustomField key={field.id} field={field} value={customValues[field.field_key]} onChange={(value)=>setCustomValues((current)=>({...current,[field.field_key]:value}))}/>) }
               {form.reporter_mode === "identified" && (
                 <div className="grid gap-4 rounded-xl border border-[#DDD8CF] p-4 sm:grid-cols-2">
                   <Field label="Nome">
@@ -535,6 +546,11 @@ export function IntegrityChannelPage({ slug }: { slug: string }) {
               {channel.instructions && (
                 <p className="text-xs leading-5 text-[#626866]">
                   {channel.instructions}
+                </p>
+              )}
+              {channel.privacy_notice && (
+                <p className="rounded-xl border border-[#DDD8CF] bg-[#F6F5F2] p-4 text-xs leading-5 text-[#626866]">
+                  {channel.privacy_notice}
                 </p>
               )}
               <Button
@@ -600,9 +616,10 @@ export function IntegrityChannelPage({ slug }: { slug: string }) {
                     </div>
                   </div>
                   <span className="rounded-full bg-blue-100 px-3 py-1 text-xs font-bold text-blue-800">
-                    {statusLabel(tracking.status)}
+                    {tracking.status}
                   </span>
                 </div>
+                {tracking.action_required ? <div role="status" className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm font-medium text-amber-900">A organização solicitou informações. Revise as mensagens e responda abaixo.</div> : null}
                 <div className="space-y-3">
                   {tracking.messages.map((message) => (
                     <article
@@ -638,7 +655,7 @@ export function IntegrityChannelPage({ slug }: { slug: string }) {
                     </div>
                   </div>
                 )}
-                {!["closed", "archived"].includes(tracking.status) && (
+                {!["closed", "archived"].includes(tracking.status_code || "") && (
                   <div className="space-y-4 border-t pt-5">
                     <form onSubmit={sendReply} className="space-y-3">
                       <Field label="Complementar informações">
@@ -790,4 +807,12 @@ function statusLabel(status: string) {
       } as Record<string, string>
     )[status] || status
   );
+}
+
+function CustomField({field,value,onChange}:{field:NonNullable<Channel["custom_fields"]>[number];value:unknown;onChange:(value:unknown)=>void}) {
+  if(field.field_type==="long_text")return <Field label={field.label}><textarea required={field.required} value={String(value||"")} onChange={(event)=>onChange(event.target.value)} rows={4} maxLength={5000} className="w-full rounded-xl border border-[#DDD8CF] bg-[#FAF8F3] px-3 py-2.5 text-sm"/><small className="font-normal text-[#626866]">{field.help_text}</small></Field>;
+  if(field.field_type==="single_select")return <Field label={field.label}><select required={field.required} value={String(value||"")} onChange={(event)=>onChange(event.target.value)} className="w-full rounded-xl border border-[#DDD8CF] bg-[#FAF8F3] px-3 py-2.5 text-sm"><option value="">Selecione</option>{(field.options||[]).map((option)=><option key={option}>{option}</option>)}</select></Field>;
+  if(field.field_type==="multi_select")return <fieldset><legend className="text-sm font-bold">{field.label}</legend><div className="mt-2 grid gap-2 sm:grid-cols-2">{(field.options||[]).map((option)=><label key={option} className="flex gap-2 rounded-xl border p-3 text-sm"><input type="checkbox" checked={Array.isArray(value)&&value.includes(option)} onChange={(event)=>{const current=Array.isArray(value)?value as string[]:[];onChange(event.target.checked?[...current,option]:current.filter((item)=>item!==option));}}/>{option}</label>)}</div></fieldset>;
+  if(field.field_type==="boolean")return <label className="flex gap-3 rounded-xl border border-[#DDD8CF] p-4 text-sm"><input type="checkbox" required={field.required} checked={value===true} onChange={(event)=>onChange(event.target.checked)}/><span><strong>{field.label}</strong>{field.help_text?<small className="block font-normal text-[#626866]">{field.help_text}</small>:null}</span></label>;
+  return <Field label={field.label}><Input type={field.field_type==="date"?"date":"text"} required={field.required} maxLength={field.field_type==="short_text"?300:undefined} value={String(value||"")} onChange={(event)=>onChange(event.target.value)}/>{field.help_text?<small className="font-normal text-[#626866]">{field.help_text}</small>:null}</Field>;
 }

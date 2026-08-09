@@ -51,8 +51,11 @@ export function integrityDashboard(
     owner_membership_id?: string | null;
     category_id?: string | null;
     unit_id?: string | null;
+    department_id?: string | null;
+    reporter_mode?: string | null;
     integrity_categories?: { name?: string | null } | null;
     integrity_units?: { name?: string | null } | null;
+    integrity_departments?: { name?: string | null } | null;
   }>,
   now = new Date(),
 ) {
@@ -67,7 +70,7 @@ export function integrityDashboard(
         )
       : null;
   const distribution = (
-    key: "severity" | "category" | "unit",
+    key: "severity" | "category" | "unit" | "department" | "reporter_mode",
   ) => {
     const counts = new Map<string, number>();
     for (const item of cases) {
@@ -76,7 +79,11 @@ export function integrityDashboard(
           ? item.severity
           : key === "category"
             ? item.integrity_categories?.name || "Sem categoria"
-            : item.integrity_units?.name || "Sem unidade";
+            : key === "unit"
+              ? item.integrity_units?.name || "Sem unidade"
+              : key === "department"
+                ? item.integrity_departments?.name || "Sem setor"
+                : item.reporter_mode === "identified" ? "Identificado" : "Anônimo";
       counts.set(value, (counts.get(value) || 0) + 1);
     }
     return [...counts.entries()]
@@ -129,6 +136,8 @@ export function integrityDashboard(
       .length,
     by_category: distribution("category"),
     by_unit: distribution("unit"),
+    by_department: distribution("department"),
+    by_reporter_mode: distribution("reporter_mode"),
     by_severity: distribution("severity"),
     evolution: [...evolution.entries()]
       .map(([date, count]) => ({ date, count }))

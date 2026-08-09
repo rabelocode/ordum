@@ -1,0 +1,6 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+import { readFileSync } from "node:fs";
+test("scheduler is persistent idempotent and server-secret protected",()=>{const source=readFileSync("src/server/integrityOperations.ts","utf8");assert.match(source,/integrity_scheduler_runs/);assert.match(source,/run_key/);assert.match(source,/code === "23505"/);assert.match(source,/process\.env\.CRON_SECRET/);assert.doesNotMatch(source,/VITE_.*SECRET/);});
+test("Platform Admin remains aggregate-only",()=>{const source=readFileSync("src/server/adminClientsRouter.ts","utf8");const block=source.slice(source.indexOf("/:id/integrity-summary"),source.indexOf("// GET /api/admin/clients/:id"));assert.match(block,/confidentiality_boundary: "aggregate_only"/);assert.doesNotMatch(block,/integrity_reports|integrity_report_identities|integrity_attachments|dossier\.pdf|description/);});
+test("phase 4G tables use RLS and internal queues have no browser grants",()=>{const sql=readFileSync("supabase/migrations/20260809204033_integrity_phase4g_deployment_automation.sql","utf8");assert.match(sql,/alter table public\.integrity_departments enable row level security/);assert.match(sql,/revoke all on public\.integrity_notification_outbox/);assert.doesNotMatch(sql,/grant all|to anon/i);assert.match(sql,/dedupe_key text not null unique/);});

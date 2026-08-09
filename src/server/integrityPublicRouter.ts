@@ -5,6 +5,7 @@ import {
   integrityRateLimitKey,
   validateIntegrityEvidence,
 } from "../domain/integrity-files";
+import { publicIntegrityStatus, validateIntegrityCustomValues } from "../domain/integrity-phase4g";
 
 const reportSchema = z.object({
   channel_slug: z.string().trim().min(2).max(80),
@@ -14,6 +15,8 @@ const reportSchema = z.object({
   description: z.string().trim().min(20).max(20000),
   occurred_at: z.string().date().nullable().optional(),
   unit_id: z.string().uuid().nullable().optional(),
+  department_id: z.string().uuid().nullable().optional(),
+  custom_fields: z.record(z.string(), z.unknown()).default({}),
   identity: z
     .object({
       name: z.string().trim().min(2).max(160),
@@ -90,14 +93,22 @@ export function createIntegrityPublicRouter(getSupabaseAdmin: () => any) {
   router.get(
     "/channels/:slug",
     asyncHandler(async (req, res) => {
-      const result = await getSupabaseAdmin().rpc("get_integrity_channel", {
+      const db = getSupabaseAdmin();
+      const result = await db.rpc("get_integrity_channel", {
         p_channel_slug: req.params.slug,
       });
       if (result.error || !result.data)
         return res
           .status(404)
           .json({ error: "Canal não encontrado, pausado ou indisponível." });
-      return res.json({ channel: result.data });
+      const channelRow = await db.from("integrity_channels").select("id,tenant_id,privacy_notice,confirmation_message").eq("public_slug",req.params.slug).eq("active",true).maybeSingle();
+      if(channelRow.error||!channelRow.data)return res.status(404).json({error:"Canal não encontrado, pausado ou indisponível."});
+      const [departments,fields]=await Promise.all([
+        db.from("integrity_departments").select("id,unit_id,name").eq("tenant_id",channelRow.data.tenant_id).eq("active",true).order("name"),
+        db.from("integrity_custom_fields").select("id,field_key,label,help_text,field_type,required,options,sort_order").eq("tenant_id",channelRow.data.tenant_id).or(`channel_id.eq.${channelRow.data.id},channel_id.is.null`).eq("active",true).order("sort_order"),
+      ]);
+      if(departments.error||fields.error)return res.status(503).json({error:"Configuração do canal temporariamente indisponível."});
+      return res.json({ channel: {...result.data,privacy_notice:channelRow.data.privacy_notice,confirmation_message:channelRow.data.confirmation_message,departments:departments.data||[],custom_fields:fields.data||[]} });
     }),
   );
 
@@ -112,7 +123,15 @@ export function createIntegrityPublicRouter(getSupabaseAdmin: () => any) {
       if (!parsed.success)
         return res.status(400).json({ error: "Revise os campos do relato." });
       const value = parsed.data;
-      const result = await getSupabaseAdmin().rpc(
+      const db=getSupabaseAdmin();
+      const channel=await db.from("integrity_channels").select("id,tenant_id").eq("public_slug",value.channel_slug).eq("active",true).maybeSingle();
+      if(channel.error||!channel.data)return res.status(404).json({error:"Canal não encontrado, pausado ou indisponível."});
+      const fields=await db.from("integrity_custom_fields").select("id,field_key,label,field_type,required,options").eq("tenant_id",channel.data.tenant_id).or(`channel_id.eq.${channel.data.id},channel_id.is.null`).eq("active",true);
+      if(fields.error)return res.status(503).json({error:"Não foi possível validar o formulário."});
+      const custom=validateIntegrityCustomValues(fields.data||[],value.custom_fields);
+      if(!custom.valid)return res.status(400).json({error:custom.error});
+      if(value.department_id){const department=await db.from("integrity_departments").select("id").eq("id",value.department_id).eq("tenant_id",channel.data.tenant_id).eq("unit_id",value.unit_id).eq("active",true).maybeSingle();if(!department.data)return res.status(400).json({error:"Selecione um setor válido para a unidade."});}
+      const result = await db.rpc(
         "submit_integrity_report_v2",
         {
           p_channel_slug: value.channel_slug,
@@ -129,6 +148,16 @@ export function createIntegrityPublicRouter(getSupabaseAdmin: () => any) {
         return res
           .status(400)
           .json({ error: "Não foi possível registrar o relato." });
+      const report=await db.from("integrity_reports").select("id").eq("tenant_id",channel.data.tenant_id).eq("protocol",result.data.protocol).maybeSingle();
+      if(!report.data)return res.status(500).json({error:"O relato foi recebido, mas a configuração adicional não pôde ser concluída."});
+      const caseResult=await db.from("integrity_cases").select("id,category_id,unit_id,severity,status,report_id").eq("report_id",report.data.id).single();
+      if(caseResult.error)return res.status(500).json({error:"O relato foi recebido, mas o caso não pôde ser preparado."});
+      if(value.department_id){await db.from("integrity_reports").update({department_id:value.department_id}).eq("id",report.data.id);await db.from("integrity_cases").update({department_id:value.department_id}).eq("id",caseResult.data.id);}
+      if(custom.rows.length){const saved=await db.from("integrity_report_custom_values").insert(custom.rows.map(row=>({...row,tenant_id:channel.data.tenant_id,report_id:report.data.id})));if(saved.error)return res.status(500).json({error:"O relato foi recebido, mas os campos adicionais não puderam ser registrados."});}
+      const rules=await db.from("integrity_routing_rules").select("*").eq("tenant_id",channel.data.tenant_id).eq("active",true).eq("status","active").order("priority");
+      const mode=value.reporter_mode; const matching=(rules.data||[]).filter((rule:any)=>(!rule.category_id||rule.category_id===caseResult.data.category_id)&&(!rule.unit_id||rule.unit_id===value.unit_id)&&(!rule.department_id||rule.department_id===value.department_id)&&(!rule.severity||rule.severity===caseResult.data.severity)&&(!rule.reporter_mode||rule.reporter_mode===mode)&&rule.requires_conflict!==true).sort((a:any,b:any)=>Number(a.is_fallback)-Number(b.is_fallback)||a.priority-b.priority);
+      const rule=matching[0];
+      if(rule){const update:any={};if(rule.assignee_membership_id)update.owner_membership_id=rule.assignee_membership_id;if(rule.committee_id)update.committee_id=rule.committee_id;if(rule.target_priority)update.priority=rule.target_priority;if(rule.target_sla_hours)update.treatment_due_at=new Date(Date.now()+rule.target_sla_hours*3600000).toISOString();await db.from("integrity_cases").update(update).eq("id",caseResult.data.id);const collaborators=await db.from("integrity_routing_rule_collaborators").select("membership_id").eq("rule_id",rule.id);if(collaborators.data?.length)await db.from("integrity_case_collaborators").upsert(collaborators.data.map((item:any)=>({tenant_id:channel.data.tenant_id,case_id:caseResult.data.id,membership_id:item.membership_id,role:"investigator",added_by_membership_id:null})),{onConflict:"case_id,membership_id"});await db.from("integrity_case_events").insert({report_id:report.data.id,case_id:caseResult.data.id,event_type:"routing_applied",metadata:{rule_id:rule.id,reason:{category:Boolean(rule.category_id),unit:Boolean(rule.unit_id),department:Boolean(rule.department_id),severity:Boolean(rule.severity),reporter_mode:Boolean(rule.reporter_mode),fallback:Boolean(rule.is_fallback)},actions:{committee:Boolean(rule.committee_id),assignee:Boolean(rule.assignee_membership_id),priority:rule.target_priority||null,sla_hours:rule.target_sla_hours||null,collaborators:(collaborators.data||[]).length}}});}
       return res.status(201).json(result.data);
     }),
   );
@@ -166,9 +195,11 @@ export function createIntegrityPublicRouter(getSupabaseAdmin: () => any) {
             .is("deleted_at", null)
             .order("created_at")
         : { data: [] };
-      return res.json({
-        tracking: { ...result.data, attachments: attachments.data || [] },
-      });
+      const source=result.data as any;
+      const messages=(source.messages||[]).map((message:any)=>({id:message.id,author_type:message.author_type,body:message.body,created_at:message.created_at}));
+      const lastOrganization=[...messages].reverse().find((item:any)=>item.author_type!=="reporter");
+      const lastReporter=[...messages].reverse().find((item:any)=>item.author_type==="reporter");
+      return res.json({ tracking: {protocol:source.protocol,status:publicIntegrityStatus(source.status),status_code:source.status==="waiting_information"?"action_required":source.status,created_at:source.created_at,closed_at:source.closed_at||null,action_required:Boolean(source.status==="waiting_information"||(lastOrganization&&(!lastReporter||new Date(lastOrganization.created_at)>new Date(lastReporter.created_at)))),messages,attachments:attachments.data||[]} });
     }),
   );
 

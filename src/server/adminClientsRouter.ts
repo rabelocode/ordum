@@ -148,6 +148,9 @@ export function createAdminClientsRouter(getSupabaseAdmin: any) {
           members,
           onboarding,
           storage,
+          contract,
+          operationalFailures,
+          directMembership,
         ] = await Promise.all([
           db
             .from("tenant_solutions")
@@ -157,7 +160,7 @@ export function createAdminClientsRouter(getSupabaseAdmin: any) {
             .maybeSingle(),
           db
             .from("integrity_settings")
-            .select("configured_at,updated_at")
+            .select("configured_at,updated_at,deployment_state,deployment_updated_at")
             .eq("tenant_id", req.params.id)
             .maybeSingle(),
           db
@@ -188,6 +191,9 @@ export function createAdminClientsRouter(getSupabaseAdmin: any) {
             .eq("tenant_id", req.params.id)
             .eq("bucket", "ordum-integrity")
             .is("deleted_at", null),
+          db.from("commercial_contracts").select("id,status,plan_id,billing_plans(name,version)").eq("tenant_id",req.params.id).order("created_at",{ascending:false}).limit(1).maybeSingle(),
+          db.from("integrity_notification_outbox").select("id",{count:"exact",head:true}).eq("tenant_id",req.params.id).eq("status","failed"),
+          db.from("memberships").select("id").eq("tenant_id",req.params.id).eq("user_id",req.user.id).eq("status","active").maybeSingle(),
         ]);
         const failed = [
           solution,
@@ -197,6 +203,9 @@ export function createAdminClientsRouter(getSupabaseAdmin: any) {
           members,
           onboarding,
           storage,
+          contract,
+          operationalFailures,
+          directMembership,
         ].find((result: any) => result.error);
         if (failed) throw failed.error;
         const now = Date.now();
@@ -206,6 +215,10 @@ export function createAdminClientsRouter(getSupabaseAdmin: any) {
           solution_status: solution.data?.status || "not_contracted",
           activated_at: solution.data?.created_at || null,
           configuration_complete: Boolean(settings.data?.configured_at),
+          deployment_state: settings.data?.deployment_state || "not_started",
+          product_configuration_version: 1,
+          plan: (contract.data as any)?.billing_plans || null,
+          entitlement: { status: solution.data?.status || "not_contracted", source: contract.data ? "contract" : solution.data ? "manual_or_trial" : "none" },
           channels_total: channels.data?.length || 0,
           channels_active: (channels.data || []).filter(
             (channel: any) => channel.active,
@@ -242,9 +255,9 @@ export function createAdminClientsRouter(getSupabaseAdmin: any) {
                     )
                   ? "attention"
                   : "healthy",
-          operational_errors: null,
+          operational_errors: operationalFailures.count || 0,
           operational_errors_reason:
-            "Sem integração de erros por tenant disponível.",
+            "Eventos operacionais sanitizados da outbox do Integridade.",
           last_use_at:
             rows
               .map((item: any) => item.updated_at)
@@ -254,6 +267,7 @@ export function createAdminClientsRouter(getSupabaseAdmin: any) {
             settings.data?.updated_at ||
             null,
           onboarding: onboarding.data || null,
+          workspace_access: directMembership.data ? { available:true,mode:"direct_membership",href:"/#/workspace" } : { available:false,mode:"explicit_membership_required",href:null },
           confidentiality_boundary: "aggregate_only",
         });
       } catch (error: any) {
