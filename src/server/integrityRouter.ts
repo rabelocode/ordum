@@ -208,13 +208,13 @@ export function createIntegrityRouter(
   }
 
   async function scopeCaseQuery(query: any, db: any, req: express.Request) {
-    if (hasPermission(req, "integrity.cases.read")) return query;
+    if (hasPermission(req, "integrity.cases.read")) return { query };
     if (!hasPermission(req, "integrity.cases.read_assigned"))
-      return query.eq("id", "00000000-0000-0000-0000-000000000000");
+      return { query: query.eq("id", "00000000-0000-0000-0000-000000000000") };
     const committees = await scopedCommitteeIds(db, req);
     const filters = [`owner_membership_id.eq.${membershipId(req)}`];
     if (committees.length) filters.push(`committee_id.in.(${committees.join(",")})`);
-    return query.or(filters.join(","));
+    return { query: query.or(filters.join(",")) };
   }
 
   async function findCase(
@@ -228,7 +228,7 @@ export function createIntegrityRouter(
       .select(select)
       .eq("id", id)
       .eq("tenant_id", tenantId(req));
-    query = await scopeCaseQuery(query, db, req);
+    query = (await scopeCaseQuery(query, db, req)).query;
     return query.maybeSingle();
   }
 
@@ -243,7 +243,7 @@ export function createIntegrityRouter(
             "id,status,severity,sla_due_at,first_response_due_at,treatment_due_at,first_action_at,closed_at,created_at,category_id,unit_id",
           )
           .eq("tenant_id", tenantId(req));
-      caseQuery = await scopeCaseQuery(caseQuery, db, req);
+      caseQuery = (await scopeCaseQuery(caseQuery, db, req)).query;
       const caseResult = await caseQuery;
       const accessibleIds = (caseResult.data || []).map((item: any) => item.id).filter(Boolean);
       let taskQuery = db
@@ -326,7 +326,7 @@ export function createIntegrityRouter(
           { count: "exact" },
         )
         .eq("tenant_id", tenantId(req));
-      query = await scopeCaseQuery(query, db, req);
+      query = (await scopeCaseQuery(query, db, req)).query;
       if (q.search)
         query = query.ilike("protocol", `%${q.search.replace(/[%_,]/g, "")}%`);
       if (q.status) query = query.eq("status", q.status);

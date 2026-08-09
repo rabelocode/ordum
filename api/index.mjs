@@ -3859,17 +3859,17 @@ function createIntegrityRouter(getSupabaseAdmin2, authOverrides) {
     return (result.data || []).map((item) => item.committee_id);
   }
   async function scopeCaseQuery(query, db, req) {
-    if (hasPermission2(req, "integrity.cases.read")) return query;
+    if (hasPermission2(req, "integrity.cases.read")) return { query };
     if (!hasPermission2(req, "integrity.cases.read_assigned"))
-      return query.eq("id", "00000000-0000-0000-0000-000000000000");
+      return { query: query.eq("id", "00000000-0000-0000-0000-000000000000") };
     const committees = await scopedCommitteeIds(db, req);
     const filters = [`owner_membership_id.eq.${membershipId(req)}`];
     if (committees.length) filters.push(`committee_id.in.(${committees.join(",")})`);
-    return query.or(filters.join(","));
+    return { query: query.or(filters.join(",")) };
   }
   async function findCase(db, req, id, select = "id,tenant_id,report_id,status,lock_version,owner_membership_id,first_action_at") {
     let query = db.from("integrity_cases").select(select).eq("id", id).eq("tenant_id", tenantId(req));
-    query = await scopeCaseQuery(query, db, req);
+    query = (await scopeCaseQuery(query, db, req)).query;
     return query.maybeSingle();
   }
   router.get(
@@ -3880,7 +3880,7 @@ function createIntegrityRouter(getSupabaseAdmin2, authOverrides) {
       let caseQuery = db.from("integrity_cases").select(
         "id,status,severity,sla_due_at,first_response_due_at,treatment_due_at,first_action_at,closed_at,created_at,category_id,unit_id"
       ).eq("tenant_id", tenantId(req));
-      caseQuery = await scopeCaseQuery(caseQuery, db, req);
+      caseQuery = (await scopeCaseQuery(caseQuery, db, req)).query;
       const caseResult = await caseQuery;
       const accessibleIds = (caseResult.data || []).map((item) => item.id).filter(Boolean);
       let taskQuery = db.from("integrity_case_tasks").select("id", {
@@ -3939,7 +3939,7 @@ function createIntegrityRouter(getSupabaseAdmin2, authOverrides) {
         "id,protocol,status,severity,priority,sla_due_at,first_response_due_at,treatment_due_at,first_action_at,created_at,updated_at,owner_membership_id,lock_version,integrity_categories(name),integrity_units(name),integrity_reports!inner(subject)",
         { count: "exact" }
       ).eq("tenant_id", tenantId(req));
-      query = await scopeCaseQuery(query, db, req);
+      query = (await scopeCaseQuery(query, db, req)).query;
       if (q.search)
         query = query.ilike("protocol", `%${q.search.replace(/[%_,]/g, "")}%`);
       if (q.status) query = query.eq("status", q.status);
