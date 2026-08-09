@@ -153,7 +153,7 @@ export function createAdminClientsRouter(getSupabaseAdmin: any) {
             .from("tenant_solutions")
             .select("status,created_at,updated_at,solutions!inner(key)")
             .eq("tenant_id", req.params.id)
-            .eq("solutions.key", "integrity")
+            .eq("solutions.key", "integridade")
             .maybeSingle(),
           db
             .from("integrity_settings")

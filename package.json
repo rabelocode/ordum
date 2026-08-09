@@ -19,6 +19,7 @@
     "typecheck": "tsc --noEmit",
     "test": "node --import tsx --test test/**/*.test.ts",
     "test:commercial-e2e": "npx tsx scripts/run-e2e.ts",
+    "test:integrity-e2e": "npx tsx scripts/run-integrity-e2e.ts",
     "test:e2e": "playwright test",
     "test:migrations": "node scripts/validate-migrations.mjs",
     "check:secrets": "node scripts/check-secrets.mjs",

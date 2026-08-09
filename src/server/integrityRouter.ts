@@ -148,7 +148,7 @@ export function createIntegrityRouter(
   router.use(
     auth.authenticateRequest,
     auth.resolveTenantContext,
-    auth.requireTenantSolution("integrity"),
+    auth.requireTenantSolution("integridade"),
   );
   const asyncHandler =
     (fn: express.RequestHandler): express.RequestHandler =>
