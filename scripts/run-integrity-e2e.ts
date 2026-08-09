@@ -108,7 +108,8 @@ async function runBrowserQa(scenarios: Array<{ name: string; user: FixtureUser; 
       await page.evaluate(() => { window.location.hash = "#/workspace/integridade"; });
       await page.reload({ waitUntil: "networkidle" });
       await page.getByRole("heading", { name: "Ordum Integridade", exact: true }).waitFor();
-      await page.getByRole("button", { name: "Casos", exact: true }).click();
+      const casesButton = page.locator('nav[aria-label] button').filter({ hasText: "Casos" });
+      try { await casesButton.click({ timeout: 15000 }); } catch (error) { const visible=(await page.locator("body").innerText()).replace(/\s+/g," ").slice(0,600); throw new Error(`${scenario.name}: navegação de casos indisponível (${visible}); ${String(error)}`); }
       if (scenario.expectedCase) {
         try {
           await page.getByText(subject, { exact: true }).first().waitFor({ timeout: 15000 });
@@ -132,7 +133,7 @@ async function runBrowserQa(scenarios: Array<{ name: string; user: FixtureUser; 
         await page.getByRole("button", { name: "Implantação" }).click();
         await page.getByRole("heading", { name: "Coloque o canal em operação" }).waitFor();
         await page.getByText(/etapas · 100%/).waitFor();
-        await page.getByRole("button", { name: "Pendências" }).click();
+        await page.getByRole("button", { name: "Pendências", exact: true }).click();
         await page.getByRole("heading", { name: "Central de pendências" }).waitFor();
       } else if (await page.getByRole("button", { name: "Configurações" }).count()) {
         failures.push(`${scenario.name}: configurações expostas sem permissão`);
@@ -199,7 +200,7 @@ export async function runIntegrityE2E(): Promise<Evidence> {
     expect(await workspace("/settings/departments", { method: "POST", body: JSON.stringify({ unit_id: branch.id, name: "Administrativo", code: `ADM-${suffix}`, active: true }) }), 201, "branch department");
     const committee = expect(await workspace("/settings/committees", { method: "POST", body: JSON.stringify({ name: "Comitê de Ética", member_ids: [assignedInvestigator.membershipId], active: true }) }), 201, "committee").committee;
     const routing = expect(await workspace("/settings/routing", { method: "POST", body: JSON.stringify({ name: "Rota piloto", category_id: category.id, unit_id: unit.id, department_id: department.id, severity: "high", reporter_mode: "anonymous", requires_conflict:false, assignee_membership_id: assignedInvestigator.membershipId, committee_id: committee.id, collaborator_ids: [compliance.membershipId], target_sla_hours: 36, target_priority: "urgent", escalation_committee_id:committee.id, priority: 1, active: true, is_fallback: false }) }), 201, "routing").routing_rule;
-    expect(await workspace("/settings/routing", { method: "POST", body: JSON.stringify({ name: "Rota conflitante", category_id: category.id, unit_id: unit.id, assignee_membership_id: adminA.membershipId, priority: 1, active: true, is_fallback: false }) }), 409, "routing conflict");
+    expect(await workspace("/settings/routing", { method: "POST", body: JSON.stringify({ name: "Rota conflitante", category_id: category.id, unit_id: unit.id, department_id:department.id, severity:"high", reporter_mode:"anonymous", requires_conflict:false, assignee_membership_id: adminA.membershipId, priority: 1, active: true, is_fallback: false }) }), 409, "routing conflict");
     expect(await workspace("/settings/routing", { method: "POST", body: JSON.stringify({ name: "Escalonamento por conflito", category_id: category.id, unit_id: unit.id, committee_id:committee.id, requires_conflict:true, escalation_membership_id:adminA.membershipId, escalation_committee_id:committee.id, priority:2, active:true, is_fallback:false }) }),201,"conflict escalation rule");
     const preview = expect(await workspace("/settings/routing/preview", { method: "POST", body: JSON.stringify({ category_id: category.id, unit_id: unit.id, department_id: department.id, severity:"high", reporter_mode:"anonymous", has_conflict:false }) }), 200, "routing preview");
     if (preview.selected?.id !== routing.id || preview.deterministic !== true) throw new Error("preview de roteamento não determinístico");

@@ -305,6 +305,11 @@ export function createIntegrityRouter(
     if (value.department_id && (departments.data.length !== 1 || (value.unit_id && departments.data[0].unit_id !== value.unit_id))) return "Departamento inválido para a unidade selecionada.";
     return null;
   }
+  const routingConditionKeys = ["category_id","unit_id","department_id","severity","reporter_mode","requires_conflict"] as const;
+  const routingSpecificity = (rule: Record<string, unknown>) => routingConditionKeys.filter((key) => rule[key] != null).length;
+  const routingConflict = (left: Record<string, unknown>, right: Record<string, unknown>) =>
+    routingSpecificity(left) === routingSpecificity(right) &&
+    routingConditionKeys.every((key) => left[key] == null || right[key] == null || left[key] === right[key]);
 
   async function matchingReportIds(db: any, tenant: string, search?: string) {
     if (!search) return [] as string[];
@@ -1941,14 +1946,13 @@ export function createIntegrityRouter(
       const db = getSupabaseAdmin();
       const value = parsed.data;
       const { collaborator_ids, ...ruleValues } = value;
-      let conflictQuery = db.from("integrity_routing_rules").select("id,name")
+      const conflictQuery = db.from("integrity_routing_rules").select("*")
         .eq("tenant_id", tenantId(req)).eq("status", "active").eq("priority", value.priority)
         .eq("is_fallback", value.is_fallback);
-      conflictQuery = value.category_id ? conflictQuery.eq("category_id", value.category_id) : conflictQuery.is("category_id", null);
-      conflictQuery = value.unit_id ? conflictQuery.eq("unit_id", value.unit_id) : conflictQuery.is("unit_id", null);
-      const conflicting = await conflictQuery.limit(1);
+      const conflicting = await conflictQuery;
       if (conflicting.error) return res.status(500).json({ error: "Não foi possível validar conflitos de roteamento." });
-      if (conflicting.data?.length) return res.status(409).json({ error: `Conflito com a regra ${conflicting.data[0].name}. Ajuste escopo ou prioridade.` });
+      const conflictingRule = (conflicting.data || []).find((candidate: any) => routingConflict(value, candidate));
+      if (conflictingRule) return res.status(409).json({ error: `Conflito com a regra ${conflictingRule.name}. Ajuste escopo ou prioridade.` });
       const referenceError = await validateRoutingReferences(db, tenantId(req), value);
       if (referenceError) return res.status(400).json({ error: referenceError });
       const rule = await db
@@ -2064,14 +2068,13 @@ export function createIntegrityRouter(
       const { collaborator_ids, ...ruleValues } = value;
       const referenceError = await validateRoutingReferences(db, tenantId(req), value);
       if (referenceError) return res.status(400).json({ error: referenceError });
-      let conflictQuery = db.from("integrity_routing_rules").select("id,name").eq("tenant_id", tenantId(req))
+      const conflictQuery = db.from("integrity_routing_rules").select("*").eq("tenant_id", tenantId(req))
         .neq("id", req.params.id).eq("status", "active").eq("priority", value.priority).eq("is_fallback", value.is_fallback);
-      conflictQuery = value.category_id ? conflictQuery.eq("category_id", value.category_id) : conflictQuery.is("category_id", null);
-      conflictQuery = value.unit_id ? conflictQuery.eq("unit_id", value.unit_id) : conflictQuery.is("unit_id", null);
-      const conflicting = await conflictQuery.limit(1);
+      const conflicting = await conflictQuery;
       if (conflicting.error) return res.status(500).json({ error: "Não foi possível validar conflitos." });
-      if (value.status === "active" && conflicting.data?.length)
-        return res.status(409).json({ error: `Conflito com a regra ${conflicting.data[0].name}.` });
+      const conflictingRule = (conflicting.data || []).find((candidate: any) => routingConflict(value, candidate));
+      if (value.status === "active" && conflictingRule)
+        return res.status(409).json({ error: `Conflito com a regra ${conflictingRule.name}.` });
       const saved = await db.from("integrity_routing_rules").update({
         ...ruleValues,
         active: value.status === "active",
