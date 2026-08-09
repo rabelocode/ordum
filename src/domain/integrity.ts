@@ -39,6 +39,7 @@ export function publicIntegrityMessages<
 
 export function integrityDashboard(
   cases: Array<{
+    id?: string;
     status: string;
     severity: string;
     sla_due_at?: string | null;
@@ -47,6 +48,11 @@ export function integrityDashboard(
     created_at: string;
     first_action_at?: string | null;
     closed_at?: string | null;
+    owner_membership_id?: string | null;
+    category_id?: string | null;
+    unit_id?: string | null;
+    integrity_categories?: { name?: string | null } | null;
+    integrity_units?: { name?: string | null } | null;
   }>,
   now = new Date(),
 ) {
@@ -60,6 +66,28 @@ export function integrityDashboard(
             3_600_000,
         )
       : null;
+  const distribution = (
+    key: "severity" | "category" | "unit",
+  ) => {
+    const counts = new Map<string, number>();
+    for (const item of cases) {
+      const value =
+        key === "severity"
+          ? item.severity
+          : key === "category"
+            ? item.integrity_categories?.name || "Sem categoria"
+            : item.integrity_units?.name || "Sem unidade";
+      counts.set(value, (counts.get(value) || 0) + 1);
+    }
+    return [...counts.entries()]
+      .map(([label, count]) => ({ label, count }))
+      .sort((a, b) => b.count - a.count || a.label.localeCompare(b.label));
+  };
+  const evolution = new Map<string, number>();
+  for (const item of cases) {
+    const day = item.created_at.slice(0, 10);
+    evolution.set(day, (evolution.get(day) || 0) + 1);
+  }
   return {
     total: cases.length,
     open: cases.filter(open).length,
@@ -97,6 +125,14 @@ export function integrityDashboard(
         open(item),
     ).length,
     closed: cases.filter((item) => item.status === "closed").length,
+    unassigned: cases.filter((item) => open(item) && !item.owner_membership_id)
+      .length,
+    by_category: distribution("category"),
+    by_unit: distribution("unit"),
+    by_severity: distribution("severity"),
+    evolution: [...evolution.entries()]
+      .map(([date, count]) => ({ date, count }))
+      .sort((a, b) => a.date.localeCompare(b.date)),
     average_first_action_hours: averageHours(
       cases
         .filter((item) => item.first_action_at)

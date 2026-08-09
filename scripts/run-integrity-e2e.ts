@@ -177,6 +177,8 @@ export async function runIntegrityE2E(): Promise<Evidence> {
     expect(await workspace(`/settings/committees/${committee.id}`, { method: "PATCH", body: JSON.stringify({ name: "Comitê de Ética e Conduta", description: "Comitê do piloto", member_ids: [assignedInvestigator.membershipId, unassignedInvestigator.membershipId], active: true, status: "active" }) }), 200, "committee update");
     expect(await workspace(`/cases/${caseRow.id}`, {}, unassignedInvestigator, tenantA.id), 200, "committee investigator read");
     expect(await workspace(`/settings/routing/${routing.id}`, { method: "PATCH", body: JSON.stringify({ name: "Rota piloto atualizada", category_id: category.id, unit_id: unit.id, assignee_membership_id: assignedInvestigator.membershipId, committee_id: committee.id, priority: 2, active: true, is_fallback: false, status: "active" }) }), 200, "routing update");
+    const channelTest = expect(await workspace("/settings/channel-test", { method: "POST", body: "{}" }), 200, "channel readiness test");
+    if (channelTest.slug !== channelSlug || !channelTest.tested_at) throw new Error("teste do canal não persistido");
     const configured = expect(await workspace("/settings"), 200, "configuration checklist");
     if (configured.configuration_status?.operational !== true) throw new Error("checklist de configuração não operacional");
     expect(await workspace(`/cases/${caseRow.id}/transitions`, { method: "POST", body: JSON.stringify({ to_status: "closed", reason: "inválida", lock_version: caseRow.lock_version }) }), 409, "invalid transition");
@@ -228,7 +230,17 @@ export async function runIntegrityE2E(): Promise<Evidence> {
     const forbiddenKeys = ["description", "identity", "messages", "evidence", "conclusion", "notes"];
     if (summary.confidentiality_boundary !== "aggregate_only" || forbiddenKeys.some((key) => Object.hasOwn(summary, key))) throw new Error("control plane expôs data plane");
     const dashboard = expect(await workspace("/dashboard"), 200, "dashboard");
-    if (!dashboard.updated_at) throw new Error("dashboard sem atualização");
+    if (!dashboard.updated_at || !Array.isArray(dashboard.by_category) || !Array.isArray(dashboard.evolution)) throw new Error("dashboard operacional incompleto");
+    const filtered = expect(await workspace(`/cases?category_id=${category.id}&unit_id=${unit.id}&committee_id=${committee.id}&page=1&limit=1&order=created_at&direction=desc`), 200, "combined filters and pagination");
+    if (filtered.total < 1 || filtered.cases.length !== 1 || filtered.total_pages < 1) throw new Error("filtros/paginação não retornaram o caso esperado");
+    const exported = await workspace(`/cases/export.csv?category_id=${category.id}`);
+    expect(exported, 200, "cases CSV export");
+    if (!exported.headers.get("content-type")?.includes("text/csv")) throw new Error("exportação de listagem não retornou CSV");
+    const reportExport = await workspace(`/cases/${caseRow.id}/report.csv`);
+    expect(reportExport, 200, "case report CSV export");
+    if (!reportExport.headers.get("content-disposition")?.includes("integrity-")) throw new Error("relatório individual sem nome de arquivo");
+    const auditRows = value(await db.from("platform_audit_logs").select("action").eq("metadata->>tenant_id", tenantA.id).in("action", ["integrity.cases.exported", "integrity.case_report.exported", "integrity.channel.tested"]), "integrity audit");
+    if (new Set(auditRows.map((row: any) => row.action)).size !== 3) throw new Error("auditoria de governança incompleta");
 
     let limited = false;
     const fakeProtocol = `BAD-${crypto.randomBytes(6).toString("hex")}`;
@@ -238,7 +250,7 @@ export async function runIntegrityE2E(): Promise<Evidence> {
       if (attempt.status !== 404) throw new Error(`rate limit tentativa ${i + 1}: HTTP ${attempt.status}`);
     }
     if (!limited) throw new Error("rate limit persistente não bloqueou");
-    Object.assign(evidence, { anonymous: true, identified: true, tenantIsolation: true, rbac: true, assignedInvestigator: true, committeeScope: true, compliance: true, protectedIdentity: true, configurationLifecycle: true, routingPreview: true, orphanProtection: true, conflict: true, storagePrivate: true, signedUrls: true, tasks: true, messagesBoundary: true, recommendation: true, decision: true, reopen: true, adminAggregateOnly: true, dashboard: true });
+    Object.assign(evidence, { anonymous: true, identified: true, tenantIsolation: true, rbac: true, assignedInvestigator: true, committeeScope: true, compliance: true, protectedIdentity: true, configurationLifecycle: true, routingPreview: true, orphanProtection: true, conflict: true, storagePrivate: true, signedUrls: true, tasks: true, messagesBoundary: true, recommendation: true, decision: true, reopen: true, adminAggregateOnly: true, dashboard: true, channelReadiness: true, filtersPagination: true, exportsAudited: true });
   } catch (error) {
     primaryError = error;
   } finally {

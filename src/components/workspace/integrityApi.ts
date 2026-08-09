@@ -27,3 +27,22 @@ export async function integrityFileApi<T>(tenantId: string, path: string, file: 
   if (!response.ok) throw new Error(body.error || "Não foi possível enviar o arquivo.");
   return body;
 }
+
+export async function integrityDownload(tenantId: string, path: string, fallbackName: string) {
+  const headers = await workspaceHeaders(tenantId);
+  const response = await fetch(`/api/workspace/integrity${path}`, { headers });
+  if (!response.ok) {
+    const body = await response.json().catch(() => ({}));
+    throw new Error(body.error || "Não foi possível preparar a exportação.");
+  }
+  const disposition = response.headers.get("content-disposition") || "";
+  const match = disposition.match(/filename="?([^";]+)"?/i);
+  const url = URL.createObjectURL(await response.blob());
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = match?.[1] || fallbackName;
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  URL.revokeObjectURL(url);
+}

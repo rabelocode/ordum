@@ -5,6 +5,7 @@ import {
   BarChart3,
   CheckCircle2,
   Clock,
+  Download,
   MessageSquare,
   RefreshCw,
   Search,
@@ -15,8 +16,9 @@ import {
 import { Button } from "../ui/Button";
 import { Input } from "../ui/Input";
 import { Skeleton } from "../ui/Skeleton";
-import { integrityApi, integrityFileApi, type ApiState } from "./integrityApi";
+import { integrityApi, integrityDownload, integrityFileApi, type ApiState } from "./integrityApi";
 import { IntegrityConfigurationStatus } from "./integrity/IntegrityConfigurationStatus";
+import { IntegrityDashboard } from "./integrity/IntegrityDashboard";
 import { useIntegrityCasePermissions } from "./integrity/useIntegrityCasePermissions";
 
 type Props = {
@@ -104,13 +106,13 @@ export function IntegrityModuleView({ tenant, user, onBack }: Props) {
         </nav>
       </header>
       {section === "dashboard" && (
-        <Dashboard
+        <IntegrityDashboard
           tenantId={tenant.id}
           onOpenCases={() => setSection("cases")}
         />
       )}
       {section === "cases" && (
-        <CaseList tenantId={tenant.id} onSelect={setCaseId} />
+        <CaseList tenantId={tenant.id} canExport={permissions.includes("integrity.exports.execute")} onSelect={setCaseId} />
       )}
       {section === "settings" && canSettings && (
         <SettingsPanel tenantId={tenant.id} />
@@ -119,123 +121,31 @@ export function IntegrityModuleView({ tenant, user, onBack }: Props) {
   );
 }
 
-function Dashboard({
-  tenantId,
-  onOpenCases,
-}: {
-  tenantId: string;
-  onOpenCases: () => void;
-}) {
-  const [state, setState] = useState<ApiState<any>>({
-    data: null,
-    loading: true,
-    error: "",
-  });
-  useEffect(() => {
-    integrityApi<any>(tenantId, "/dashboard")
-      .then((data) => setState({ data, loading: false, error: "" }))
-      .catch((error) =>
-        setState({ data: null, loading: false, error: error.message }),
-      );
-  }, [tenantId]);
-  if (state.loading)
-    return (
-      <Panel>
-        <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-          {Array.from({ length: 8 }).map((_, index) => (
-            <Skeleton key={index} className="h-28 rounded-2xl" />
-          ))}
-        </div>
-        <Skeleton className="mt-6 h-52 rounded-2xl" />
-      </Panel>
-    );
-  if (state.error)
-    return (
-      <Panel>
-        <ErrorState message={state.error} />
-      </Panel>
-    );
-  const metrics = [
-    ["Abertos", state.data.open],
-    ["Novos", state.data.received],
-    ["Em triagem", state.data.triage],
-    ["Em investigação", state.data.investigation],
-    ["Aguardando informação", state.data.waiting_information],
-    ["1ª resposta vencida", state.data.first_response_overdue],
-    ["Tratamento vencido", state.data.treatment_overdue],
-    ["Tarefas vencidas", state.data.tasks_overdue],
-    ["Encerrados", state.data.closed],
-  ];
-  return (
-    <Panel>
-      <div className="mb-6 flex items-end justify-between gap-4">
-        <div>
-          <h2 className="text-2xl font-bold">Visão operacional</h2>
-          <p className="mt-1 text-sm text-[#626866]">
-            Indicadores calculados a partir dos casos reais deste tenant.
-          </p>
-        </div>
-        <Button onClick={onOpenCases}>Abrir caixa de casos</Button>
-      </div>
-      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-        {metrics.map(([label, value]) => (
-          <div
-            key={label as string}
-            className="rounded-2xl border border-[#DDD8CF] bg-white p-5"
-          >
-            <div className="text-xs font-bold uppercase tracking-wider text-[#626866]">
-              {label}
-            </div>
-            <div className="mt-3 text-3xl font-bold">{value ?? "—"}</div>
-          </div>
-        ))}
-      </div>
-      <div className="mt-6 grid gap-4 md:grid-cols-3">
-        <Summary
-          icon={<Clock />}
-          label="Primeira ação média"
-          value={
-            state.data.average_first_action_hours == null
-              ? "—"
-              : `${state.data.average_first_action_hours}h`
-          }
-        />
-        <Summary
-          icon={<CheckCircle2 />}
-          label="Resolução média"
-          value={
-            state.data.average_resolution_hours == null
-              ? "—"
-              : `${state.data.average_resolution_hours}h`
-          }
-        />
-        <Summary
-          icon={<AlertTriangle />}
-          label="SLA nas próximas 24h"
-          value={String(state.data.sla_due_soon ?? "—")}
-        />
-      </div>
-      <p className="mt-4 text-right text-xs text-[#626866]">
-        Atualizado em {new Date(state.data.updated_at).toLocaleString("pt-BR")}
-      </p>
-    </Panel>
-  );
-}
-
 function CaseList({
   tenantId,
+  canExport,
   onSelect,
 }: {
   tenantId: string;
+  canExport: boolean;
   onSelect: (id: string) => void;
 }) {
-  const [filters, setFilters] = useState({
-    search: "",
-    status: "",
-    severity: "",
-    sla: "",
-  });
+  const initial = new URLSearchParams(window.location.search);
+  const [filters, setFilters] = useState(() => ({
+    search: initial.get("ic_search") || "",
+    status: initial.get("ic_status") || "",
+    severity: initial.get("ic_severity") || "",
+    sla: initial.get("ic_sla") || "",
+    category_id: initial.get("ic_category") || "",
+    unit_id: initial.get("ic_unit") || "",
+    committee_id: initial.get("ic_committee") || "",
+    owner_id: initial.get("ic_owner") || "",
+    order: initial.get("ic_order") || "created_at",
+    direction: initial.get("ic_direction") || "desc",
+  }));
   const [page, setPage] = useState(1);
+  const [options, setOptions] = useState<any>({ categories: [], units: [], committees: [], owners: [] });
+  const [exporting, setExporting] = useState(false);
   const [state, setState] = useState<ApiState<any>>({
     data: null,
     loading: true,
@@ -255,24 +165,50 @@ function CaseList({
       .catch((error) =>
         setState({ data: null, loading: false, error: error.message }),
       );
-  }, [
-    tenantId,
-    page,
-    filters.search,
-    filters.status,
-    filters.severity,
-    filters.sla,
-  ]);
+  }, [tenantId, page, filters]);
+  useEffect(() => {
+    integrityApi<any>(tenantId, "/filters").then(setOptions).catch(() => undefined);
+  }, [tenantId]);
+  useEffect(() => {
+    const url = new URL(window.location.href);
+    for (const key of [...url.searchParams.keys()]) if (key.startsWith("ic_")) url.searchParams.delete(key);
+    Object.entries(filters).forEach(([key, value]) => {
+      const defaults: Record<string, string> = { order: "created_at", direction: "desc" };
+      if (value && value !== defaults[key]) url.searchParams.set(`ic_${key.replace("_id", "")}`, value);
+    });
+    window.history.replaceState({}, "", url);
+  }, [filters]);
   useEffect(load, [load]);
+  const clearFilters = () => {
+    setPage(1);
+    setFilters({ search: "", status: "", severity: "", sla: "", category_id: "", unit_id: "", committee_id: "", owner_id: "", order: "created_at", direction: "desc" });
+  };
+  const exportCases = async () => {
+    setExporting(true);
+    try {
+      const query = new URLSearchParams(Object.fromEntries(Object.entries(filters).filter(([, value]) => value)));
+      await integrityDownload(tenantId, `/cases/export.csv?${query}`, "casos-integridade.csv");
+    } finally {
+      setExporting(false);
+    }
+  };
   return (
     <Panel>
-      <div className="mb-5">
-        <h2 className="text-2xl font-bold">Caixa de casos</h2>
-        <p className="mt-1 text-sm text-[#626866]">
-          Pesquisa, prioridade, risco e prazo em uma única fila.
-        </p>
+      <div className="mb-5 flex flex-wrap items-end justify-between gap-3">
+        <div>
+          <h2 className="text-2xl font-bold">Caixa de casos</h2>
+          <p className="mt-1 text-sm text-[#626866]">Pesquisa, prioridade, risco e prazo em uma única fila.</p>
+        </div>
+        <div className="flex flex-wrap gap-2">
+          <Button variant="outline" onClick={clearFilters}>Limpar filtros</Button>
+          {canExport ? (
+            <Button variant="outline" disabled={exporting} onClick={exportCases}>
+              <Download className="mr-2 h-4 w-4" />{exporting ? "Exportando..." : "Exportar CSV"}
+            </Button>
+          ) : null}
+        </div>
       </div>
-      <div className="mb-5 grid gap-3 rounded-2xl border border-[#DDD8CF] bg-white p-4 md:grid-cols-4">
+      <div className="mb-5 grid gap-3 rounded-2xl border border-[#DDD8CF] bg-white p-4 sm:grid-cols-2 xl:grid-cols-4">
         <label className="relative md:col-span-1">
           <Search className="absolute left-3 top-3 h-4 w-4 text-gray-400" />
           <Input
@@ -328,6 +264,12 @@ function CaseList({
             ["overdue", "Vencido"],
           ]}
         />
+        <FilterSelect label="Categoria" value={filters.category_id} onChange={(value) => { setPage(1); setFilters({ ...filters, category_id: value }); }} options={options.categories.map((item: any) => [item.id, item.name])} />
+        <FilterSelect label="Unidade/setor" value={filters.unit_id} onChange={(value) => { setPage(1); setFilters({ ...filters, unit_id: value }); }} options={options.units.map((item: any) => [item.id, item.name])} />
+        <FilterSelect label="Comitê" value={filters.committee_id} onChange={(value) => { setPage(1); setFilters({ ...filters, committee_id: value }); }} options={options.committees.map((item: any) => [item.id, item.name])} />
+        <FilterSelect label="Responsável" value={filters.owner_id} onChange={(value) => { setPage(1); setFilters({ ...filters, owner_id: value }); }} options={options.owners.map((item: any) => [item.id, item.name])} />
+        <FilterSelect label="Ordenar" value={filters.order} onChange={(value) => setFilters({ ...filters, order: value })} options={[["created_at", "Mais recentes"], ["updated_at", "Atualizados"], ["severity", "Severidade"], ["treatment_due_at", "Prazo"]]} />
+        <FilterSelect label="Direção" value={filters.direction} onChange={(value) => setFilters({ ...filters, direction: value })} options={[["desc", "Decrescente"], ["asc", "Crescente"]]} includeEmpty={false} />
       </div>
       {state.loading ? (
         <div className="space-y-3">
@@ -352,6 +294,7 @@ function CaseList({
                     <th>Severidade</th>
                     <th>Categoria</th>
                     <th>Unidade</th>
+                    <th>Responsável / comitê</th>
                     <th>SLA</th>
                   </tr>
                 </thead>
@@ -378,6 +321,7 @@ function CaseList({
                       </td>
                       <td>{item.integrity_categories?.name || "—"}</td>
                       <td>{item.integrity_units?.name || "—"}</td>
+                      <td>{item.owner_name || item.integrity_committees?.name || "Sem responsável"}</td>
                       <td
                         className={
                           operationalDueAt(item) &&
@@ -448,6 +392,7 @@ function CaseDetailOperational({
     canRecommend,
     canReadIdentity,
   } = useIntegrityCasePermissions(permissions);
+  const canExportReport = permissions.includes("integrity.case_report.export");
   const [state, setState] = useState<ApiState<any>>({
     data: null,
     loading: true,
@@ -667,6 +612,19 @@ function CaseDetailOperational({
       setIdentity(result.identity || null);
     }, "Identidade protegida consultada com autorização.");
   }
+  async function exportReport() {
+    setBusy(true);
+    setFeedback("");
+    try {
+      await integrityDownload(tenantId, `/cases/${caseId}/report.csv`, `integrity-${state.data.protocol}.csv`);
+      setFeedback("Relatório exportado e registrado na auditoria.");
+      await load();
+    } catch (error) {
+      setFeedback(error instanceof Error ? error.message : "Não foi possível exportar o relatório.");
+    } finally {
+      setBusy(false);
+    }
+  }
   if (state.loading)
     return (
       <Panel>
@@ -710,6 +668,7 @@ function CaseDetailOperational({
             </div>
           </div>
           <div className="flex gap-2">
+            {canExportReport ? <Button type="button" size="sm" variant="outline" disabled={busy} onClick={exportReport}><Download className="mr-2 h-4 w-4" />Exportar</Button> : null}
             <Risk value={item.severity} />
             <span className="rounded-full bg-gray-100 px-3 py-1 text-xs font-bold">
               {statusLabel(item.status)}
@@ -1104,346 +1063,12 @@ function CaseDetailOperational({
                     className="border-l-2 border-blue-100 pl-3 text-sm"
                   >
                     <strong>{eventLabel(event.event_type)}</strong>
+                    <div className="text-xs font-medium text-[#626866]">{event.actor_name || "Sistema Ordum"}</div>
                     <div className="text-xs text-gray-500">
                       {new Date(event.created_at).toLocaleString("pt-BR")}
                     </div>
                     {event.note && <p>{event.note}</p>}
-                  </div>
-                ))}
-              </div>
-            </Card>
-          </aside>
-        </div>
-      </Panel>
-    </div>
-  );
-}
-
-function CaseDetail({
-  tenantId,
-  caseId,
-  canAssign,
-  onBack,
-}: {
-  tenantId: string;
-  caseId: string;
-  canAssign: boolean;
-  onBack: () => void;
-}) {
-  const [state, setState] = useState<ApiState<any>>({
-    data: null,
-    loading: true,
-    error: "",
-  });
-  const [timeline, setTimeline] = useState<any[]>([]);
-  const [messages, setMessages] = useState<any[]>([]);
-  const [members, setMembers] = useState<any[]>([]);
-  const [assignee, setAssignee] = useState("");
-  const [assignmentReason, setAssignmentReason] = useState("");
-  const [note, setNote] = useState("");
-  const [publicMessage, setPublicMessage] = useState(false);
-  const [busy, setBusy] = useState(false);
-  const [actionError, setActionError] = useState("");
-  const load = useCallback(async () => {
-    setState((current) => ({ ...current, loading: true, error: "" }));
-    try {
-      const [detail, events, communication, memberData] = await Promise.all([
-        integrityApi<any>(tenantId, `/cases/${caseId}`),
-        integrityApi<any>(tenantId, `/cases/${caseId}/timeline`),
-        integrityApi<any>(tenantId, `/cases/${caseId}/messages`),
-        canAssign
-          ? integrityApi<any>(tenantId, "/members")
-          : Promise.resolve({ members: [] }),
-      ]);
-      setState({ data: detail.case, loading: false, error: "" });
-      setTimeline(events.events);
-      setMessages(communication.messages);
-      setMembers(memberData.members);
-    } catch (error: any) {
-      setState({ data: null, loading: false, error: error.message });
-    }
-  }, [tenantId, caseId, canAssign]);
-  useEffect(() => {
-    load();
-  }, [load]);
-  async function transition(to_status: string) {
-    const reason = ["closed", "reopened"].includes(to_status)
-      ? note.trim()
-      : note.trim() || undefined;
-    setBusy(true);
-    setActionError("");
-    try {
-      await integrityApi(tenantId, `/cases/${caseId}/transitions`, {
-        method: "POST",
-        body: JSON.stringify({
-          to_status,
-          reason,
-          lock_version: state.data.lock_version,
-        }),
-      });
-      setNote("");
-      await load();
-    } catch (error: any) {
-      setActionError(error.message);
-    } finally {
-      setBusy(false);
-    }
-  }
-  async function sendMessage(event: React.FormEvent) {
-    event.preventDefault();
-    setBusy(true);
-    setActionError("");
-    try {
-      await integrityApi(tenantId, `/cases/${caseId}/messages`, {
-        method: "POST",
-        body: JSON.stringify({
-          body: note,
-          visible_to_reporter: publicMessage,
-        }),
-      });
-      setNote("");
-      await load();
-    } catch (error: any) {
-      setActionError(error.message);
-    } finally {
-      setBusy(false);
-    }
-  }
-  async function assign(event: React.FormEvent) {
-    event.preventDefault();
-    setBusy(true);
-    setActionError("");
-    try {
-      await integrityApi(tenantId, `/cases/${caseId}/assignments`, {
-        method: "POST",
-        body: JSON.stringify({
-          membership_id: assignee,
-          reason: assignmentReason,
-        }),
-      });
-      setAssignmentReason("");
-      await load();
-    } catch (error: any) {
-      setActionError(error.message);
-    } finally {
-      setBusy(false);
-    }
-  }
-  if (state.loading)
-    return (
-      <Panel>
-        <Skeleton className="h-16 rounded-xl" />
-        <div className="mt-5 grid gap-5 lg:grid-cols-3">
-          <Skeleton className="h-[520px] rounded-2xl lg:col-span-2" />
-          <Skeleton className="h-[520px] rounded-2xl" />
-        </div>
-      </Panel>
-    );
-  if (state.error)
-    return (
-      <Panel>
-        <button
-          onClick={onBack}
-          className="mb-4 flex items-center gap-2 text-sm"
-        >
-          <ArrowLeft className="h-4 w-4" />
-          Voltar
-        </button>
-        <ErrorState message={state.error} />
-      </Panel>
-    );
-  const item = state.data;
-  const report = item.integrity_reports;
-  return (
-    <div className="min-h-full bg-[#F6F5F2]">
-      <header className="border-b border-[#DDD8CF] bg-white px-4 py-4 sm:px-6">
-        <div className="mx-auto flex max-w-7xl flex-wrap items-center justify-between gap-4">
-          <div className="flex items-center gap-3">
-            <button
-              aria-label="Voltar"
-              onClick={onBack}
-              className="rounded-lg p-2 hover:bg-gray-100"
-            >
-              <ArrowLeft className="h-4 w-4" />
-            </button>
-            <div>
-              <div className="font-mono text-sm font-bold text-[#3457D5]">
-                {item.protocol}
-              </div>
-              <h1 className="text-xl font-bold">
-                {report.subject || "Caso de Integridade"}
-              </h1>
-            </div>
-          </div>
-          <div className="flex flex-wrap gap-2">
-            <Risk value={item.severity} />
-            <span className="rounded-full bg-gray-100 px-3 py-1 text-xs font-bold">
-              {statusLabel(item.status)}
-            </span>
-          </div>
-        </div>
-      </header>
-      <Panel>
-        {actionError && (
-          <div
-            role="alert"
-            className="mb-4 rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-700"
-          >
-            {actionError}
-          </div>
-        )}
-        <div className="grid gap-5 lg:grid-cols-[minmax(0,2fr)_minmax(300px,1fr)]">
-          <div className="space-y-5">
-            <Card title="Denúncia original">
-              <dl className="mb-5 grid gap-4 text-sm sm:grid-cols-3">
-                <Meta
-                  label="Categoria"
-                  value={item.integrity_categories?.name}
-                />
-                <Meta label="Unidade" value={item.integrity_units?.name} />
-                <Meta
-                  label="Ocorrido em"
-                  value={
-                    report.occurred_at
-                      ? new Date(report.occurred_at).toLocaleDateString("pt-BR")
-                      : "Não informado"
-                  }
-                />
-              </dl>
-              <p className="whitespace-pre-wrap text-sm leading-7 text-[#3F4543]">
-                {report.description}
-              </p>
-            </Card>
-            <Card title="Comunicação e notas">
-              <div className="space-y-3">
-                {messages.map((message) => (
-                  <div
-                    key={message.id}
-                    className={`rounded-xl p-4 text-sm ${message.visible_to_reporter ? "border border-blue-100 bg-blue-50" : "border border-amber-100 bg-amber-50"}`}
-                  >
-                    <div className="mb-2 text-xs font-bold">
-                      {message.visible_to_reporter
-                        ? "Visível ao denunciante"
-                        : "Nota interna"}{" "}
-                      · {new Date(message.created_at).toLocaleString("pt-BR")}
-                    </div>
-                    <p className="whitespace-pre-wrap">{message.body}</p>
-                  </div>
-                ))}
-              </div>
-              <form onSubmit={sendMessage} className="mt-4 space-y-3">
-                <textarea
-                  required
-                  minLength={2}
-                  maxLength={5000}
-                  value={note}
-                  onChange={(event) => setNote(event.target.value)}
-                  rows={4}
-                  className="w-full rounded-xl border border-[#DDD8CF] p-3 text-sm"
-                  placeholder="Escreva uma nota ou comunicação"
-                />
-                <label className="flex items-center gap-2 text-sm">
-                  <input
-                    type="checkbox"
-                    checked={publicMessage}
-                    onChange={(event) => setPublicMessage(event.target.checked)}
-                  />
-                  Enviar ao denunciante
-                </label>
-                <Button disabled={busy} type="submit">
-                  <MessageSquare className="mr-2 h-4 w-4" />
-                  Registrar mensagem
-                </Button>
-              </form>
-            </Card>
-          </div>
-          <aside className="space-y-5">
-            <Card title="Tratamento">
-              <Meta label="Prioridade" value={item.priority} />
-              <Meta
-                label="SLA"
-                value={
-                  item.sla_due_at
-                    ? new Date(item.sla_due_at).toLocaleString("pt-BR")
-                    : "Não definido"
-                }
-              />
-              <Meta
-                label="Responsável"
-                value={
-                  item.owner_membership_id
-                    ? "Responsável atribuído"
-                    : "Não atribuído"
-                }
-              />
-              {canAssign && (
-                <form
-                  onSubmit={assign}
-                  className="mt-4 space-y-2 border-t pt-4"
-                >
-                  <label className="block text-xs font-bold">
-                    Atribuir responsável
-                    <select
-                      required
-                      value={assignee}
-                      onChange={(event) => setAssignee(event.target.value)}
-                      className="mt-1 w-full rounded-lg border border-[#DDD8CF] bg-white p-2 text-sm font-normal"
-                    >
-                      <option value="">Selecione</option>
-                      {members.map((member) => (
-                        <option key={member.id} value={member.id}>
-                          {member.name}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                  <Input
-                    required
-                    minLength={3}
-                    maxLength={500}
-                    value={assignmentReason}
-                    onChange={(event) =>
-                      setAssignmentReason(event.target.value)
-                    }
-                    placeholder="Motivo da atribuição"
-                  />
-                  <Button
-                    type="submit"
-                    variant="outline"
-                    disabled={busy || !assignee}
-                  >
-                    Atribuir
-                  </Button>
-                </form>
-              )}
-              <div className="mt-4 grid gap-2">
-                <TransitionButtons
-                  status={item.status}
-                  disabled={busy}
-                  onTransition={transition}
-                />
-              </div>
-              {["decision", "closed"].includes(item.status) && (
-                <p className="mt-3 text-xs text-[#626866]">
-                  Para encerrar ou reabrir, escreva o motivo no campo de
-                  mensagem antes de confirmar.
-                </p>
-              )}
-            </Card>
-            <Card title="Timeline">
-              <div className="max-h-[480px] space-y-4 overflow-auto">
-                {timeline.map((event) => (
-                  <div
-                    key={event.id}
-                    className="relative border-l-2 border-blue-100 pl-4 text-sm"
-                  >
-                    <div className="font-bold">
-                      {eventLabel(event.event_type)}
-                    </div>
-                    <div className="text-xs text-[#626866]">
-                      {new Date(event.created_at).toLocaleString("pt-BR")}
-                    </div>
-                    {event.note && <p className="mt-1 text-xs">{event.note}</p>}
+                    {(event.before_status || event.after_status) && <p className="mt-1 text-xs text-[#626866]">{event.before_status ? statusLabel(event.before_status) : "—"} → {event.after_status ? statusLabel(event.after_status) : "—"}</p>}
                   </div>
                 ))}
               </div>
@@ -1545,6 +1170,19 @@ function SettingsPanel({ tenantId }: { tenantId: string }) {
       setSaved("Configurações salvas.");
     } catch (error: any) {
       setSaved(error.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+  async function testChannel() {
+    setBusy(true);
+    setSaved("");
+    try {
+      const result = await integrityApi<any>(tenantId, "/settings/channel-test", { method: "POST", body: "{}" });
+      setSaved(`Canal validado com sucesso: /#/canal/${result.slug}`);
+      await loadSettings();
+    } catch (error) {
+      setSaved(error instanceof Error ? error.message : "Não foi possível validar o canal.");
     } finally {
       setBusy(false);
     }
@@ -1699,6 +1337,9 @@ function SettingsPanel({ tenantId }: { tenantId: string }) {
         )}
         <Button type="submit" disabled={busy}>
           {busy ? "Salvando…" : "Salvar configurações"}
+        </Button>
+        <Button type="button" variant="outline" disabled={busy} onClick={testChannel}>
+          Testar prontidão do canal
         </Button>
         <div className="grid gap-3 border-t pt-5 sm:grid-cols-3">
           <InfoCount
@@ -2335,11 +1976,13 @@ function FilterSelect({
   value,
   onChange,
   options,
+  includeEmpty = true,
 }: {
   label: string;
   value: string;
   onChange: (value: string) => void;
   options: string[][];
+  includeEmpty?: boolean;
 }) {
   return (
     <select
@@ -2348,7 +1991,7 @@ function FilterSelect({
       onChange={(event) => onChange(event.target.value)}
       className="rounded-xl border border-[#DDD8CF] bg-white px-3 text-sm"
     >
-      <option value="">{label}: todos</option>
+      {includeEmpty ? <option value="">{label}: todos</option> : null}
       {options.map(([key, text]) => (
         <option key={key} value={key}>
           {text}

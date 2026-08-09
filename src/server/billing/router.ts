@@ -320,6 +320,17 @@ async function processPaymentEvent(db: any, eventRow: any, payload: any, provide
     }
 
     // -- INICIAR ONBOARDING AUTOMATICO --
+    const { data: cItems, error: contractItemsError } = await db
+      .from('commercial_contract_items')
+      .select('solution_id,solutions(key)')
+      .eq('contract_id', contract.id);
+    if (contractItemsError) throw contractItemsError;
+    const sIds = cItems?.map((c: any) => c.solution_id) || [];
+    const includesIntegrity = (cItems || []).some((item: any) => item.solutions?.key === 'integridade');
+    if (includesIntegrity) {
+      const ensured = await db.rpc('ensure_integrity_onboarding_template', { p_actor_user_id: owner.id });
+      if (ensured.error) throw new Error(`Falha ao preparar onboarding do Integridade: ${ensured.error.message}`);
+    }
     const { data: templates } = await db.from('onboarding_templates')
       .select('id, plan_id, solution_id, version, created_at')
       .eq('active', true)
@@ -327,9 +338,6 @@ async function processPaymentEvent(db: any, eventRow: any, payload: any, provide
       .order('created_at', { ascending: false });
 
     if (templates && templates.length > 0) {
-      const { data: cItems } = await db.from('commercial_contract_items').select('solution_id').eq('contract_id', contract.id);
-      const sIds = cItems?.map((c: any) => c.solution_id) || [];
-      
       const selectedTemplate = selectOnboardingTemplate(templates, contract.plan_id, sIds);
 
       if (selectedTemplate) {
