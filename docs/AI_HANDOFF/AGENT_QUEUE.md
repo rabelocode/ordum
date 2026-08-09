@@ -1,40 +1,41 @@
 Owner: chatgpt_backend
 Status: ready_for_review
 Branch: fix/admin-functional-recovery
-Head: 5644ddeb27fd890f9a0e93d082e5a41a0c4b044e
+Head: afb4ce51f316a8d0688ec66d04541ed6beb05209
 Implemented:
-- Cockpit do Integridade extraído para `IntegrityDashboard.tsx`, com período, status, severidade, categoria, unidade, comitê e responsável; métricas de SLA, conflitos, tarefas, não atribuídos, reabertura, médias, distribuições e evolução temporal sem zeros fictícios.
-- Caixa de casos com filtros combináveis persistidos na URL, busca por protocolo/assunto, ordenação, paginação server-side, clear filters, nomes legíveis de responsável/comitê e CSV limitado/auditado.
-- Exportação de relatório individual auditada; conteúdo e identidade respeitam permissões independentes, CSV injection é neutralizado e segredos/hashes/anexos em massa são excluídos.
-- Timeline enriquecida com ator, estado anterior/posterior e motivo; mutações de settings, canal, categorias, unidades, comitês e roteamento entram na auditoria.
-- Configuração ganhou teste persistido de prontidão e checklist operacional de 14 capacidades; CTA/API compatibilizados (`slug` + `public_slug`).
-- Provisionamento comercial pago com Integridade garante template idempotente e onboarding específico antes da seleção; ativação de `tenant_solutions` inicializa settings sem edição manual.
-- Modularização progressiva: dashboard isolado e dois blocos legados duplicados removidos; navegação mobile recebeu nome acessível.
-- Admin Ordum validado em fronteira `aggregate_only`: contrato/solution/configuração/onboarding/saúde/volume/SLA/storage/último uso, sem conteúdo, identidade, mensagens, evidências ou decisão.
+- `IntegrityModuleView.tsx` reduzido a orquestração; CaseDetail, CasesList, Tasks, Messages, Evidence, Decision, Timeline, Settings, Committees/Routing e Notifications extraídos por domínio sem alterar os contratos homologados.
+- Investigação profissional: responsável principal, investigadores adicionais case-scoped, comitê, conflitos, tarefas/subtarefas editáveis e reatribuíveis, notas internas, mensagens externas, recomendação, decisão, encerramento e reabertura auditados.
+- Cadeia de custódia: SHA-256 calculado no servidor para uploads internos e públicos, metadata de uploader/data/MIME/tamanho, Storage privado, signed URL curta e eventos auditáveis de upload/download/delete.
+- Dossiê PDF A4 sanitizado e auditado com dados institucionais, SLA, tarefas, evidências/checksums, decisão e timeline. Identidade omitida por padrão e incluída somente com `integrity.identity.read` + opt-in explícito; Platform Admin não possui endpoint individual.
+- Retenção tenant-scoped com lifecycle explícito `active -> closed -> retention_due -> archived/anonymized`; avaliação nunca executa purge físico automático.
+- Templates editáveis para tarefa, mensagem, pedido de informação, recomendação e decisão; governança de acesso por papel/permissão/comitê/casos/conflitos, sem inventar last access.
+- Notification center persistente e sanitizado para novo caso, atribuição, SLA/tarefa vencidos, mensagem externa, conflito, recomendação, decisão e reabertura.
 Database:
-- `20260809173050_integrity_phase4e_governance` aplicada e registrada oficialmente.
-- Novas permissões: `integrity.audit.read`, `integrity.exports.execute`, `integrity.case_report.export`; grants tenant-scoped para tenant_admin/compliance.
-- `integrity_settings.channel_tested_at` e `channel_published_at`; índice único de template por solução/versão; RPC service-only com `search_path=''`; trigger idempotente de settings.
-- Template `Onboarding Ordum Integridade` ativo: ID `622a8954-dfbd-4863-bb37-c192a43de801`, 14 etapas, posições 0–13.
-- Security Advisor: nenhum WARN novo do Integridade; 2 INFO fail-closed intencionais (rate limits e secrets sem policy cliente). Performance Advisor mantém warnings preexistentes de policies permissivas sobrepostas; nenhuma policy foi consolidada sem plano/prova de equivalência.
+- `20260809184617_integrity_phase4f_investigation_governance` aplicada oficialmente: permissões, colaboradores, templates, notificações, retenção, subtarefas, checksum e triggers auditáveis.
+- `20260809184836_integrity_phase4f_policy_and_index_hardening` aplicada oficialmente: índices justificados e policies das novas tabelas separadas por operação, sem ampliar autorização.
+- `20260809191057_integrity_decision_event_utf8` aplicada oficialmente: evento de decisão corrigido para UTF-8; função mantém `search_path` fixo e `PUBLIC EXECUTE=false`.
+- RLS ativa nas tabelas novas; colaborador só amplia acesso ao caso explicitamente vinculado. Bucket `ordum-integrity` confirmado privado, limite 10 MiB e enumeração pública bloqueada.
 Tests:
-- Suite completa: 153 PASS, 0 FAIL, 1 live comercial SKIP explícito; suíte Integridade: 57/57 PASS.
-- Secret scan PASS (294 arquivos rastreados); migration validation PASS (25 migrations); lint/typecheck/build PASS.
-- Live E2E final PASS: run `integrity_e2e_1786297932548_27d2af64`, report HTTP 201, rate limit 429 na tentativa 21, cleanup PASS.
-- Negativos PASS: RLS assigned=1, unassigned=0, cross-tenant=0, identidade sem permissão=0; conflito, transição inválida, MIME, bucket, RPC legado, Admin aggregate-only.
-- Resíduos após o run: tenants=0, Auth=0, memberships=0, reports=0.
+- Suite completa: 164 testes, 163 PASS, 0 FAIL, 1 live comercial SKIP explícito; Fase 4F 8/8 PASS e PDF 2/2 PASS.
+- Secret scan PASS (310 arquivos); migration validation PASS (28); lint/typecheck/build/live queries PASS.
+- Live E2E final PASS: run `integrity_e2e_1786302762175_fc9bacbb`; report HTTP 201; rate limit 429 na tentativa 21; browser QA PASS; cleanup PASS.
+- Negativos PASS: não atribuído, cross-tenant, identidade sem permissão, Platform Admin/dossiê, RPC legado, MIME, bucket e Storage cross-tenant.
+- Resíduos finais: tenants=0 e Auth=0.
 Preview:
-- READY — `dpl_9w6DnuvYRF4UprbntBLYGiweZMVa`
-- https://ordum-hel3mc0ly-ordum.vercel.app
+- READY — `dpl_3Ej1MRdwp1k2jV5eXt5Sqp5SKr76`
+- https://ordum-34zstztd1-ordum.vercel.app
 - Alias público/mobile: https://ordum-git-fix-admin-functional-recovery-ordum.vercel.app
-- Runtime logs do deployment: 0 HTTP 5xx no período do QA. `/api/index.mjs.map` retorna 404; `/build/server.cjs.map` retorna somente fallback HTML, não source map.
 QA:
-- Browser autenticado real PASS: tenant_admin desktop 1440x1000, compliance desktop, investigador atribuído mobile 390x844 e investigador não atribuído desktop.
-- CTAs validados: navegação, filtros, limpar, exportar CSV, configurações e prontidão do canal; console sem erro e rede sem 5xx.
-- Fluxo real PASS: denúncia anônima/identificada → roteamento/comitê → tarefa → mensagens interna/externa → Storage privado/signed URL → recomendação → decisão → encerramento → acompanhamento → reabertura → auditoria/exportação.
+- Fluxo descartável real PASS: denúncia anônima/identificada -> roteamento/comitê -> colaboradores -> conflito -> tarefa/subtarefa -> notas/mensagens -> evidência pública/privada -> signed download -> recomendação -> decisão -> retenção -> reabertura -> notificações -> dossiê.
+- Browser autenticado PASS em tenant_admin/compliance desktop e investigador atribuído/não atribuído mobile/desktop; console/rede sem erro funcional ou 5xx.
+- PDF operacional renderizado com Poppler e inspecionado nas 2 páginas A4; tarefa, checksum, conclusão, timeline e acentuação validados. PDF identificado também validado com identidade omitida/permitida.
+- Vercel: 0 HTTP 5xx, 0 runtime errors e build READY; somente warning conhecido de chunk principal >500 kB.
+Performance:
+- EXPLAIN confirmou índices de timeline, tarefas e evidências; inbox manteve seq scan somente pelo custo mínimo da tabela vazia/pequena, sem índice especulativo.
+- Security Advisor: Integridade sem WARN novo; 2 INFO fail-closed intencionais (`integrity_public_rate_limits`, `integrity_report_secrets`).
+- Performance Advisor: warnings das novas FKs/policies corrigidos; permanecem policies permissivas sobrepostas legadas, não consolidadas sem prova de equivalência. Índices recém-criados ainda aparecem como unused antes de tráfego representativo.
 Blockers:
-- Billing/Asaas continua pendência externa controlada já registrada; não alterado nesta fase.
-- Decomposição restante: extrair CaseDetail/Tasks/Messages/Evidence/Decision e Settings/Committees/Routing do container principal sem alterar contratos já homologados.
-- PDF completo permanece próximo pacote; CSV funcional está entregue.
+- Billing/Asaas permanece dependência externa controlada já registrada; não alterado nesta fase.
+- Purge físico e anonimização irreversível exigem política jurídica/operacional explícita e continuam deliberadamente fora do fluxo automático.
 Suggested next package:
-- Fase 4F: concluir extrações do workspace, medir/consolidar policies permissivas equivalentes e adicionar relatório PDF individual sanitizado.
+- Fase 4G: homologação piloto com usuários reais controlados, política jurídica de retenção/anonimização, scheduler de alertas SLA e redução mensurada dos warnings legados de RLS/performance.
