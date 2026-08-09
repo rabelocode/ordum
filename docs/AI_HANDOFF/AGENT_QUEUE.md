@@ -1,35 +1,34 @@
 Owner: chatgpt_backend
 Status: ready_for_review
 Branch: fix/admin-functional-recovery
-Head: 852809ddbfe26c4d11cfdd0756355a500ebc665d
+Head: 4a45cb8a0f951c85d462b51ba1a751f5aa3cd6ba
 Implemented:
-- Cutover dos canais públicos para `/api/public/integrity`; RPCs legados de canal, submissão, acompanhamento e mensagem revogados de `anon`/`authenticated` e restritos a `service_role`.
-- Contrato do catálogo corrigido para a chave canônica `integridade` no workspace e no resumo do Admin.
-- Runner live descartável `test:integrity-e2e` com runId, fixtures isoladas, cleanup obrigatório e verificação de resíduos.
-- E2E cobre anônimo/identificado, protocolo+segredo hash, roteamento/comitê, triagem, atribuição, conflito, tarefas, mensagens, Storage privado, signed URLs, SLA, decisão, reabertura, RBAC, cross-tenant, rate limit e control/data plane.
-- Cliente HTTP/tipos do Integridade extraídos de `IntegrityModuleView.tsx` para `integrityApi.ts`, primeiro corte de modularização sem mudança funcional.
+- Papel tenant-scoped `integrity_investigator` formalizado; leitura limitada a owner/comitê ativo e permissões independentes para investigar, nota interna, mensagem externa, evidência, recomendação, conclusão e reabertura.
+- Identidade exige `integrity.identity.read`; Admin Global segue aggregate-only, sem case data plane.
+- Comitês e roteamento ganharam edição, membros nomeados, lifecycle active/inactive/archived, fallback, prioridade, detecção de conflito, preview determinístico e proteção contra comitê com casos ativos órfãos.
+- Configurações exibem checklist operacional e administram modo anônimo/identificado, textos, SLA, anexos e política de comunicação aplicada server-side.
+- Case workflow separa notas/mensagens, recomendação/conclusão/reabertura e CTAs por permissão; query builder thenable corrigido após regressão encontrada no E2E.
+- Modularização progressiva: `IntegrityConfigurationStatus` e `useIntegrityCasePermissions` extraídos por domínio.
 Database:
-- `20260809154240_integrity_e2e_fixture_cleanup`: applied; cleanup permitido somente a `service_role`, runId estrito e tenants E2E marcados.
-- `20260809160030_integrity_public_api_cutover`: applied oficialmente.
-- RPC legado direto com publishable key: permission denied; fluxo novo server-side permanece funcional.
-- Canais ativos após cleanup: 0; tenants/Auth E2E residuais: 0/0; Storage E2E residual: 0.
-- Security advisor: nenhum aviso de RPC público do Integridade após cutover; `integrity_public_rate_limits` e `integrity_report_secrets` sem policy permanecem fail-closed/service-role-only intencionalmente. Avisos fora do pacote permanecem no backlog.
+- `20260809162824_integrity_rbac_and_configuration_lifecycle`: applied oficialmente.
+- `20260809163845_private_integrity_case_scope_helper`: applied oficialmente; helper SECURITY DEFINER movido do schema exposto para `private`.
+- RLS direto validado: assigned=1; unassigned=0; cross-tenant=0; identidade sem permissão=0.
+- Security Advisor: 0 WARN de Integridade; 2 INFO fail-closed intencionais (`integrity_public_rate_limits`, `integrity_report_secrets`, sem policy/client access).
 Tests:
-- Secret scan PASS: 286 arquivos rastreados.
-- Migration validation PASS: 22 migrations ordenadas.
-- Lint/typecheck PASS; build cliente/servidor/Vercel PASS.
-- Suite PASS: 136 aprovados, 0 falhas, 1 live E2E comercial explicitamente ignorado.
-- Live E2E final PASS: run `integrity_e2e_1786291679050_c2715946`; report HTTP 201; rate limit HTTP 429 na tentativa 21; cleanup/resíduos 0.
+- Secret scan PASS: 291 arquivos rastreados; migrations PASS: 24 ordenadas; lint/typecheck/build/live queries PASS.
+- Suite PASS: 145 aprovados, 0 falhas, 1 live E2E comercial explicitamente ignorado.
+- Live Integridade E2E PASS: run `integrity_e2e_1786293919913_121abbb3`; report HTTP 201; rate limit 429 na tentativa 21; cleanup PASS.
+- Resíduos globais após runs: Auth=0; tenants=0; memberships=0; reports=0.
 Preview:
-- READY — dpl_ET1Zi9xpwkksPPxj2JpRcnsgn7kW
-- https://ordum-evbnenukz-ordum.vercel.app
+- READY — dpl_7CLPk6vPDs9pjqAMhWEs5QpQErjX
+- https://ordum-cjgp23yjb-ordum.vercel.app
+- Alias público mobile: https://ordum-git-fix-admin-functional-recovery-ordum.vercel.app
 QA:
-- Fluxo funcional completo validado por API e banco no Preview final; signed URLs retornaram arquivo e enumeração anônima não revelou objetos.
-- Admin integrity-summary retornou somente agregados com `confidentiality_boundary=aggregate_only`.
-- Mobile 390x844: canal indisponível renderizou estado acionável, largura/scrollWidth 390/390, sem tela branca; login desktop renderizado sem overflow.
-- Logs 5xx do deployment final no período de QA: 0.
+- Fluxo descartável validado: anônimo/identificado → roteamento/comitê → investigador/compliance → tarefa/evidência/mensagens → recomendação/decisão → encerramento/reabertura.
+- Negativos PASS: sem permissão, investigador não atribuído, cross-tenant, identidade protegida, conflito, transição inválida, MIME inválido, comitê órfão e RPC legado.
+- Desktop 1440x1000 e iPhone 14: Preview público renderizado, sem tela branca, erros de página ou console; deployment final com 0 logs HTTP 5xx no período de QA.
 Blockers:
-- Nenhum blocker externo para o pacote 4C.
-- Gaps para pacote seguinte: extrair detalhe/configurações do `IntegrityModuleView.tsx`; completar edição/arquivamento de comitês e regras; formalizar papel de investigador com leitura apenas de casos atribuídos no API/RLS.
+- Nenhum blocker externo da Fase 4D.
+- Gap técnico restante: extrair os blocos grandes de detalhe/configurações ainda presentes em `IntegrityModuleView.tsx`; warnings de performance por policies permissivas sobrepostas ficam para consolidação medida, sem alterar autorização nesta fase.
 Suggested next package:
-- Fase 4D: RBAC atribuído, lifecycle das configurações e conclusão da modularização do workspace Integridade.
+- Fase 4E: concluir decomposição do workspace, consolidar policies com plano de query e executar QA visual autenticado persistente dos formulários de configuração.
