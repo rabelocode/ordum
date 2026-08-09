@@ -1581,7 +1581,7 @@ function createBillingRouters(getSupabaseAdmin2) {
     });
     const parsed = schema.safeParse(req.body);
     if (!parsed.success) {
-      return res.status(422).json({ error: parsed.error.errors[0]?.message || "Dados fiscais inv\xE1lidos." });
+      return res.status(422).json({ error: parsed.error.issues[0]?.message || "Dados fiscais inv\xE1lidos." });
     }
     const { customer_tax_id, customer_phone, customer_name, customer_email } = parsed.data;
     const { isValidTaxId: isValidTaxId2, maskTaxId: maskTaxId2 } = await Promise.resolve().then(() => (init_cpf_cnpj(), cpf_cnpj_exports));

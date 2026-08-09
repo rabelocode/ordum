@@ -1047,7 +1047,7 @@ export function createBillingRouters(getSupabaseAdmin: () => any) {
 
     const parsed = schema.safeParse(req.body);
     if (!parsed.success) {
-      return res.status(422).json({ error: parsed.error.errors[0]?.message || 'Dados fiscais inválidos.' });
+      return res.status(422).json({ error: parsed.error.issues[0]?.message || 'Dados fiscais inválidos.' });
     }
 
     const { customer_tax_id, customer_phone, customer_name, customer_email } = parsed.data;
