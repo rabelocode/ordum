@@ -1,5 +1,16 @@
 # Walkthrough: Pacote Final Admin Comercial & Billing Sandbox
 
+## Fase 4 — Ordum Integridade Core (2026-08-09)
+
+- Banco remoto atualizado pelas migrations oficiais `20260809132523_integrity_core_phase4` e `20260809133226_integrity_atomic_case_transition`.
+- O relato original permanece separado do caso operacional; identidade identificada fica em tabela protegida e o segredo de acompanhamento é armazenado somente como hash bcrypt.
+- O canal `/#/canal/:slug` aceita envio sem login e acompanhamento por protocolo + segredo, retornando apenas mensagens públicas.
+- O workspace possui cockpit real, caixa paginada, filtros, detalhe, timeline, notas internas, mensagens ao denunciante, atribuição com bloqueio de conflito e transições auditadas com optimistic locking.
+- O Admin da Ordum recebe apenas métricas agregadas e estado da solução; o endpoint não entrega descrição, mensagens, identidade ou evidências.
+- Validação transacional remota com rollback comprovou criação de Report + Case, segredo não plaintext, rejeição de credenciais inválidas e exclusão de nota interna da projeção pública.
+- Verificação: secret scan, migrations, lint, typecheck, 119 testes (118 aprovados e 1 E2E comercial live ignorado por configuração), build e live queries aprovados.
+- Ainda não concluídos: Storage privado/anexos, rate limiting persistente, configuração avançada de comitê/roteamento, tarefas/decisão completas e E2E visual autenticado.
+
 ## 📋 Resumo da Implementação
 
 Implementamos na branch `fix/admin-functional-recovery` o pacote completo de Billing Sandbox no ambiente Preview, validações fiscais de CPF/CNPJ, tratamento de erros resiliente, diagnósticos seguros e backfill idempotente de itens comerciais.

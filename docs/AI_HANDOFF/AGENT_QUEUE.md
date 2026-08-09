@@ -1,10 +1,29 @@
 Owner: codex
-Status: blocked_external
+Status: phase_4_partial
 Branch: fix/admin-functional-recovery
-Verified code SHA: 31e84285facaed405d0f471e5607ce1cbe372f36
-Preview deployment: dpl_HnEGSnZgVFLSneVhCxj7ijrfnqVC
-Preview URL: https://ordum-rm1hztbhp-ordum.vercel.app
-Scope: Admin Commercial Recovery & Billing Asaas Sandbox
+Verified code SHA: d356bf1
+Preview deployment: pending for this SHA
+Preview URL: pending for this SHA
+Scope: Fase 4 — Ordum Integridade Core
+
+Checks verified on 2026-08-09:
+- migrations remotas `20260809132523` e `20260809133226`: applied;
+- fluxo transacional público no Supabase, com rollback: PASS;
+- secret scan, migration validation, lint, typecheck, 119 tests (118 pass, 1 live E2E skip) e build: PASS;
+- live queries existentes e bloqueios públicos de Storage/control-plane: PASS;
+- Supabase Security Advisor: nenhuma ocorrência referente às novas tabelas de Integridade.
+
+Entregue neste pacote:
+- Report e Case separados, timeline imutável, tarefas, conflitos, identidade protegida, unidades e configurações tenant-scoped;
+- protocolo + segredo bcrypt, projeção pública sem notas internas e canal público sem login;
+- cockpit, paginação/filtros, detalhe, comunicação interna/externa, atribuição e máquina de estados transacional;
+- control plane agregado no Admin sem conteúdo confidencial.
+
+Próximos pacotes internos:
+- Storage privado de evidências e anexos públicos controlados;
+- rate limiting persistente para submissão e acompanhamento;
+- tarefas, decisão/conclusão completas e configuração avançada de comitê/roteamento;
+- testes E2E autenticados e visual QA com tenant de homologação autorizado.
 
 Checks verified on 2026-08-09:
 - secret scan, migration validation, lint/typecheck, 104 tests and build: PASS;
