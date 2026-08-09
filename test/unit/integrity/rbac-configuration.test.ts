@@ -5,7 +5,11 @@ import fs from "node:fs";
 const migration = fs.readFileSync("supabase/migrations/20260809162824_integrity_rbac_and_configuration_lifecycle.sql", "utf8");
 const hardening = fs.readFileSync("supabase/migrations/20260809163845_private_integrity_case_scope_helper.sql", "utf8");
 const router = fs.readFileSync("src/server/integrityRouter.ts", "utf8");
-const workspace = fs.readFileSync("src/components/workspace/IntegrityModuleView.tsx", "utf8");
+const workspace = [
+  fs.readFileSync("src/components/workspace/IntegrityModuleView.tsx", "utf8"),
+  fs.readFileSync("src/components/workspace/integrity/IntegrityCaseDetail.tsx", "utf8"),
+  fs.readFileSync("src/components/workspace/integrity/useIntegrityCasePermissions.ts", "utf8"),
+].join("\n");
 
 describe("Ordum Integridade Phase 4D", () => {
   it("scopes investigators to current ownership or active committee membership", () => {

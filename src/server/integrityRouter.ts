@@ -1,5 +1,5 @@
 import express from "express";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { z } from "zod";
 import {
   authenticateRequest,
@@ -12,6 +12,7 @@ import {
   integrityTransitionNeedsReason,
 } from "../domain/integrity";
 import { validateIntegrityEvidence } from "../domain/integrity-files";
+import { createIntegrityDossierPdf } from "./integrityDossierPdf";
 
 const listSchema = z.object({
   search: z.string().trim().max(120).optional(),
@@ -77,6 +78,11 @@ const settingsSchema = z.object({
   treatment_sla_hours: z.number().int().min(1).max(17520).default(720),
   default_assignee_membership_id: z.string().uuid().nullable().optional(),
   default_committee_id: z.string().uuid().nullable().optional(),
+  retention_days: z.number().int().min(30).max(7300).default(1825),
+  evidence_retention_days: z.number().int().min(30).max(7300).default(1825),
+  message_retention_days: z.number().int().min(30).max(7300).default(1825),
+  post_closure_action: z.enum(["archive", "anonymize"]).default("archive"),
+  anonymization_enabled: z.boolean().default(false),
 });
 const conflictSchema = z.object({
   membership_id: z.string().uuid(),
@@ -120,11 +126,17 @@ const taskSchema = z.object({
   assignee_membership_id: z.string().uuid().nullable().optional(),
   due_at: z.string().datetime().nullable().optional(),
   priority: z.enum(["low", "normal", "high", "urgent"]).default("normal"),
+  parent_task_id: z.string().uuid().nullable().optional(),
 });
-const taskStatusSchema = z.object({
-  status: z.enum(["open", "in_progress", "done", "cancelled"]),
+const taskUpdateSchema = z.object({
+  title: z.string().trim().min(2).max(200).optional(),
+  description: z.string().trim().max(2000).nullable().optional(),
+  assignee_membership_id: z.string().uuid().nullable().optional(),
+  due_at: z.string().datetime().nullable().optional(),
+  priority: z.enum(["low", "normal", "high", "urgent"]).optional(),
+  status: z.enum(["open", "in_progress", "done", "cancelled"]).optional(),
   reason: z.string().trim().min(3).max(500),
-});
+}).refine((value) => Object.keys(value).some((key) => key !== "reason"), { message: "Informe uma alteração." });
 const decisionSchema = z.object({
   final_classification: z.string().trim().min(3).max(200),
   conclusion: z.string().trim().min(3).max(10000),
@@ -169,6 +181,19 @@ const routingUpdateSchema = routingSchema.extend({
 const routingPreviewSchema = z.object({
   category_id: z.string().uuid().nullable().optional(),
   unit_id: z.string().uuid().nullable().optional(),
+});
+const collaboratorSchema = z.object({
+  membership_id: z.string().uuid(),
+  role: z.enum(["investigator", "participant"]).default("investigator"),
+  reason: z.string().trim().min(3).max(500),
+});
+const templateSchema = z.object({
+  id: z.string().uuid().optional(),
+  template_type: z.enum(["task", "reporter_message", "information_request", "recommendation", "decision"]),
+  name: z.string().trim().min(2).max(120),
+  title: z.string().trim().max(200).nullable().optional(),
+  body: z.string().trim().min(2).max(10000),
+  active: z.boolean().default(true),
 });
 
 export function createIntegrityRouter(
@@ -242,6 +267,18 @@ export function createIntegrityRouter(
     return (result.data || []).map((item: any) => item.id);
   }
 
+  async function membershipNames(db: any, tenant: string, ids: Array<string | null | undefined>) {
+    const unique = [...new Set(ids.filter(Boolean))] as string[];
+    if (!unique.length) return new Map<string,string>();
+    const memberships = await db.from("memberships").select("id,user_id").in("id", unique).eq("tenant_id", tenant);
+    if (memberships.error) throw memberships.error;
+    const userIds = (memberships.data || []).map((item: any) => item.user_id);
+    const profiles = userIds.length ? await db.from("profiles").select("id,full_name").in("id", userIds) : { data: [], error: null };
+    if (profiles.error) throw profiles.error;
+    const profileNames = new Map<string,string>((profiles.data || []).map((item: any) => [item.id,String(item.full_name || "")]));
+    return new Map<string,string>((memberships.data || []).map((item: any) => [item.id,profileNames.get(item.user_id) || "Membro do tenant"]));
+  }
+
   async function scopedCommitteeIds(db: any, req: express.Request) {
     const result = await db
       .from("integrity_committee_members")
@@ -259,8 +296,13 @@ export function createIntegrityRouter(
     if (!hasPermission(req, "integrity.cases.read_assigned"))
       return { query: query.eq("id", "00000000-0000-0000-0000-000000000000") };
     const committees = await scopedCommitteeIds(db, req);
+    const collaborators = await db.from("integrity_case_collaborators").select("case_id")
+      .eq("tenant_id", tenantId(req)).eq("membership_id", membershipId(req)).eq("active", true);
+    if (collaborators.error) throw collaborators.error;
     const filters = [`owner_membership_id.eq.${membershipId(req)}`];
     if (committees.length) filters.push(`committee_id.in.(${committees.join(",")})`);
+    const collaboratorCaseIds = (collaborators.data || []).map((item: any) => item.case_id);
+    if (collaboratorCaseIds.length) filters.push(`id.in.(${collaboratorCaseIds.join(",")})`);
     return { query: query.or(filters.join(",")) };
   }
 
@@ -547,7 +589,7 @@ export function createIntegrityRouter(
         db,
         req,
         req.params.id,
-        "*,integrity_reports!inner(id,subject,description,occurred_at,reporter_mode,created_at),integrity_categories(name),integrity_units(name),integrity_case_assignments(membership_id,created_at),integrity_case_tasks(*),integrity_case_conflicts(membership_id,reason,active)",
+        "*,integrity_reports!inner(id,subject,description,occurred_at,reporter_mode,created_at),integrity_categories(name),integrity_units(name),integrity_committees(name),integrity_case_assignments(membership_id,created_at),integrity_case_tasks(*),integrity_case_conflicts(membership_id,reason,active)",
       );
       if (result.error)
         return res
@@ -939,7 +981,7 @@ export function createIntegrityRouter(
       const result = await db
         .from("integrity_attachments")
         .select(
-          "id,evidence_kind,description,visible_to_reporter,uploaded_by_type,created_at,files!inner(id,original_name,mime_type,size_bytes,validation_status)",
+          "id,evidence_kind,description,visible_to_reporter,uploaded_by_type,created_at,files!inner(id,original_name,mime_type,size_bytes,validation_status,checksum_sha256,uploaded_by_membership_id)",
         )
         .eq("case_id", req.params.id)
         .is("deleted_at", null)
@@ -948,7 +990,11 @@ export function createIntegrityRouter(
         return res
           .status(500)
           .json({ error: "Não foi possível carregar as evidências." });
-      return res.json({ evidence: result.data || [] });
+      const names = await membershipNames(db, tenantId(req), (result.data || []).map((item: any) => item.files?.uploaded_by_membership_id));
+      return res.json({ evidence: (result.data || []).map((item: any) => ({
+        ...item,
+        uploader_name: item.uploaded_by_type === "reporter" ? "Denunciante" : names.get(item.files?.uploaded_by_membership_id) || "Sistema Ordum",
+      })) });
     }),
   );
 
@@ -975,6 +1021,7 @@ export function createIntegrityRouter(
       if (checked.valid === false)
         return res.status(415).json({ error: checked.error });
       const visible = req.header("x-visible-to-reporter") === "true";
+      const checksum = createHash("sha256").update(req.body).digest("hex");
       const objectPath = `${tenantId(req)}/${req.params.id}/${randomUUID()}`;
       const uploaded = await db.storage
         .from("ordum-integrity")
@@ -995,6 +1042,7 @@ export function createIntegrityRouter(
           size_bytes: req.body.length,
           sensitivity: "restricted",
           validation_status: "validated",
+          checksum_sha256: checksum,
           uploaded_by_membership_id: membershipId(req),
         })
         .select("id")
@@ -1033,9 +1081,11 @@ export function createIntegrityRouter(
         metadata: {
           attachment_id: attachment.data.id,
           visible_to_reporter: visible,
+          checksum_sha256: checksum,
+          size_bytes: req.body.length,
         },
       });
-      return res.status(201).json({ id: attachment.data.id });
+      return res.status(201).json({ id: attachment.data.id, checksum_sha256: checksum });
     }),
   );
 
@@ -1064,6 +1114,15 @@ export function createIntegrityRouter(
         return res
           .status(500)
           .json({ error: "Não foi possível liberar a evidência." });
+      const event = await db.from("integrity_case_events").insert({
+        report_id: found.data.report_id,
+        case_id: req.params.id,
+        event_type: "evidence_downloaded",
+        actor_membership_id: membershipId(req),
+        metadata: { attachment_id: req.params.evidenceId, expires_in: 120 },
+      });
+      if (event.error)
+        return res.status(500).json({ error: "O download não pôde ser auditado." });
       return res.json({ url: signed.data.signedUrl, expires_in: 120 });
     }),
   );
@@ -1157,7 +1216,13 @@ export function createIntegrityRouter(
         return res
           .status(500)
           .json({ error: "Não foi possível carregar as tarefas." });
-      return res.json({ tasks: result.data || [] });
+      const names = await membershipNames(db, tenantId(req), (result.data || []).flatMap((item: any) => [item.assignee_membership_id,item.created_by_membership_id,item.completed_by_membership_id]));
+      return res.json({ tasks: (result.data || []).map((item: any) => ({
+        ...item,
+        assignee_name: names.get(item.assignee_membership_id) || null,
+        creator_name: names.get(item.created_by_membership_id) || "Membro do tenant",
+        completed_by_name: names.get(item.completed_by_membership_id) || null,
+      })) });
     }),
   );
 
@@ -1172,6 +1237,11 @@ export function createIntegrityRouter(
       const found = await findCase(db, req, req.params.id);
       if (!found.data)
         return res.status(404).json({ error: "Caso não encontrado." });
+      if (parsed.data.parent_task_id) {
+        const parent = await db.from("integrity_case_tasks").select("id")
+          .eq("id", parsed.data.parent_task_id).eq("case_id", req.params.id).maybeSingle();
+        if (!parent.data) return res.status(400).json({ error: "Tarefa principal inválida." });
+      }
       if (parsed.data.assignee_membership_id) {
         const member = await db
           .from("memberships")
@@ -1221,7 +1291,7 @@ export function createIntegrityRouter(
     "/cases/:id/tasks/:taskId",
     requireAny("integrity.cases.manage", "integrity.cases.investigate"),
     asyncHandler(async (req, res) => {
-      const parsed = taskStatusSchema.safeParse(req.body);
+      const parsed = taskUpdateSchema.safeParse(req.body);
       if (!parsed.success)
         return res
           .status(400)
@@ -1232,19 +1302,31 @@ export function createIntegrityRouter(
         return res.status(404).json({ error: "Caso não encontrado." });
       const current = await db
         .from("integrity_case_tasks")
-        .select("id,status")
+        .select("*")
         .eq("id", req.params.taskId)
         .eq("case_id", req.params.id)
         .maybeSingle();
       if (!current.data)
         return res.status(404).json({ error: "Tarefa não encontrada." });
       const now = new Date().toISOString();
-      const update: any = { status: parsed.data.status, updated_at: now };
+      if (parsed.data.assignee_membership_id) {
+        const member = await db.from("memberships").select("id,status")
+          .eq("id", parsed.data.assignee_membership_id).eq("tenant_id", tenantId(req)).maybeSingle();
+        if (!member.data || member.data.status !== "active")
+          return res.status(400).json({ error: "Responsável inválido." });
+        const conflict = await db.from("integrity_case_conflicts").select("id")
+          .eq("case_id", req.params.id).eq("membership_id", parsed.data.assignee_membership_id)
+          .eq("active", true).maybeSingle();
+        if (conflict.data)
+          return res.status(409).json({ error: "Responsável bloqueado por conflito de interesse." });
+      }
+      const { reason, ...changes } = parsed.data;
+      const update: any = { ...changes, updated_at: now };
       if (parsed.data.status === "done") {
         update.completed_at = now;
         update.completed_by_membership_id = membershipId(req);
       }
-      if (current.data.status === "done" && parsed.data.status === "open") {
+      if (current.data.status === "done" && parsed.data.status && parsed.data.status !== "done") {
         update.completed_at = null;
         update.completed_by_membership_id = null;
         update.reopened_at = now;
@@ -1266,15 +1348,16 @@ export function createIntegrityRouter(
         event_type:
           parsed.data.status === "done"
             ? "task_completed"
-            : current.data.status === "done"
+            : current.data.status === "done" && parsed.data.status
               ? "task_reopened"
-              : "task_status_changed",
+              : "task_updated",
         actor_membership_id: membershipId(req),
-        note: parsed.data.reason,
+        note: reason,
         metadata: {
           task_id: req.params.taskId,
           from_status: current.data.status,
-          to_status: parsed.data.status,
+          to_status: parsed.data.status || current.data.status,
+          changed_fields: Object.keys(changes),
         },
       });
       return res.json({ task: saved.data });
@@ -1917,6 +2000,294 @@ export function createIntegrityRouter(
         after: { name: saved.data.name, status: saved.data.status, priority: saved.data.priority, category_id: saved.data.category_id, unit_id: saved.data.unit_id, committee_id: saved.data.committee_id, assignee_membership_id: saved.data.assignee_membership_id, is_fallback: saved.data.is_fallback },
       });
       return res.json({ routing_rule: saved.data });
+    }),
+  );
+
+  router.get(
+    "/cases/:id/collaborators",
+    requireAny("integrity.cases.read", "integrity.cases.read_assigned"),
+    asyncHandler(async (req, res) => {
+      const db = getSupabaseAdmin();
+      const found = await findCase(db, req, req.params.id);
+      if (!found.data) return res.status(404).json({ error: "Caso não encontrado." });
+      const rows = await db.from("integrity_case_collaborators").select("id,membership_id,role,active,created_at,removed_at")
+        .eq("case_id", req.params.id).eq("tenant_id", tenantId(req)).order("created_at");
+      if (rows.error) return res.status(500).json({ error: "Não foi possível carregar os investigadores." });
+      const ids = (rows.data || []).map((item: any) => item.membership_id);
+      const memberships = ids.length ? await db.from("memberships").select("id,user_id").in("id", ids).eq("tenant_id", tenantId(req)) : { data: [], error: null };
+      const userIds = (memberships.data || []).map((item: any) => item.user_id);
+      const profiles = userIds.length ? await db.from("profiles").select("id,full_name").in("id", userIds) : { data: [], error: null };
+      if (memberships.error || profiles.error) return res.status(500).json({ error: "Não foi possível identificar os investigadores." });
+      const profileNames = new Map((profiles.data || []).map((item: any) => [item.id, item.full_name]));
+      const names = new Map((memberships.data || []).map((item: any) => [item.id, profileNames.get(item.user_id) || "Membro do tenant"]));
+      return res.json({ collaborators: (rows.data || []).map((item: any) => ({ ...item, name: names.get(item.membership_id) || "Membro indisponível" })) });
+    }),
+  );
+
+  router.post(
+    "/cases/:id/collaborators",
+    requireAny("integrity.investigators.manage", "integrity.cases.manage"),
+    asyncHandler(async (req, res) => {
+      const parsed = collaboratorSchema.safeParse(req.body);
+      if (!parsed.success) return res.status(400).json({ error: "Investigador inválido." });
+      const db = getSupabaseAdmin();
+      const found = await findCase(db, req, req.params.id);
+      if (!found.data) return res.status(404).json({ error: "Caso não encontrado." });
+      const member = await db.from("memberships").select("id,status").eq("id", parsed.data.membership_id)
+        .eq("tenant_id", tenantId(req)).maybeSingle();
+      if (!member.data || member.data.status !== "active") return res.status(400).json({ error: "Membro não está ativo neste tenant." });
+      const conflict = await db.from("integrity_case_conflicts").select("id").eq("case_id", req.params.id)
+        .eq("membership_id", parsed.data.membership_id).eq("active", true).maybeSingle();
+      if (conflict.data) return res.status(409).json({ error: "Participação bloqueada por conflito de interesse." });
+      const saved = await db.from("integrity_case_collaborators").upsert({
+        tenant_id: tenantId(req), case_id: req.params.id, membership_id: parsed.data.membership_id,
+        role: parsed.data.role, active: true, removed_at: null, removed_by_membership_id: null,
+        added_by_membership_id: membershipId(req),
+      }, { onConflict: "case_id,membership_id" }).select("*").single();
+      if (saved.error) return res.status(500).json({ error: "Não foi possível vincular o investigador." });
+      const event = await db.from("integrity_case_events").insert({
+        report_id: found.data.report_id, case_id: req.params.id, event_type: "collaborator_added",
+        actor_membership_id: membershipId(req), note: parsed.data.reason,
+        metadata: { membership_id: parsed.data.membership_id, role: parsed.data.role },
+      });
+      if (event.error) return res.status(500).json({ error: "Investigador vinculado, mas a auditoria falhou." });
+      return res.status(201).json({ collaborator: saved.data });
+    }),
+  );
+
+  router.delete(
+    "/cases/:id/collaborators/:collaboratorId",
+    requireAny("integrity.investigators.manage", "integrity.cases.manage"),
+    asyncHandler(async (req, res) => {
+      const reason = String(req.body?.reason || "").trim();
+      if (reason.length < 3) return res.status(400).json({ error: "Informe o motivo da remoção." });
+      const db = getSupabaseAdmin();
+      const found = await findCase(db, req, req.params.id);
+      if (!found.data) return res.status(404).json({ error: "Caso não encontrado." });
+      const saved = await db.from("integrity_case_collaborators").update({
+        active: false, removed_at: new Date().toISOString(), removed_by_membership_id: membershipId(req),
+      }).eq("id", req.params.collaboratorId).eq("case_id", req.params.id).eq("tenant_id", tenantId(req)).eq("active", true).select("membership_id").maybeSingle();
+      if (saved.error || !saved.data) return res.status(404).json({ error: "Investigador não encontrado." });
+      await db.from("integrity_case_events").insert({
+        report_id: found.data.report_id, case_id: req.params.id, event_type: "collaborator_removed",
+        actor_membership_id: membershipId(req), note: reason, metadata: { membership_id: saved.data.membership_id },
+      });
+      return res.json({ removed: true });
+    }),
+  );
+
+  router.get(
+    "/notifications",
+    requireAny("integrity.notifications.read"),
+    asyncHandler(async (req, res) => {
+      const db = getSupabaseAdmin();
+      const now = new Date();
+      const soon = new Date(now.getTime() + 864e5).toISOString();
+      let casesQuery = db.from("integrity_cases").select("id,first_action_at,first_response_due_at,treatment_due_at,status")
+        .eq("tenant_id", tenantId(req)).not("status", "in", "(closed,archived)");
+      casesQuery = (await scopeCaseQuery(casesQuery, db, req)).query;
+      const cases = await casesQuery;
+      if (cases.error) return res.status(500).json({ error: "Não foi possível atualizar os alertas." });
+      const generated: any[] = [];
+      for (const item of cases.data || []) {
+        const due = !item.first_action_at && item.first_response_due_at ? item.first_response_due_at : item.treatment_due_at;
+        if (!due) continue;
+        const overdue = new Date(due) < now;
+        if (overdue || due <= soon) generated.push({
+          tenant_id: tenantId(req), recipient_membership_id: membershipId(req), case_id: item.id,
+          notification_type: overdue ? "sla_overdue" : "sla_due_soon",
+          title: overdue ? "SLA de caso vencido" : "SLA de caso próximo do vencimento",
+          dedupe_key: `${membershipId(req)}:${item.id}:${overdue ? "sla_overdue" : "sla_due_soon"}:${String(due).slice(0,10)}`,
+        });
+      }
+      const caseIds = (cases.data || []).map((item: any) => item.id);
+      if (caseIds.length) {
+        const overdueTasks = await db.from("integrity_case_tasks").select("id,case_id,title,due_at")
+          .in("case_id", caseIds).in("status", ["open", "in_progress"]).lt("due_at", now.toISOString());
+        if (overdueTasks.error) return res.status(500).json({ error: "Não foi possível atualizar os alertas de tarefa." });
+        for (const task of overdueTasks.data || []) generated.push({
+          tenant_id: tenantId(req), recipient_membership_id: membershipId(req), case_id: task.case_id,
+          notification_type: "task_overdue", title: "Tarefa de investigação vencida",
+          dedupe_key: `${membershipId(req)}:${task.id}:task_overdue`,
+        });
+      }
+      if (generated.length) {
+        const created = await db.from("integrity_notifications").upsert(generated, { onConflict: "dedupe_key", ignoreDuplicates: true });
+        if (created.error) return res.status(500).json({ error: "Não foi possível registrar os alertas." });
+      }
+      const notifications = await db.from("integrity_notifications").select("id,case_id,notification_type,title,read_at,created_at")
+        .eq("tenant_id", tenantId(req)).eq("recipient_membership_id", membershipId(req)).order("created_at", { ascending: false }).limit(100);
+      if (notifications.error) return res.status(500).json({ error: "Não foi possível carregar as notificações." });
+      return res.json({ notifications: notifications.data || [], unread: (notifications.data || []).filter((item: any) => !item.read_at).length });
+    }),
+  );
+
+  router.patch(
+    "/notifications/:id/read",
+    requireAny("integrity.notifications.read"),
+    asyncHandler(async (req, res) => {
+      const db = getSupabaseAdmin();
+      const saved = await db.from("integrity_notifications").update({ read_at: new Date().toISOString() })
+        .eq("id", req.params.id).eq("tenant_id", tenantId(req)).eq("recipient_membership_id", membershipId(req)).select("id,read_at").maybeSingle();
+      if (saved.error || !saved.data) return res.status(404).json({ error: "Notificação não encontrada." });
+      return res.json({ notification: saved.data });
+    }),
+  );
+
+  router.get(
+    "/settings/templates",
+    requireAny("integrity.templates.read", "integrity.templates.manage"),
+    asyncHandler(async (req, res) => {
+      const db = getSupabaseAdmin();
+      const result = await db.from("integrity_templates").select("id,template_type,name,title,body,active,created_at,updated_at")
+        .eq("tenant_id", tenantId(req)).order("template_type").order("name");
+      if (result.error) return res.status(500).json({ error: "Não foi possível carregar os templates." });
+      return res.json({ templates: result.data || [] });
+    }),
+  );
+
+  router.post(
+    "/settings/retention/evaluate",
+    requireAny("integrity.retention.manage", "integrity.settings.manage"),
+    asyncHandler(async (req, res) => {
+      const db = getSupabaseAdmin();
+      const due = await db.from("integrity_cases").select("id,report_id")
+        .eq("tenant_id", tenantId(req)).eq("status", "closed").eq("retention_state", "active")
+        .lte("retention_due_at", new Date().toISOString()).limit(500);
+      if (due.error) return res.status(500).json({ error: "Não foi possível avaliar a retenção." });
+      for (const item of due.data || []) {
+        const updated = await db.from("integrity_cases").update({ retention_state: "retention_due",updated_at:new Date().toISOString() })
+          .eq("id", item.id).eq("tenant_id", tenantId(req)).eq("retention_state", "active");
+        if (updated.error) return res.status(500).json({ error: "A avaliação de retenção não foi concluída." });
+        await db.from("integrity_case_events").insert({ report_id:item.report_id,case_id:item.id,event_type:"retention_due",actor_membership_id:membershipId(req),metadata:{} });
+      }
+      await auditIntegrity(db, req, "integrity.retention.evaluated", "integrity_cases", null, { due_cases: (due.data || []).length, physical_purge: false });
+      return res.json({ evaluated:true,retention_due:(due.data || []).length,physical_purge:false });
+    }),
+  );
+
+  router.post(
+    "/settings/templates",
+    requireAny("integrity.templates.manage"),
+    asyncHandler(async (req, res) => {
+      const parsed = templateSchema.safeParse(req.body);
+      if (!parsed.success) return res.status(400).json({ error: "Template inválido." });
+      const db = getSupabaseAdmin();
+      const { id, ...values } = parsed.data;
+      const query = id
+        ? db.from("integrity_templates").update({ ...values, updated_by_membership_id: membershipId(req), updated_at: new Date().toISOString() }).eq("id", id).eq("tenant_id", tenantId(req))
+        : db.from("integrity_templates").insert({ ...values, tenant_id: tenantId(req), created_by_membership_id: membershipId(req), updated_by_membership_id: membershipId(req) });
+      const saved = await query.select("*").single();
+      if (saved.error) return res.status(saved.error.code === "23505" ? 409 : 500).json({ error: "Não foi possível salvar o template." });
+      await auditIntegrity(db, req, id ? "integrity.template.updated" : "integrity.template.created", "integrity_templates", saved.data.id, { template_type: saved.data.template_type, active: saved.data.active });
+      return res.status(id ? 200 : 201).json({ template: saved.data });
+    }),
+  );
+
+  router.get(
+    "/settings/access",
+    requireAny("integrity.settings.manage"),
+    asyncHandler(async (req, res) => {
+      const db = getSupabaseAdmin();
+      const memberships = await db.from("memberships").select("id,user_id,status,created_at").eq("tenant_id", tenantId(req)).order("created_at");
+      if (memberships.error) return res.status(500).json({ error: "Não foi possível carregar os acessos." });
+      const memberIds = (memberships.data || []).map((item: any) => item.id);
+      const userIds = (memberships.data || []).map((item: any) => item.user_id);
+      const [profiles, membershipRoles, committees, assignments, collaborators, conflicts, activity] = await Promise.all([
+        userIds.length ? db.from("profiles").select("id,full_name").in("id", userIds) : Promise.resolve({ data: [], error: null }),
+        memberIds.length ? db.from("membership_roles").select("membership_id,role_id,roles!inner(key,name,tenant_id)").in("membership_id", memberIds).eq("roles.tenant_id", tenantId(req)) : Promise.resolve({ data: [], error: null }),
+        memberIds.length ? db.from("integrity_committee_members").select("membership_id,committee_id,active,integrity_committees!inner(name,tenant_id)").in("membership_id", memberIds).eq("integrity_committees.tenant_id", tenantId(req)) : Promise.resolve({ data: [], error: null }),
+        memberIds.length ? db.from("integrity_cases").select("owner_membership_id").eq("tenant_id", tenantId(req)).in("owner_membership_id", memberIds).not("status", "in", "(closed,archived)") : Promise.resolve({ data: [], error: null }),
+        memberIds.length ? db.from("integrity_case_collaborators").select("membership_id").eq("tenant_id", tenantId(req)).in("membership_id", memberIds).eq("active", true) : Promise.resolve({ data: [], error: null }),
+        memberIds.length ? db.from("integrity_case_conflicts").select("membership_id,integrity_cases!inner(tenant_id)").in("membership_id", memberIds).eq("active", true).eq("integrity_cases.tenant_id", tenantId(req)) : Promise.resolve({ data: [], error: null }),
+        memberIds.length ? db.from("integrity_case_events").select("actor_membership_id,created_at,integrity_cases!inner(tenant_id)").in("actor_membership_id", memberIds).eq("integrity_cases.tenant_id", tenantId(req)).order("created_at", { ascending: false }).limit(2000) : Promise.resolve({ data: [], error: null }),
+      ]);
+      if ([profiles,membershipRoles,committees,assignments,collaborators,conflicts,activity].some((result: any) => result.error))
+        return res.status(500).json({ error: "Não foi possível consolidar a governança de acesso." });
+      const roleIds = [...new Set((membershipRoles.data || []).map((item: any) => item.role_id))];
+      const rolePermissions = roleIds.length ? await db.from("role_permissions").select("role_id,permissions!inner(key)").in("role_id", roleIds).like("permissions.key", "integrity.%") : { data: [], error: null };
+      if (rolePermissions.error) return res.status(500).json({ error: "Não foi possível carregar as permissões." });
+      const names = new Map((profiles.data || []).map((item: any) => [item.id,item.full_name]));
+      const lastActivity = new Map<string,string>();
+      for (const item of activity.data || []) if (item.actor_membership_id && !lastActivity.has(item.actor_membership_id)) lastActivity.set(item.actor_membership_id,item.created_at);
+      return res.json({ access: (memberships.data || []).map((member: any) => {
+        const roles = (membershipRoles.data || []).filter((item: any) => item.membership_id === member.id);
+        const permissionKeys = [...new Set(roles.flatMap((role: any) => (rolePermissions.data || []).filter((item: any) => item.role_id === role.role_id).map((item: any) => item.permissions?.key)).filter(Boolean))];
+        return {
+          membership_id: member.id, name: names.get(member.user_id) || "Membro do tenant", status: member.status,
+          roles: roles.map((item: any) => item.roles?.name || item.roles?.key).filter(Boolean), permissions: permissionKeys,
+          committees: (committees.data || []).filter((item: any) => item.membership_id === member.id && item.active).map((item: any) => item.integrity_committees?.name).filter(Boolean),
+          active_cases: (assignments.data || []).filter((item: any) => item.owner_membership_id === member.id).length + (collaborators.data || []).filter((item: any) => item.membership_id === member.id).length,
+          active_conflicts: (conflicts.data || []).filter((item: any) => item.membership_id === member.id).length,
+          last_operational_activity_at: lastActivity.get(member.id) || null,
+        };
+      }) });
+    }),
+  );
+
+  router.get(
+    "/cases/:id/dossier.pdf",
+    requireAny("integrity.dossier.export", "integrity.case_report.export"),
+    asyncHandler(async (req, res) => {
+      const includeIdentity = req.query.include_identity === "true";
+      if (includeIdentity && !hasPermission(req, "integrity.identity.read"))
+        return res.status(403).json({ error: "A identidade exige permissão específica." });
+      const db = getSupabaseAdmin();
+      const found = await findCase(db, req, req.params.id,
+        "*,integrity_reports!inner(subject,description,occurred_at,reporter_mode,created_at),integrity_categories(name),integrity_units(name),integrity_committees(name)");
+      if (!found.data) return res.status(404).json({ error: "Caso não encontrado." });
+      const [tasks,evidence,timeline,collaborators] = await Promise.all([
+        db.from("integrity_case_tasks").select("title,status,priority,due_at").eq("case_id", req.params.id).order("created_at"),
+        db.from("integrity_attachments").select("created_at,files!inner(original_name,mime_type,size_bytes,checksum_sha256)").eq("case_id", req.params.id).is("deleted_at", null).order("created_at"),
+        db.from("integrity_case_events").select("id,event_type,note,created_at,actor_membership_id").eq("case_id", req.params.id).order("created_at"),
+        db.from("integrity_case_collaborators").select("membership_id").eq("case_id", req.params.id).eq("tenant_id", tenantId(req)).eq("active", true),
+      ]);
+      if ([tasks,evidence,timeline,collaborators].some((result: any) => result.error))
+        return res.status(500).json({ error: "Não foi possível preparar o dossiê." });
+      const membershipIds = [...new Set([
+        found.data.owner_membership_id, found.data.decided_by_membership_id,
+        ...(timeline.data || []).map((item: any) => item.actor_membership_id),
+        ...(collaborators.data || []).map((item: any) => item.membership_id),
+      ].filter(Boolean))];
+      const memberships = membershipIds.length ? await db.from("memberships").select("id,user_id").in("id", membershipIds).eq("tenant_id", tenantId(req)) : { data: [], error: null };
+      const userIds = (memberships.data || []).map((item: any) => item.user_id);
+      const profiles = userIds.length ? await db.from("profiles").select("id,full_name").in("id", userIds) : { data: [], error: null };
+      if (memberships.error || profiles.error) return res.status(500).json({ error: "Não foi possível identificar os responsáveis." });
+      const profileNames = new Map<string,string>((profiles.data || []).map((item: any) => [item.id,String(item.full_name || "")]));
+      const memberNames = new Map<string,string>((memberships.data || []).map((item: any) => [item.id,profileNames.get(item.user_id) || "Membro do tenant"]));
+      let identity: any = null;
+      if (includeIdentity && found.data.integrity_reports.reporter_mode === "identified") {
+        const identityResult = await db.from("integrity_report_identities").select("name,email,phone").eq("report_id", found.data.report_id).maybeSingle();
+        if (identityResult.error) return res.status(500).json({ error: "Não foi possível validar a identidade." });
+        identity = identityResult.data;
+      }
+      const recommendation = [...(timeline.data || [])].reverse().find((item: any) => item.event_type === "decision_recommended")?.note || null;
+      const pdf = createIntegrityDossierPdf({
+        organization: (req as any).tenantContext?.tenant?.name || "Organização",
+        protocol: found.data.protocol, status: found.data.status, category: found.data.integrity_categories?.name,
+        severity: found.data.severity, priority: found.data.priority, unit: found.data.integrity_units?.name,
+        committee: found.data.integrity_committees?.name, owner: memberNames.get(found.data.owner_membership_id) || null,
+        collaborators: (collaborators.data || []).map((item: any) => memberNames.get(item.membership_id) || "Membro do tenant"),
+        createdAt: found.data.created_at, firstActionAt: found.data.first_action_at,
+        firstResponseDueAt: found.data.first_response_due_at, treatmentDueAt: found.data.treatment_due_at, closedAt: found.data.closed_at,
+        subject: found.data.integrity_reports.subject, description: found.data.integrity_reports.description,
+        tasks: tasks.data || [], evidence: (evidence.data || []).map((item: any) => ({
+          name: item.files?.original_name, mime: item.files?.mime_type, size: item.files?.size_bytes,
+          checksum: item.files?.checksum_sha256, created_at: item.created_at,
+        })), timeline: (timeline.data || []).map((item: any) => ({ ...item, actor_name: memberNames.get(item.actor_membership_id) || "Sistema Ordum" })),
+        recommendation, conclusion: found.data.conclusion, measuresTaken: found.data.measures_taken,
+        finalClassification: found.data.final_classification, closureReason: found.data.closure_reason, reporterIdentity: identity,
+      });
+      const event = await db.from("integrity_case_events").insert({
+        report_id: found.data.report_id, case_id: req.params.id, event_type: "case_dossier_exported",
+        actor_membership_id: membershipId(req), metadata: { included_identity: Boolean(identity), format: "pdf", bytes: pdf.length },
+      });
+      if (event.error) return res.status(500).json({ error: "A exportação não pôde ser auditada." });
+      await auditIntegrity(db, req, "integrity.case_dossier.exported", "integrity_cases", req.params.id, { included_identity: Boolean(identity), format: "pdf", bytes: pdf.length });
+      res.setHeader("content-type", "application/pdf");
+      res.setHeader("content-disposition", `attachment; filename="integrity-${found.data.protocol}.pdf"`);
+      res.setHeader("cache-control", "private, no-store, max-age=0");
+      return res.send(pdf);
     }),
   );
 

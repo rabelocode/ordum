@@ -1,0 +1,18 @@
+import { Button } from "../../ui/Button";
+import { Input } from "../../ui/Input";
+import { Card } from "./IntegrityUi";
+
+export function CaseDecision({ status, templates, canRecommend, canClose, busy, onRecommend, onDecide }: { status:string; templates:any[]; canRecommend:boolean; canClose:boolean; busy:boolean; onRecommend:(value:any,form:HTMLFormElement)=>Promise<void>; onDecide:(value:any)=>Promise<void> }) {
+  const recommendationTemplates = templates.filter((item) => item.active && item.template_type === "recommendation");
+  const decisionTemplates = templates.filter((item) => item.active && item.template_type === "decision");
+  return <>
+    {canRecommend && ["investigation","decision"].includes(status) ? <Card title="Recomendação"><form onSubmit={async (event) => { event.preventDefault(); const form = new FormData(event.currentTarget); await onRecommend({ recommendation:form.get("recommendation"),justification:form.get("justification") },event.currentTarget); }} className="space-y-3">
+      {recommendationTemplates.length ? <select className="w-full rounded-xl border p-2" value="" onChange={(event) => { const template = recommendationTemplates.find((item) => item.id === event.target.value); const form = event.currentTarget.form; if (template && form) (form.elements.namedItem("recommendation") as HTMLTextAreaElement).value = template.body; }}><option value="">Aplicar template revisável</option>{recommendationTemplates.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select> : null}
+      <textarea name="recommendation" required minLength={10} rows={3} className="w-full rounded-xl border p-3" placeholder="Recomendação ao decisor" /><textarea name="justification" required minLength={10} rows={3} className="w-full rounded-xl border p-3" placeholder="Fundamentação interna" /><Button disabled={busy}>Registrar recomendação</Button>
+    </form></Card> : null}
+    {status === "decision" && canClose ? <Card title="Decisão e encerramento"><form onSubmit={async (event) => { event.preventDefault(); const form = new FormData(event.currentTarget); await onDecide({ final_classification:form.get("classification"),conclusion:form.get("conclusion"),measures_taken:form.get("measures"),internal_justification:form.get("justification"),reporter_outcome:form.get("outcome") || null }); }} className="space-y-3">
+      {decisionTemplates.length ? <select className="w-full rounded-xl border p-2" value="" onChange={(event) => { const template = decisionTemplates.find((item) => item.id === event.target.value); const form = event.currentTarget.form; if (template && form) (form.elements.namedItem("conclusion") as HTMLTextAreaElement).value = template.body; }}><option value="">Aplicar template revisável</option>{decisionTemplates.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select> : null}
+      <Input name="classification" required minLength={3} placeholder="Classificação final" /><textarea name="conclusion" required minLength={3} rows={3} className="w-full rounded-xl border p-3" placeholder="Conclusão interna" /><textarea name="measures" required minLength={3} rows={3} className="w-full rounded-xl border p-3" placeholder="Providências adotadas" /><textarea name="justification" required minLength={3} rows={3} className="w-full rounded-xl border p-3" placeholder="Fundamentação interna" /><textarea name="outcome" rows={3} className="w-full rounded-xl border p-3" placeholder="Resultado comunicável ao denunciante (opcional)" /><Button disabled={busy}>Registrar decisão e encerrar</Button>
+    </form></Card> : null}
+  </>;
+}

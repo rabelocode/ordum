@@ -3599,7 +3599,7 @@ init_router();
 // src/server/integrityRouter.ts
 init_tenantAuth();
 import express from "express";
-import { randomUUID as randomUUID2 } from "node:crypto";
+import { createHash as createHash2, randomUUID as randomUUID2 } from "node:crypto";
 import { z as z6 } from "zod";
 
 // src/domain/integrity.ts
@@ -3723,6 +3723,172 @@ ${address}
 ${scope}`).digest("hex");
 }
 
+// src/server/integrityDossierPdf.ts
+function latin(value) {
+  return String(value ?? "").normalize("NFC").replace(/[–—]/g, "-").replace(/[“”]/g, '"').replace(/[‘’]/g, "'").replace(/[^\x09\x0A\x0D\x20-\xFF]/g, "?");
+}
+function literal(value) {
+  return latin(value).replace(/\\/g, "\\\\").replace(/\(/g, "\\(").replace(/\)/g, "\\)");
+}
+function displayDate(value) {
+  if (!value) return "\u2014";
+  const date = new Date(String(value));
+  return Number.isNaN(date.getTime()) ? "\u2014" : date.toLocaleString("pt-BR", { timeZone: "America/Sao_Paulo" });
+}
+function words(value, max = 90) {
+  const paragraphs = latin(value).split(/\r?\n/);
+  const lines = [];
+  for (const paragraph of paragraphs) {
+    if (!paragraph.trim()) {
+      lines.push("");
+      continue;
+    }
+    let current = "";
+    for (const word of paragraph.trim().split(/\s+/)) {
+      if (!current) current = word;
+      else if (`${current} ${word}`.length <= max) current += ` ${word}`;
+      else {
+        lines.push(current);
+        current = word;
+      }
+    }
+    if (current) lines.push(current);
+  }
+  return lines;
+}
+function section(lines, title, values) {
+  lines.push({ text: title, bold: true, size: 12, color: "0.204 0.341 0.835", gap: 7 });
+  for (const [label, value] of values) {
+    const text = `${label}: ${value == null || value === "" ? "\u2014" : String(value)}`;
+    for (const [index, line] of words(text).entries())
+      lines.push({ text: line, bold: index === 0, size: 9, gap: index === 0 ? 2 : 0 });
+  }
+  lines.push({ text: "", gap: 7 });
+}
+function buildLines(dossier) {
+  const lines = [];
+  section(lines, "Identifica\xE7\xE3o do caso", [
+    ["Organiza\xE7\xE3o", dossier.organization],
+    ["Protocolo", dossier.protocol],
+    ["Status", dossier.status],
+    ["Categoria", dossier.category],
+    ["Severidade", dossier.severity],
+    ["Prioridade", dossier.priority],
+    ["Unidade/setor", dossier.unit],
+    ["Comit\xEA", dossier.committee],
+    ["Respons\xE1vel principal", dossier.owner],
+    ["Investigadores adicionais", dossier.collaborators?.join(", ") || "\u2014"]
+  ]);
+  section(lines, "Datas e SLA", [
+    ["Recebido em", displayDate(dossier.createdAt)],
+    ["Primeira a\xE7\xE3o", displayDate(dossier.firstActionAt)],
+    ["Primeira resposta at\xE9", displayDate(dossier.firstResponseDueAt)],
+    ["Tratamento at\xE9", displayDate(dossier.treatmentDueAt)],
+    ["Encerrado em", displayDate(dossier.closedAt)]
+  ]);
+  section(lines, "Den\xFAncia original", [
+    ["Assunto", dossier.subject],
+    ["Descri\xE7\xE3o", dossier.description]
+  ]);
+  if (dossier.reporterIdentity) {
+    section(lines, "Identidade autorizada do denunciante", [
+      ["Nome", dossier.reporterIdentity.name],
+      ["E-mail", dossier.reporterIdentity.email],
+      ["Telefone", dossier.reporterIdentity.phone]
+    ]);
+  } else {
+    section(lines, "Identidade do denunciante", [["Tratamento", "Omitida nesta exporta\xE7\xE3o"]]);
+  }
+  section(lines, "Tarefas relevantes", dossier.tasks.length ? dossier.tasks.map((task) => [String(task.title || "Tarefa"), `${task.status || "\u2014"} \xB7 ${task.priority || "\u2014"} \xB7 prazo ${displayDate(task.due_at)}`]) : [["Tarefas", "Nenhuma registrada"]]);
+  section(lines, "Rela\xE7\xE3o de evid\xEAncias", dossier.evidence.length ? dossier.evidence.map((item) => [String(item.name || "Evid\xEAncia"), `${item.mime || "\u2014"} \xB7 ${item.size || 0} bytes \xB7 SHA-256 ${item.checksum || "n\xE3o dispon\xEDvel"} \xB7 ${displayDate(item.created_at)}`]) : [["Evid\xEAncias", "Nenhuma registrada"]]);
+  section(lines, "Decis\xE3o e encerramento", [
+    ["Recomenda\xE7\xE3o", dossier.recommendation],
+    ["Classifica\xE7\xE3o final", dossier.finalClassification],
+    ["Conclus\xE3o", dossier.conclusion],
+    ["Provid\xEAncias", dossier.measuresTaken],
+    ["Motivo de encerramento", dossier.closureReason]
+  ]);
+  section(lines, "Timeline audit\xE1vel", dossier.timeline.length ? dossier.timeline.map((event) => [displayDate(event.created_at), `${event.actor_name || "Sistema Ordum"} \xB7 ${event.event_type || "evento"}${event.note ? ` \xB7 ${event.note}` : ""}`]) : [["Timeline", "Nenhum evento registrado"]]);
+  return lines;
+}
+function pageStream(lines, page, total) {
+  const commands = [
+    "0.125 0.137 0.133 rg 0 792 595 50 re f",
+    "0.82 0.52 0.25 rg 0 786 595 6 re f",
+    "BT /F2 16 Tf 1 1 1 rg 42 812 Td (ORDUM INTEGRIDADE) Tj ET",
+    `BT /F1 8 Tf 0.35 0.38 0.37 rg 42 25 Td (Dossi\xEA sanitizado \xB7 p\xE1gina ${page} de ${total}) Tj ET`
+  ];
+  let y = 764;
+  for (const line of lines) {
+    y -= line.gap || 0;
+    const size = line.size || 9;
+    commands.push(`BT /${line.bold ? "F2" : "F1"} ${size} Tf ${line.color || "0.125 0.137 0.133"} rg 42 ${y} Td (${literal(line.text)}) Tj ET`);
+    y -= Math.max(size + 4, 13);
+  }
+  return commands.join("\n");
+}
+function createIntegrityDossierPdf(dossier) {
+  const logicalLines = buildLines(dossier);
+  const pages = [];
+  let current = [];
+  let used = 0;
+  for (const line of logicalLines) {
+    const height = Math.max((line.size || 9) + 4, 13) + (line.gap || 0);
+    if (used + height > 705 && current.length) {
+      pages.push(current);
+      current = [];
+      used = 0;
+    }
+    current.push(line);
+    used += height;
+  }
+  if (current.length || !pages.length) pages.push(current);
+  const pageObjectIds = pages.map((_, index) => 5 + index * 2);
+  const objects = [];
+  objects[1] = "<< /Type /Catalog /Pages 2 0 R >>";
+  objects[2] = `<< /Type /Pages /Count ${pages.length} /Kids [${pageObjectIds.map((id) => `${id} 0 R`).join(" ")}] >>`;
+  objects[3] = "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>";
+  objects[4] = "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold /Encoding /WinAnsiEncoding >>";
+  pages.forEach((pageLines, index) => {
+    const pageId = pageObjectIds[index];
+    const contentId = pageId + 1;
+    const stream = pageStream(pageLines, index + 1, pages.length);
+    objects[pageId] = `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R /F2 4 0 R >> >> /Contents ${contentId} 0 R >>`;
+    objects[contentId] = `<< /Length ${Buffer.byteLength(stream, "latin1")} >>
+stream
+${stream}
+endstream`;
+  });
+  const chunks = [Buffer.from("%PDF-1.4\n%\xE2\xE3\xCF\xD3\n", "latin1")];
+  const offsets = [0];
+  let position = chunks[0].length;
+  for (let id = 1; id < objects.length; id += 1) {
+    offsets[id] = position;
+    const chunk = Buffer.from(`${id} 0 obj
+${objects[id]}
+endobj
+`, "latin1");
+    chunks.push(chunk);
+    position += chunk.length;
+  }
+  const xref = position;
+  let trailer = `xref
+0 ${objects.length}
+0000000000 65535 f${" "}
+`;
+  for (let id = 1; id < objects.length; id += 1)
+    trailer += `${String(offsets[id]).padStart(10, "0")} 00000 n${" "}
+`;
+  trailer += `trailer
+<< /Size ${objects.length} /Root 1 0 R >>
+startxref
+${xref}
+%%EOF
+`;
+  chunks.push(Buffer.from(trailer, "latin1"));
+  return Buffer.concat(chunks);
+}
+
 // src/server/integrityRouter.ts
 var listSchema = z6.object({
   search: z6.string().trim().max(120).optional(),
@@ -3785,7 +3951,12 @@ var settingsSchema = z6.object({
   routing_rules: z6.array(z6.unknown()).default([]),
   treatment_sla_hours: z6.number().int().min(1).max(17520).default(720),
   default_assignee_membership_id: z6.string().uuid().nullable().optional(),
-  default_committee_id: z6.string().uuid().nullable().optional()
+  default_committee_id: z6.string().uuid().nullable().optional(),
+  retention_days: z6.number().int().min(30).max(7300).default(1825),
+  evidence_retention_days: z6.number().int().min(30).max(7300).default(1825),
+  message_retention_days: z6.number().int().min(30).max(7300).default(1825),
+  post_closure_action: z6.enum(["archive", "anonymize"]).default("archive"),
+  anonymization_enabled: z6.boolean().default(false)
 });
 var conflictSchema = z6.object({
   membership_id: z6.string().uuid(),
@@ -3820,12 +3991,18 @@ var taskSchema = z6.object({
   description: z6.string().trim().max(2e3).nullable().optional(),
   assignee_membership_id: z6.string().uuid().nullable().optional(),
   due_at: z6.string().datetime().nullable().optional(),
-  priority: z6.enum(["low", "normal", "high", "urgent"]).default("normal")
+  priority: z6.enum(["low", "normal", "high", "urgent"]).default("normal"),
+  parent_task_id: z6.string().uuid().nullable().optional()
 });
-var taskStatusSchema = z6.object({
-  status: z6.enum(["open", "in_progress", "done", "cancelled"]),
+var taskUpdateSchema = z6.object({
+  title: z6.string().trim().min(2).max(200).optional(),
+  description: z6.string().trim().max(2e3).nullable().optional(),
+  assignee_membership_id: z6.string().uuid().nullable().optional(),
+  due_at: z6.string().datetime().nullable().optional(),
+  priority: z6.enum(["low", "normal", "high", "urgent"]).optional(),
+  status: z6.enum(["open", "in_progress", "done", "cancelled"]).optional(),
   reason: z6.string().trim().min(3).max(500)
-});
+}).refine((value) => Object.keys(value).some((key) => key !== "reason"), { message: "Informe uma altera\xE7\xE3o." });
 var decisionSchema = z6.object({
   final_classification: z6.string().trim().min(3).max(200),
   conclusion: z6.string().trim().min(3).max(1e4),
@@ -3867,6 +4044,19 @@ var routingUpdateSchema = routingSchema.extend({
 var routingPreviewSchema = z6.object({
   category_id: z6.string().uuid().nullable().optional(),
   unit_id: z6.string().uuid().nullable().optional()
+});
+var collaboratorSchema = z6.object({
+  membership_id: z6.string().uuid(),
+  role: z6.enum(["investigator", "participant"]).default("investigator"),
+  reason: z6.string().trim().min(3).max(500)
+});
+var templateSchema = z6.object({
+  id: z6.string().uuid().optional(),
+  template_type: z6.enum(["task", "reporter_message", "information_request", "recommendation", "decision"]),
+  name: z6.string().trim().min(2).max(120),
+  title: z6.string().trim().max(200).nullable().optional(),
+  body: z6.string().trim().min(2).max(1e4),
+  active: z6.boolean().default(true)
 });
 function createIntegrityRouter(getSupabaseAdmin2, authOverrides) {
   const router = express.Router();
@@ -3916,6 +4106,17 @@ function createIntegrityRouter(getSupabaseAdmin2, authOverrides) {
     if (result.error) throw result.error;
     return (result.data || []).map((item) => item.id);
   }
+  async function membershipNames(db, tenant, ids) {
+    const unique = [...new Set(ids.filter(Boolean))];
+    if (!unique.length) return /* @__PURE__ */ new Map();
+    const memberships = await db.from("memberships").select("id,user_id").in("id", unique).eq("tenant_id", tenant);
+    if (memberships.error) throw memberships.error;
+    const userIds = (memberships.data || []).map((item) => item.user_id);
+    const profiles = userIds.length ? await db.from("profiles").select("id,full_name").in("id", userIds) : { data: [], error: null };
+    if (profiles.error) throw profiles.error;
+    const profileNames = new Map((profiles.data || []).map((item) => [item.id, String(item.full_name || "")]));
+    return new Map((memberships.data || []).map((item) => [item.id, profileNames.get(item.user_id) || "Membro do tenant"]));
+  }
   async function scopedCommitteeIds(db, req) {
     const result = await db.from("integrity_committee_members").select("committee_id,integrity_committees!inner(tenant_id,status)").eq("membership_id", membershipId(req)).eq("active", true).eq("integrity_committees.tenant_id", tenantId(req)).eq("integrity_committees.status", "active");
     if (result.error) throw result.error;
@@ -3926,8 +4127,12 @@ function createIntegrityRouter(getSupabaseAdmin2, authOverrides) {
     if (!hasPermission2(req, "integrity.cases.read_assigned"))
       return { query: query.eq("id", "00000000-0000-0000-0000-000000000000") };
     const committees = await scopedCommitteeIds(db, req);
+    const collaborators = await db.from("integrity_case_collaborators").select("case_id").eq("tenant_id", tenantId(req)).eq("membership_id", membershipId(req)).eq("active", true);
+    if (collaborators.error) throw collaborators.error;
     const filters = [`owner_membership_id.eq.${membershipId(req)}`];
     if (committees.length) filters.push(`committee_id.in.(${committees.join(",")})`);
+    const collaboratorCaseIds = (collaborators.data || []).map((item) => item.case_id);
+    if (collaboratorCaseIds.length) filters.push(`id.in.(${collaboratorCaseIds.join(",")})`);
     return { query: query.or(filters.join(",")) };
   }
   async function findCase(db, req, id, select = "id,tenant_id,report_id,status,lock_version,owner_membership_id,first_action_at") {
@@ -4159,7 +4364,7 @@ function createIntegrityRouter(getSupabaseAdmin2, authOverrides) {
         db,
         req,
         req.params.id,
-        "*,integrity_reports!inner(id,subject,description,occurred_at,reporter_mode,created_at),integrity_categories(name),integrity_units(name),integrity_case_assignments(membership_id,created_at),integrity_case_tasks(*),integrity_case_conflicts(membership_id,reason,active)"
+        "*,integrity_reports!inner(id,subject,description,occurred_at,reporter_mode,created_at),integrity_categories(name),integrity_units(name),integrity_committees(name),integrity_case_assignments(membership_id,created_at),integrity_case_tasks(*),integrity_case_conflicts(membership_id,reason,active)"
       );
       if (result.error)
         return res.status(500).json({ error: "N\xE3o foi poss\xEDvel carregar o caso." });
@@ -4457,11 +4662,15 @@ function createIntegrityRouter(getSupabaseAdmin2, authOverrides) {
       if (!found.data)
         return res.status(404).json({ error: "Caso n\xE3o encontrado." });
       const result = await db.from("integrity_attachments").select(
-        "id,evidence_kind,description,visible_to_reporter,uploaded_by_type,created_at,files!inner(id,original_name,mime_type,size_bytes,validation_status)"
+        "id,evidence_kind,description,visible_to_reporter,uploaded_by_type,created_at,files!inner(id,original_name,mime_type,size_bytes,validation_status,checksum_sha256,uploaded_by_membership_id)"
       ).eq("case_id", req.params.id).is("deleted_at", null).order("created_at", { ascending: false });
       if (result.error)
         return res.status(500).json({ error: "N\xE3o foi poss\xEDvel carregar as evid\xEAncias." });
-      return res.json({ evidence: result.data || [] });
+      const names = await membershipNames(db, tenantId(req), (result.data || []).map((item) => item.files?.uploaded_by_membership_id));
+      return res.json({ evidence: (result.data || []).map((item) => ({
+        ...item,
+        uploader_name: item.uploaded_by_type === "reporter" ? "Denunciante" : names.get(item.files?.uploaded_by_membership_id) || "Sistema Ordum"
+      })) });
     })
   );
   router.post(
@@ -4485,6 +4694,7 @@ function createIntegrityRouter(getSupabaseAdmin2, authOverrides) {
       if (checked.valid === false)
         return res.status(415).json({ error: checked.error });
       const visible = req.header("x-visible-to-reporter") === "true";
+      const checksum = createHash2("sha256").update(req.body).digest("hex");
       const objectPath = `${tenantId(req)}/${req.params.id}/${randomUUID2()}`;
       const uploaded = await db.storage.from("ordum-integrity").upload(objectPath, req.body, { contentType: mime, upsert: false });
       if (uploaded.error)
@@ -4499,6 +4709,7 @@ function createIntegrityRouter(getSupabaseAdmin2, authOverrides) {
         size_bytes: req.body.length,
         sensitivity: "restricted",
         validation_status: "validated",
+        checksum_sha256: checksum,
         uploaded_by_membership_id: membershipId(req)
       }).select("id").single();
       if (file.error) {
@@ -4526,10 +4737,12 @@ function createIntegrityRouter(getSupabaseAdmin2, authOverrides) {
         actor_membership_id: membershipId(req),
         metadata: {
           attachment_id: attachment.data.id,
-          visible_to_reporter: visible
+          visible_to_reporter: visible,
+          checksum_sha256: checksum,
+          size_bytes: req.body.length
         }
       });
-      return res.status(201).json({ id: attachment.data.id });
+      return res.status(201).json({ id: attachment.data.id, checksum_sha256: checksum });
     })
   );
   router.post(
@@ -4547,6 +4760,15 @@ function createIntegrityRouter(getSupabaseAdmin2, authOverrides) {
       const signed = await db.storage.from(file.bucket).createSignedUrl(file.object_path, 120);
       if (signed.error)
         return res.status(500).json({ error: "N\xE3o foi poss\xEDvel liberar a evid\xEAncia." });
+      const event = await db.from("integrity_case_events").insert({
+        report_id: found.data.report_id,
+        case_id: req.params.id,
+        event_type: "evidence_downloaded",
+        actor_membership_id: membershipId(req),
+        metadata: { attachment_id: req.params.evidenceId, expires_in: 120 }
+      });
+      if (event.error)
+        return res.status(500).json({ error: "O download n\xE3o p\xF4de ser auditado." });
       return res.json({ url: signed.data.signedUrl, expires_in: 120 });
     })
   );
@@ -4613,7 +4835,13 @@ function createIntegrityRouter(getSupabaseAdmin2, authOverrides) {
       });
       if (result.error)
         return res.status(500).json({ error: "N\xE3o foi poss\xEDvel carregar as tarefas." });
-      return res.json({ tasks: result.data || [] });
+      const names = await membershipNames(db, tenantId(req), (result.data || []).flatMap((item) => [item.assignee_membership_id, item.created_by_membership_id, item.completed_by_membership_id]));
+      return res.json({ tasks: (result.data || []).map((item) => ({
+        ...item,
+        assignee_name: names.get(item.assignee_membership_id) || null,
+        creator_name: names.get(item.created_by_membership_id) || "Membro do tenant",
+        completed_by_name: names.get(item.completed_by_membership_id) || null
+      })) });
     })
   );
   router.post(
@@ -4627,6 +4855,10 @@ function createIntegrityRouter(getSupabaseAdmin2, authOverrides) {
       const found = await findCase(db, req, req.params.id);
       if (!found.data)
         return res.status(404).json({ error: "Caso n\xE3o encontrado." });
+      if (parsed.data.parent_task_id) {
+        const parent = await db.from("integrity_case_tasks").select("id").eq("id", parsed.data.parent_task_id).eq("case_id", req.params.id).maybeSingle();
+        if (!parent.data) return res.status(400).json({ error: "Tarefa principal inv\xE1lida." });
+      }
       if (parsed.data.assignee_membership_id) {
         const member = await db.from("memberships").select("id,status").eq("id", parsed.data.assignee_membership_id).eq("tenant_id", tenantId(req)).maybeSingle();
         if (!member.data || member.data.status !== "active")
@@ -4658,23 +4890,32 @@ function createIntegrityRouter(getSupabaseAdmin2, authOverrides) {
     "/cases/:id/tasks/:taskId",
     requireAny("integrity.cases.manage", "integrity.cases.investigate"),
     asyncHandler(async (req, res) => {
-      const parsed = taskStatusSchema.safeParse(req.body);
+      const parsed = taskUpdateSchema.safeParse(req.body);
       if (!parsed.success)
         return res.status(400).json({ error: "Atualiza\xE7\xE3o de tarefa inv\xE1lida." });
       const db = getSupabaseAdmin2();
       const found = await findCase(db, req, req.params.id);
       if (!found.data)
         return res.status(404).json({ error: "Caso n\xE3o encontrado." });
-      const current = await db.from("integrity_case_tasks").select("id,status").eq("id", req.params.taskId).eq("case_id", req.params.id).maybeSingle();
+      const current = await db.from("integrity_case_tasks").select("*").eq("id", req.params.taskId).eq("case_id", req.params.id).maybeSingle();
       if (!current.data)
         return res.status(404).json({ error: "Tarefa n\xE3o encontrada." });
       const now = (/* @__PURE__ */ new Date()).toISOString();
-      const update = { status: parsed.data.status, updated_at: now };
+      if (parsed.data.assignee_membership_id) {
+        const member = await db.from("memberships").select("id,status").eq("id", parsed.data.assignee_membership_id).eq("tenant_id", tenantId(req)).maybeSingle();
+        if (!member.data || member.data.status !== "active")
+          return res.status(400).json({ error: "Respons\xE1vel inv\xE1lido." });
+        const conflict = await db.from("integrity_case_conflicts").select("id").eq("case_id", req.params.id).eq("membership_id", parsed.data.assignee_membership_id).eq("active", true).maybeSingle();
+        if (conflict.data)
+          return res.status(409).json({ error: "Respons\xE1vel bloqueado por conflito de interesse." });
+      }
+      const { reason, ...changes } = parsed.data;
+      const update = { ...changes, updated_at: now };
       if (parsed.data.status === "done") {
         update.completed_at = now;
         update.completed_by_membership_id = membershipId(req);
       }
-      if (current.data.status === "done" && parsed.data.status === "open") {
+      if (current.data.status === "done" && parsed.data.status && parsed.data.status !== "done") {
         update.completed_at = null;
         update.completed_by_membership_id = null;
         update.reopened_at = now;
@@ -4685,13 +4926,14 @@ function createIntegrityRouter(getSupabaseAdmin2, authOverrides) {
       await db.from("integrity_case_events").insert({
         report_id: found.data.report_id,
         case_id: req.params.id,
-        event_type: parsed.data.status === "done" ? "task_completed" : current.data.status === "done" ? "task_reopened" : "task_status_changed",
+        event_type: parsed.data.status === "done" ? "task_completed" : current.data.status === "done" && parsed.data.status ? "task_reopened" : "task_updated",
         actor_membership_id: membershipId(req),
-        note: parsed.data.reason,
+        note: reason,
         metadata: {
           task_id: req.params.taskId,
           from_status: current.data.status,
-          to_status: parsed.data.status
+          to_status: parsed.data.status || current.data.status,
+          changed_fields: Object.keys(changes)
         }
       });
       return res.json({ task: saved.data });
@@ -5179,12 +5421,325 @@ function createIntegrityRouter(getSupabaseAdmin2, authOverrides) {
       return res.json({ routing_rule: saved.data });
     })
   );
+  router.get(
+    "/cases/:id/collaborators",
+    requireAny("integrity.cases.read", "integrity.cases.read_assigned"),
+    asyncHandler(async (req, res) => {
+      const db = getSupabaseAdmin2();
+      const found = await findCase(db, req, req.params.id);
+      if (!found.data) return res.status(404).json({ error: "Caso n\xE3o encontrado." });
+      const rows = await db.from("integrity_case_collaborators").select("id,membership_id,role,active,created_at,removed_at").eq("case_id", req.params.id).eq("tenant_id", tenantId(req)).order("created_at");
+      if (rows.error) return res.status(500).json({ error: "N\xE3o foi poss\xEDvel carregar os investigadores." });
+      const ids = (rows.data || []).map((item) => item.membership_id);
+      const memberships = ids.length ? await db.from("memberships").select("id,user_id").in("id", ids).eq("tenant_id", tenantId(req)) : { data: [], error: null };
+      const userIds = (memberships.data || []).map((item) => item.user_id);
+      const profiles = userIds.length ? await db.from("profiles").select("id,full_name").in("id", userIds) : { data: [], error: null };
+      if (memberships.error || profiles.error) return res.status(500).json({ error: "N\xE3o foi poss\xEDvel identificar os investigadores." });
+      const profileNames = new Map((profiles.data || []).map((item) => [item.id, item.full_name]));
+      const names = new Map((memberships.data || []).map((item) => [item.id, profileNames.get(item.user_id) || "Membro do tenant"]));
+      return res.json({ collaborators: (rows.data || []).map((item) => ({ ...item, name: names.get(item.membership_id) || "Membro indispon\xEDvel" })) });
+    })
+  );
+  router.post(
+    "/cases/:id/collaborators",
+    requireAny("integrity.investigators.manage", "integrity.cases.manage"),
+    asyncHandler(async (req, res) => {
+      const parsed = collaboratorSchema.safeParse(req.body);
+      if (!parsed.success) return res.status(400).json({ error: "Investigador inv\xE1lido." });
+      const db = getSupabaseAdmin2();
+      const found = await findCase(db, req, req.params.id);
+      if (!found.data) return res.status(404).json({ error: "Caso n\xE3o encontrado." });
+      const member = await db.from("memberships").select("id,status").eq("id", parsed.data.membership_id).eq("tenant_id", tenantId(req)).maybeSingle();
+      if (!member.data || member.data.status !== "active") return res.status(400).json({ error: "Membro n\xE3o est\xE1 ativo neste tenant." });
+      const conflict = await db.from("integrity_case_conflicts").select("id").eq("case_id", req.params.id).eq("membership_id", parsed.data.membership_id).eq("active", true).maybeSingle();
+      if (conflict.data) return res.status(409).json({ error: "Participa\xE7\xE3o bloqueada por conflito de interesse." });
+      const saved = await db.from("integrity_case_collaborators").upsert({
+        tenant_id: tenantId(req),
+        case_id: req.params.id,
+        membership_id: parsed.data.membership_id,
+        role: parsed.data.role,
+        active: true,
+        removed_at: null,
+        removed_by_membership_id: null,
+        added_by_membership_id: membershipId(req)
+      }, { onConflict: "case_id,membership_id" }).select("*").single();
+      if (saved.error) return res.status(500).json({ error: "N\xE3o foi poss\xEDvel vincular o investigador." });
+      const event = await db.from("integrity_case_events").insert({
+        report_id: found.data.report_id,
+        case_id: req.params.id,
+        event_type: "collaborator_added",
+        actor_membership_id: membershipId(req),
+        note: parsed.data.reason,
+        metadata: { membership_id: parsed.data.membership_id, role: parsed.data.role }
+      });
+      if (event.error) return res.status(500).json({ error: "Investigador vinculado, mas a auditoria falhou." });
+      return res.status(201).json({ collaborator: saved.data });
+    })
+  );
+  router.delete(
+    "/cases/:id/collaborators/:collaboratorId",
+    requireAny("integrity.investigators.manage", "integrity.cases.manage"),
+    asyncHandler(async (req, res) => {
+      const reason = String(req.body?.reason || "").trim();
+      if (reason.length < 3) return res.status(400).json({ error: "Informe o motivo da remo\xE7\xE3o." });
+      const db = getSupabaseAdmin2();
+      const found = await findCase(db, req, req.params.id);
+      if (!found.data) return res.status(404).json({ error: "Caso n\xE3o encontrado." });
+      const saved = await db.from("integrity_case_collaborators").update({
+        active: false,
+        removed_at: (/* @__PURE__ */ new Date()).toISOString(),
+        removed_by_membership_id: membershipId(req)
+      }).eq("id", req.params.collaboratorId).eq("case_id", req.params.id).eq("tenant_id", tenantId(req)).eq("active", true).select("membership_id").maybeSingle();
+      if (saved.error || !saved.data) return res.status(404).json({ error: "Investigador n\xE3o encontrado." });
+      await db.from("integrity_case_events").insert({
+        report_id: found.data.report_id,
+        case_id: req.params.id,
+        event_type: "collaborator_removed",
+        actor_membership_id: membershipId(req),
+        note: reason,
+        metadata: { membership_id: saved.data.membership_id }
+      });
+      return res.json({ removed: true });
+    })
+  );
+  router.get(
+    "/notifications",
+    requireAny("integrity.notifications.read"),
+    asyncHandler(async (req, res) => {
+      const db = getSupabaseAdmin2();
+      const now = /* @__PURE__ */ new Date();
+      const soon = new Date(now.getTime() + 864e5).toISOString();
+      let casesQuery = db.from("integrity_cases").select("id,first_action_at,first_response_due_at,treatment_due_at,status").eq("tenant_id", tenantId(req)).not("status", "in", "(closed,archived)");
+      casesQuery = (await scopeCaseQuery(casesQuery, db, req)).query;
+      const cases = await casesQuery;
+      if (cases.error) return res.status(500).json({ error: "N\xE3o foi poss\xEDvel atualizar os alertas." });
+      const generated = [];
+      for (const item of cases.data || []) {
+        const due = !item.first_action_at && item.first_response_due_at ? item.first_response_due_at : item.treatment_due_at;
+        if (!due) continue;
+        const overdue = new Date(due) < now;
+        if (overdue || due <= soon) generated.push({
+          tenant_id: tenantId(req),
+          recipient_membership_id: membershipId(req),
+          case_id: item.id,
+          notification_type: overdue ? "sla_overdue" : "sla_due_soon",
+          title: overdue ? "SLA de caso vencido" : "SLA de caso pr\xF3ximo do vencimento",
+          dedupe_key: `${membershipId(req)}:${item.id}:${overdue ? "sla_overdue" : "sla_due_soon"}:${String(due).slice(0, 10)}`
+        });
+      }
+      const caseIds = (cases.data || []).map((item) => item.id);
+      if (caseIds.length) {
+        const overdueTasks = await db.from("integrity_case_tasks").select("id,case_id,title,due_at").in("case_id", caseIds).in("status", ["open", "in_progress"]).lt("due_at", now.toISOString());
+        if (overdueTasks.error) return res.status(500).json({ error: "N\xE3o foi poss\xEDvel atualizar os alertas de tarefa." });
+        for (const task of overdueTasks.data || []) generated.push({
+          tenant_id: tenantId(req),
+          recipient_membership_id: membershipId(req),
+          case_id: task.case_id,
+          notification_type: "task_overdue",
+          title: "Tarefa de investiga\xE7\xE3o vencida",
+          dedupe_key: `${membershipId(req)}:${task.id}:task_overdue`
+        });
+      }
+      if (generated.length) {
+        const created = await db.from("integrity_notifications").upsert(generated, { onConflict: "dedupe_key", ignoreDuplicates: true });
+        if (created.error) return res.status(500).json({ error: "N\xE3o foi poss\xEDvel registrar os alertas." });
+      }
+      const notifications = await db.from("integrity_notifications").select("id,case_id,notification_type,title,read_at,created_at").eq("tenant_id", tenantId(req)).eq("recipient_membership_id", membershipId(req)).order("created_at", { ascending: false }).limit(100);
+      if (notifications.error) return res.status(500).json({ error: "N\xE3o foi poss\xEDvel carregar as notifica\xE7\xF5es." });
+      return res.json({ notifications: notifications.data || [], unread: (notifications.data || []).filter((item) => !item.read_at).length });
+    })
+  );
+  router.patch(
+    "/notifications/:id/read",
+    requireAny("integrity.notifications.read"),
+    asyncHandler(async (req, res) => {
+      const db = getSupabaseAdmin2();
+      const saved = await db.from("integrity_notifications").update({ read_at: (/* @__PURE__ */ new Date()).toISOString() }).eq("id", req.params.id).eq("tenant_id", tenantId(req)).eq("recipient_membership_id", membershipId(req)).select("id,read_at").maybeSingle();
+      if (saved.error || !saved.data) return res.status(404).json({ error: "Notifica\xE7\xE3o n\xE3o encontrada." });
+      return res.json({ notification: saved.data });
+    })
+  );
+  router.get(
+    "/settings/templates",
+    requireAny("integrity.templates.read", "integrity.templates.manage"),
+    asyncHandler(async (req, res) => {
+      const db = getSupabaseAdmin2();
+      const result = await db.from("integrity_templates").select("id,template_type,name,title,body,active,created_at,updated_at").eq("tenant_id", tenantId(req)).order("template_type").order("name");
+      if (result.error) return res.status(500).json({ error: "N\xE3o foi poss\xEDvel carregar os templates." });
+      return res.json({ templates: result.data || [] });
+    })
+  );
+  router.post(
+    "/settings/retention/evaluate",
+    requireAny("integrity.retention.manage", "integrity.settings.manage"),
+    asyncHandler(async (req, res) => {
+      const db = getSupabaseAdmin2();
+      const due = await db.from("integrity_cases").select("id,report_id").eq("tenant_id", tenantId(req)).eq("status", "closed").eq("retention_state", "active").lte("retention_due_at", (/* @__PURE__ */ new Date()).toISOString()).limit(500);
+      if (due.error) return res.status(500).json({ error: "N\xE3o foi poss\xEDvel avaliar a reten\xE7\xE3o." });
+      for (const item of due.data || []) {
+        const updated = await db.from("integrity_cases").update({ retention_state: "retention_due", updated_at: (/* @__PURE__ */ new Date()).toISOString() }).eq("id", item.id).eq("tenant_id", tenantId(req)).eq("retention_state", "active");
+        if (updated.error) return res.status(500).json({ error: "A avalia\xE7\xE3o de reten\xE7\xE3o n\xE3o foi conclu\xEDda." });
+        await db.from("integrity_case_events").insert({ report_id: item.report_id, case_id: item.id, event_type: "retention_due", actor_membership_id: membershipId(req), metadata: {} });
+      }
+      await auditIntegrity(db, req, "integrity.retention.evaluated", "integrity_cases", null, { due_cases: (due.data || []).length, physical_purge: false });
+      return res.json({ evaluated: true, retention_due: (due.data || []).length, physical_purge: false });
+    })
+  );
+  router.post(
+    "/settings/templates",
+    requireAny("integrity.templates.manage"),
+    asyncHandler(async (req, res) => {
+      const parsed = templateSchema.safeParse(req.body);
+      if (!parsed.success) return res.status(400).json({ error: "Template inv\xE1lido." });
+      const db = getSupabaseAdmin2();
+      const { id, ...values } = parsed.data;
+      const query = id ? db.from("integrity_templates").update({ ...values, updated_by_membership_id: membershipId(req), updated_at: (/* @__PURE__ */ new Date()).toISOString() }).eq("id", id).eq("tenant_id", tenantId(req)) : db.from("integrity_templates").insert({ ...values, tenant_id: tenantId(req), created_by_membership_id: membershipId(req), updated_by_membership_id: membershipId(req) });
+      const saved = await query.select("*").single();
+      if (saved.error) return res.status(saved.error.code === "23505" ? 409 : 500).json({ error: "N\xE3o foi poss\xEDvel salvar o template." });
+      await auditIntegrity(db, req, id ? "integrity.template.updated" : "integrity.template.created", "integrity_templates", saved.data.id, { template_type: saved.data.template_type, active: saved.data.active });
+      return res.status(id ? 200 : 201).json({ template: saved.data });
+    })
+  );
+  router.get(
+    "/settings/access",
+    requireAny("integrity.settings.manage"),
+    asyncHandler(async (req, res) => {
+      const db = getSupabaseAdmin2();
+      const memberships = await db.from("memberships").select("id,user_id,status,created_at").eq("tenant_id", tenantId(req)).order("created_at");
+      if (memberships.error) return res.status(500).json({ error: "N\xE3o foi poss\xEDvel carregar os acessos." });
+      const memberIds = (memberships.data || []).map((item) => item.id);
+      const userIds = (memberships.data || []).map((item) => item.user_id);
+      const [profiles, membershipRoles, committees, assignments, collaborators, conflicts, activity] = await Promise.all([
+        userIds.length ? db.from("profiles").select("id,full_name").in("id", userIds) : Promise.resolve({ data: [], error: null }),
+        memberIds.length ? db.from("membership_roles").select("membership_id,role_id,roles!inner(key,name,tenant_id)").in("membership_id", memberIds).eq("roles.tenant_id", tenantId(req)) : Promise.resolve({ data: [], error: null }),
+        memberIds.length ? db.from("integrity_committee_members").select("membership_id,committee_id,active,integrity_committees!inner(name,tenant_id)").in("membership_id", memberIds).eq("integrity_committees.tenant_id", tenantId(req)) : Promise.resolve({ data: [], error: null }),
+        memberIds.length ? db.from("integrity_cases").select("owner_membership_id").eq("tenant_id", tenantId(req)).in("owner_membership_id", memberIds).not("status", "in", "(closed,archived)") : Promise.resolve({ data: [], error: null }),
+        memberIds.length ? db.from("integrity_case_collaborators").select("membership_id").eq("tenant_id", tenantId(req)).in("membership_id", memberIds).eq("active", true) : Promise.resolve({ data: [], error: null }),
+        memberIds.length ? db.from("integrity_case_conflicts").select("membership_id,integrity_cases!inner(tenant_id)").in("membership_id", memberIds).eq("active", true).eq("integrity_cases.tenant_id", tenantId(req)) : Promise.resolve({ data: [], error: null }),
+        memberIds.length ? db.from("integrity_case_events").select("actor_membership_id,created_at,integrity_cases!inner(tenant_id)").in("actor_membership_id", memberIds).eq("integrity_cases.tenant_id", tenantId(req)).order("created_at", { ascending: false }).limit(2e3) : Promise.resolve({ data: [], error: null })
+      ]);
+      if ([profiles, membershipRoles, committees, assignments, collaborators, conflicts, activity].some((result) => result.error))
+        return res.status(500).json({ error: "N\xE3o foi poss\xEDvel consolidar a governan\xE7a de acesso." });
+      const roleIds = [...new Set((membershipRoles.data || []).map((item) => item.role_id))];
+      const rolePermissions = roleIds.length ? await db.from("role_permissions").select("role_id,permissions!inner(key)").in("role_id", roleIds).like("permissions.key", "integrity.%") : { data: [], error: null };
+      if (rolePermissions.error) return res.status(500).json({ error: "N\xE3o foi poss\xEDvel carregar as permiss\xF5es." });
+      const names = new Map((profiles.data || []).map((item) => [item.id, item.full_name]));
+      const lastActivity = /* @__PURE__ */ new Map();
+      for (const item of activity.data || []) if (item.actor_membership_id && !lastActivity.has(item.actor_membership_id)) lastActivity.set(item.actor_membership_id, item.created_at);
+      return res.json({ access: (memberships.data || []).map((member) => {
+        const roles = (membershipRoles.data || []).filter((item) => item.membership_id === member.id);
+        const permissionKeys = [...new Set(roles.flatMap((role) => (rolePermissions.data || []).filter((item) => item.role_id === role.role_id).map((item) => item.permissions?.key)).filter(Boolean))];
+        return {
+          membership_id: member.id,
+          name: names.get(member.user_id) || "Membro do tenant",
+          status: member.status,
+          roles: roles.map((item) => item.roles?.name || item.roles?.key).filter(Boolean),
+          permissions: permissionKeys,
+          committees: (committees.data || []).filter((item) => item.membership_id === member.id && item.active).map((item) => item.integrity_committees?.name).filter(Boolean),
+          active_cases: (assignments.data || []).filter((item) => item.owner_membership_id === member.id).length + (collaborators.data || []).filter((item) => item.membership_id === member.id).length,
+          active_conflicts: (conflicts.data || []).filter((item) => item.membership_id === member.id).length,
+          last_operational_activity_at: lastActivity.get(member.id) || null
+        };
+      }) });
+    })
+  );
+  router.get(
+    "/cases/:id/dossier.pdf",
+    requireAny("integrity.dossier.export", "integrity.case_report.export"),
+    asyncHandler(async (req, res) => {
+      const includeIdentity = req.query.include_identity === "true";
+      if (includeIdentity && !hasPermission2(req, "integrity.identity.read"))
+        return res.status(403).json({ error: "A identidade exige permiss\xE3o espec\xEDfica." });
+      const db = getSupabaseAdmin2();
+      const found = await findCase(
+        db,
+        req,
+        req.params.id,
+        "*,integrity_reports!inner(subject,description,occurred_at,reporter_mode,created_at),integrity_categories(name),integrity_units(name),integrity_committees(name)"
+      );
+      if (!found.data) return res.status(404).json({ error: "Caso n\xE3o encontrado." });
+      const [tasks, evidence, timeline, collaborators] = await Promise.all([
+        db.from("integrity_case_tasks").select("title,status,priority,due_at").eq("case_id", req.params.id).order("created_at"),
+        db.from("integrity_attachments").select("created_at,files!inner(original_name,mime_type,size_bytes,checksum_sha256)").eq("case_id", req.params.id).is("deleted_at", null).order("created_at"),
+        db.from("integrity_case_events").select("id,event_type,note,created_at,actor_membership_id").eq("case_id", req.params.id).order("created_at"),
+        db.from("integrity_case_collaborators").select("membership_id").eq("case_id", req.params.id).eq("tenant_id", tenantId(req)).eq("active", true)
+      ]);
+      if ([tasks, evidence, timeline, collaborators].some((result) => result.error))
+        return res.status(500).json({ error: "N\xE3o foi poss\xEDvel preparar o dossi\xEA." });
+      const membershipIds = [...new Set([
+        found.data.owner_membership_id,
+        found.data.decided_by_membership_id,
+        ...(timeline.data || []).map((item) => item.actor_membership_id),
+        ...(collaborators.data || []).map((item) => item.membership_id)
+      ].filter(Boolean))];
+      const memberships = membershipIds.length ? await db.from("memberships").select("id,user_id").in("id", membershipIds).eq("tenant_id", tenantId(req)) : { data: [], error: null };
+      const userIds = (memberships.data || []).map((item) => item.user_id);
+      const profiles = userIds.length ? await db.from("profiles").select("id,full_name").in("id", userIds) : { data: [], error: null };
+      if (memberships.error || profiles.error) return res.status(500).json({ error: "N\xE3o foi poss\xEDvel identificar os respons\xE1veis." });
+      const profileNames = new Map((profiles.data || []).map((item) => [item.id, String(item.full_name || "")]));
+      const memberNames = new Map((memberships.data || []).map((item) => [item.id, profileNames.get(item.user_id) || "Membro do tenant"]));
+      let identity = null;
+      if (includeIdentity && found.data.integrity_reports.reporter_mode === "identified") {
+        const identityResult = await db.from("integrity_report_identities").select("name,email,phone").eq("report_id", found.data.report_id).maybeSingle();
+        if (identityResult.error) return res.status(500).json({ error: "N\xE3o foi poss\xEDvel validar a identidade." });
+        identity = identityResult.data;
+      }
+      const recommendation = [...timeline.data || []].reverse().find((item) => item.event_type === "decision_recommended")?.note || null;
+      const pdf = createIntegrityDossierPdf({
+        organization: req.tenantContext?.tenant?.name || "Organiza\xE7\xE3o",
+        protocol: found.data.protocol,
+        status: found.data.status,
+        category: found.data.integrity_categories?.name,
+        severity: found.data.severity,
+        priority: found.data.priority,
+        unit: found.data.integrity_units?.name,
+        committee: found.data.integrity_committees?.name,
+        owner: memberNames.get(found.data.owner_membership_id) || null,
+        collaborators: (collaborators.data || []).map((item) => memberNames.get(item.membership_id) || "Membro do tenant"),
+        createdAt: found.data.created_at,
+        firstActionAt: found.data.first_action_at,
+        firstResponseDueAt: found.data.first_response_due_at,
+        treatmentDueAt: found.data.treatment_due_at,
+        closedAt: found.data.closed_at,
+        subject: found.data.integrity_reports.subject,
+        description: found.data.integrity_reports.description,
+        tasks: tasks.data || [],
+        evidence: (evidence.data || []).map((item) => ({
+          name: item.files?.original_name,
+          mime: item.files?.mime_type,
+          size: item.files?.size_bytes,
+          checksum: item.files?.checksum_sha256,
+          created_at: item.created_at
+        })),
+        timeline: (timeline.data || []).map((item) => ({ ...item, actor_name: memberNames.get(item.actor_membership_id) || "Sistema Ordum" })),
+        recommendation,
+        conclusion: found.data.conclusion,
+        measuresTaken: found.data.measures_taken,
+        finalClassification: found.data.final_classification,
+        closureReason: found.data.closure_reason,
+        reporterIdentity: identity
+      });
+      const event = await db.from("integrity_case_events").insert({
+        report_id: found.data.report_id,
+        case_id: req.params.id,
+        event_type: "case_dossier_exported",
+        actor_membership_id: membershipId(req),
+        metadata: { included_identity: Boolean(identity), format: "pdf", bytes: pdf.length }
+      });
+      if (event.error) return res.status(500).json({ error: "A exporta\xE7\xE3o n\xE3o p\xF4de ser auditada." });
+      await auditIntegrity(db, req, "integrity.case_dossier.exported", "integrity_cases", req.params.id, { included_identity: Boolean(identity), format: "pdf", bytes: pdf.length });
+      res.setHeader("content-type", "application/pdf");
+      res.setHeader("content-disposition", `attachment; filename="integrity-${found.data.protocol}.pdf"`);
+      res.setHeader("cache-control", "private, no-store, max-age=0");
+      return res.send(pdf);
+    })
+  );
   return router;
 }
 
 // src/server/integrityPublicRouter.ts
 import express2 from "express";
-import { randomUUID as randomUUID3 } from "node:crypto";
+import { createHash as createHash3, randomUUID as randomUUID3 } from "node:crypto";
 import { z as z7 } from "zod";
 var reportSchema = z7.object({
   channel_slug: z7.string().trim().min(2).max(80),
@@ -5346,6 +5901,12 @@ function createIntegrityPublicRouter(getSupabaseAdmin2) {
       );
       if (result.error)
         return res.status(404).json({ error: "N\xE3o foi poss\xEDvel validar o acompanhamento." });
+      await db.from("integrity_case_events").insert({
+        report_id: access.report_id,
+        case_id: access.case_id,
+        event_type: "reporter_message_received",
+        metadata: { source: "reporter" }
+      });
       return res.status(201).json({ sent: true });
     })
   );
@@ -5390,6 +5951,7 @@ function createIntegrityPublicRouter(getSupabaseAdmin2) {
       );
       if (checked.valid === false)
         return res.status(415).json({ error: checked.error });
+      const checksum = createHash3("sha256").update(req.body).digest("hex");
       const objectPath = `${access.tenant_id}/${access.case_id}/${randomUUID3()}`;
       const uploaded = await db.storage.from("ordum-integrity").upload(objectPath, req.body, { contentType: mime, upsert: false });
       if (uploaded.error)
@@ -5403,7 +5965,8 @@ function createIntegrityPublicRouter(getSupabaseAdmin2) {
         mime_type: mime,
         size_bytes: req.body.length,
         sensitivity: "restricted",
-        validation_status: "validated"
+        validation_status: "validated",
+        checksum_sha256: checksum
       }).select("id").single();
       if (file.error) {
         await db.storage.from("ordum-integrity").remove([objectPath]);
@@ -5426,9 +5989,9 @@ function createIntegrityPublicRouter(getSupabaseAdmin2) {
         report_id: access.report_id,
         case_id: access.case_id,
         event_type: "evidence_added",
-        metadata: { attachment_id: attachment.data.id, source: "reporter" }
+        metadata: { attachment_id: attachment.data.id, source: "reporter", checksum_sha256: checksum, size_bytes: req.body.length }
       });
-      return res.status(201).json({ id: attachment.data.id });
+      return res.status(201).json({ id: attachment.data.id, checksum_sha256: checksum });
     })
   );
   router.post(
@@ -5454,6 +6017,13 @@ function createIntegrityPublicRouter(getSupabaseAdmin2) {
       const signed = await db.storage.from(file.bucket).createSignedUrl(file.object_path, 120);
       if (signed.error)
         return res.status(500).json({ error: "N\xE3o foi poss\xEDvel liberar o anexo." });
+      const event = await db.from("integrity_case_events").insert({
+        report_id: access.report_id,
+        case_id: access.case_id,
+        event_type: "evidence_downloaded",
+        metadata: { attachment_id: req.params.id, source: "reporter", expires_in: 120 }
+      });
+      if (event.error) return res.status(500).json({ error: "O download n\xE3o p\xF4de ser auditado." });
       return res.json({ url: signed.data.signedUrl, expires_in: 120 });
     })
   );

@@ -1,5 +1,5 @@
 import express from "express";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { z } from "zod";
 import {
   integrityRateLimitKey,
@@ -215,6 +215,12 @@ export function createIntegrityPublicRouter(getSupabaseAdmin: () => any) {
         return res
           .status(404)
           .json({ error: "Não foi possível validar o acompanhamento." });
+      await db.from("integrity_case_events").insert({
+        report_id: access.report_id,
+        case_id: access.case_id,
+        event_type: "reporter_message_received",
+        metadata: { source: "reporter" },
+      });
       return res.status(201).json({ sent: true });
     }),
   );
@@ -281,6 +287,7 @@ export function createIntegrityPublicRouter(getSupabaseAdmin: () => any) {
       );
       if (checked.valid === false)
         return res.status(415).json({ error: checked.error });
+      const checksum = createHash("sha256").update(req.body).digest("hex");
       const objectPath = `${access.tenant_id}/${access.case_id}/${randomUUID()}`;
       const uploaded = await db.storage
         .from("ordum-integrity")
@@ -301,6 +308,7 @@ export function createIntegrityPublicRouter(getSupabaseAdmin: () => any) {
           size_bytes: req.body.length,
           sensitivity: "restricted",
           validation_status: "validated",
+          checksum_sha256: checksum,
         })
         .select("id")
         .single();
@@ -333,9 +341,9 @@ export function createIntegrityPublicRouter(getSupabaseAdmin: () => any) {
         report_id: access.report_id,
         case_id: access.case_id,
         event_type: "evidence_added",
-        metadata: { attachment_id: attachment.data.id, source: "reporter" },
+        metadata: { attachment_id: attachment.data.id, source: "reporter", checksum_sha256: checksum, size_bytes: req.body.length },
       });
-      return res.status(201).json({ id: attachment.data.id });
+      return res.status(201).json({ id: attachment.data.id, checksum_sha256: checksum });
     }),
   );
 
@@ -375,6 +383,13 @@ export function createIntegrityPublicRouter(getSupabaseAdmin: () => any) {
         return res
           .status(500)
           .json({ error: "Não foi possível liberar o anexo." });
+      const event = await db.from("integrity_case_events").insert({
+        report_id: access.report_id,
+        case_id: access.case_id,
+        event_type: "evidence_downloaded",
+        metadata: { attachment_id: req.params.id, source: "reporter", expires_in: 120 },
+      });
+      if (event.error) return res.status(500).json({ error: "O download não pôde ser auditado." });
       return res.json({ url: signed.data.signedUrl, expires_in: 120 });
     }),
   );

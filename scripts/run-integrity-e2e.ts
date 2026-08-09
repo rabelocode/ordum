@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import { mkdir, writeFile } from "node:fs/promises";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import { chromium } from "@playwright/test";
 
@@ -31,7 +32,13 @@ async function request(path: string, options: RequestInit = {}, token?: string, 
   if (tenantId) headers.set("x-tenant-id", tenantId);
   if (!(options.body instanceof Uint8Array) && !headers.has("content-type")) headers.set("content-type", "application/json");
   const response = await fetch(`${APP_URL}${path}`, { ...options, headers });
-  return { status: response.status, body: await response.json().catch(() => ({})), headers: response.headers };
+  const contentType = response.headers.get("content-type") || "";
+  const body = contentType.includes("application/pdf")
+    ? Buffer.from(await response.arrayBuffer())
+    : contentType.includes("text/csv")
+      ? await response.text()
+      : await response.json().catch(() => ({}));
+  return { status: response.status, body, headers: response.headers };
 }
 
 async function createUser(db: SupabaseClient, runId: string, suffix: string, tenantId: string, roleId: string): Promise<FixtureUser> {
@@ -60,10 +67,10 @@ async function removeStorage(db: SupabaseClient, tenantIds: string[]) {
   }
 }
 
-async function cleanup(db: SupabaseClient, runId: string, tenantIds: string[], users: string[], platformUser?: string) {
+async function cleanup(db: SupabaseClient, runId: string, tenantIds: string[], users: string[], platformUsers: string[] = []) {
   const errors: string[] = [];
   try { await removeStorage(db, tenantIds); } catch (error: any) { errors.push(error.message); }
-  if (platformUser) {
+  for (const platformUser of platformUsers) {
     const removed = await db.from("platform_members").delete().eq("user_id", platformUser);
     if (removed.error) errors.push(`platform member: ${removed.error.message}`);
   }
@@ -119,9 +126,9 @@ async function runBrowserQa(scenarios: Array<{ name: string; user: FixtureUser; 
       }
       if (scenario.settings) {
         await page.getByRole("button", { name: "Configurações" }).click();
-        await page.getByRole("heading", { name: "Configurações do canal" }).waitFor();
-        await page.getByRole("button", { name: "Testar prontidão do canal" }).click();
-        await page.getByText(/Canal validado com sucesso/).waitFor();
+        await page.getByRole("heading", { name: "Configurações do Integridade" }).waitFor();
+        await page.getByRole("button", { name: "Testar configuração" }).click();
+        await page.getByText(/Teste operacional do canal aprovado/).waitFor();
       } else if (await page.getByRole("button", { name: "Configurações" }).count()) {
         failures.push(`${scenario.name}: configurações expostas sem permissão`);
       }
@@ -146,7 +153,7 @@ export async function runIntegrityE2E(): Promise<Evidence> {
   evidence.legacyRpcBlocked = true;
   const tenantIds: string[] = [];
   const userIds: string[] = [];
-  let platformUser: string | undefined;
+  const platformUsers: string[] = [];
   let primaryError: unknown;
   try {
     const suffix = crypto.randomBytes(4).toString("hex");
@@ -169,11 +176,15 @@ export async function runIntegrityE2E(): Promise<Evidence> {
     userIds.push(adminA.id, adminB.id, blocked.id, assignedInvestigator.id, unassignedInvestigator.id, compliance.id);
     const platformRole = value(await db.from("platform_roles").select("id").eq("key", "admin").single(), "platform admin role");
     value(await db.from("platform_members").insert({ user_id: adminA.id, role_id: platformRole.id, status: "active", relationship_type: "partner" }).select("id").single(), "platform fixture");
-    platformUser = adminA.id;
+    value(await db.from("platform_members").insert({ user_id: adminB.id, role_id: platformRole.id, status: "active", relationship_type: "partner" }).select("id").single(), "platform cross-tenant fixture");
+    platformUsers.push(adminA.id,adminB.id);
     const workspace = (path: string, options?: RequestInit, user = adminA, tenant = tenantA.id) => request(`/api/workspace/integrity${path}`, options, user.token, tenant);
     const publicApi = (path: string, options?: RequestInit) => request(`/api/public/integrity${path}`, options);
 
-    expect(await workspace("/settings", { method: "PUT", body: JSON.stringify({ introduction: "Canal seguro para o teste funcional descartável da Ordum.", instructions: "Descreva os fatos com clareza.", allows_anonymous: true, allows_identified: true, default_sla_hours: 12, treatment_sla_hours: 48, automatic_acknowledgement: "Seu relato foi recebido com segurança.", branding: { accent: "#3457D5" }, attachment_policy: { enabled: true, max_files: 3, max_size_mb: 2 }, communication_policy: { allow_reporter_messages: true, allow_case_messages: true }, routing_rules: [] }) }), 200, "settings");
+    expect(await workspace("/settings", { method: "PUT", body: JSON.stringify({ introduction: "Canal seguro para o teste funcional descartável da Ordum.", instructions: "Descreva os fatos com clareza.", allows_anonymous: true, allows_identified: true, default_sla_hours: 12, treatment_sla_hours: 48, automatic_acknowledgement: "Seu relato foi recebido com segurança.", branding: { accent: "#3457D5" }, attachment_policy: { enabled: true, max_files: 3, max_size_mb: 2 }, communication_policy: { allow_reporter_messages: true, allow_case_messages: true }, routing_rules: [], retention_days: 365, evidence_retention_days: 730, message_retention_days: 365, post_closure_action: "archive", anonymization_enabled: false }) }), 200, "settings");
+    const template = expect(await workspace("/settings/templates", { method: "POST", body: JSON.stringify({ template_type: "task", name: "Validar evidência", title: "Validar evidência recebida", body: "Conferir autenticidade, origem e integridade do arquivo antes da conclusão.", active: true }) }), 201, "task template").template;
+    const investigatorTemplates = expect(await workspace("/settings/templates", {}, assignedInvestigator), 200, "investigator templates").templates;
+    if (!investigatorTemplates.some((item: any) => item.id === template.id)) throw new Error("template tenant-scoped não disponível ao investigador");
     const category = expect(await workspace("/settings/categories", { method: "POST", body: JSON.stringify({ name: "Assédio", slug: `assedio-${suffix}`, default_risk_level: "high", sla_hours: 12, active: true }) }), 201, "category").category;
     const unit = expect(await workspace("/settings/units", { method: "POST", body: JSON.stringify({ name: "Unidade Piloto", code: `U-${suffix}`, active: true }) }), 201, "unit").unit;
     const committee = expect(await workspace("/settings/committees", { method: "POST", body: JSON.stringify({ name: "Comitê de Ética", member_ids: [assignedInvestigator.membershipId], active: true }) }), 201, "committee").committee;
@@ -194,7 +205,8 @@ export async function runIntegrityE2E(): Promise<Evidence> {
     const secret = value(await db.from("integrity_report_secrets").select("secret_hash").eq("report_id", report.id).single(), "secret stored");
     if (!secret.secret_hash || secret.secret_hash === submitted.access_secret) throw new Error("segredo não foi armazenado como hash");
     const identified = expect(await publicApi("/reports", { method: "POST", body: JSON.stringify({ ...reportBody, subject: "Relato identificado descartável", reporter_mode: "identified", identity: { name: "Pessoa E2E", email: `${runId}@ordum-test.internal` } }) }), 201, "identified report");
-    const identityCount = await db.from("integrity_report_identities").select("report_id").eq("report_id", value(await db.from("integrity_reports").select("id").eq("protocol", identified.protocol).single(), "identified stored").id);
+    const identifiedReport = value(await db.from("integrity_reports").select("id").eq("protocol", identified.protocol).single(), "identified stored");
+    const identityCount = await db.from("integrity_report_identities").select("report_id").eq("report_id", identifiedReport.id);
     if (identityCount.error || identityCount.data?.length !== 1) throw new Error(`identidade separada não persistida: ${identityCount.error?.message || `count=${identityCount.data?.length}`}`);
     expect(await publicApi("/track", { method: "POST", body: JSON.stringify({ protocol: submitted.protocol, secret: "x".repeat(24) }) }), 404, "wrong secret");
     const tracked = expect(await publicApi("/track", { method: "POST", body: JSON.stringify({ protocol: submitted.protocol, secret: submitted.access_secret }) }), 200, "valid tracking").tracking;
@@ -224,6 +236,13 @@ export async function runIntegrityE2E(): Promise<Evidence> {
     evidence.rlsUnassignedDenied = true;
     evidence.rlsCrossTenantDenied = true;
     evidence.rlsIdentityDenied = true;
+    const collaborator = expect(await workspace(`/cases/${caseRow.id}/collaborators`, { method: "POST", body: JSON.stringify({ membership_id: unassignedInvestigator.membershipId, role: "investigator", reason: "Apoio temporário à apuração" }) }), 201, "add collaborator").collaborator;
+    expect(await workspace(`/cases/${caseRow.id}`, {}, unassignedInvestigator, tenantA.id), 200, "collaborator case access");
+    const collaboratorRls = value(await rlsClient(unassignedInvestigator).from("integrity_cases").select("id").eq("id", caseRow.id), "RLS collaborator");
+    if (collaboratorRls.length !== 1) throw new Error("RLS não liberou investigador adicional ativo");
+    expect(await workspace(`/cases/${caseRow.id}/collaborators/${collaborator.id}`, { method: "DELETE", body: JSON.stringify({ reason: "Participação temporária encerrada" }) }), 200, "remove collaborator");
+    expect(await workspace(`/cases/${caseRow.id}`, {}, unassignedInvestigator, tenantA.id), 404, "removed collaborator denied");
+    evidence.collaboratorScope = true;
     await runBrowserQa([
       { name: "tenant_admin_desktop", user: adminA, expectedCase: true, settings: true },
       { name: "compliance_desktop", user: compliance, expectedCase: true, settings: true },
@@ -239,6 +258,8 @@ export async function runIntegrityE2E(): Promise<Evidence> {
     if ((channelTest.slug || channelTest.public_slug) !== channelSlug || !channelTest.tested_at) throw new Error("teste do canal não persistido");
     const configured = expect(await workspace("/settings"), 200, "configuration checklist");
     if (configured.configuration_status?.operational !== true) throw new Error("checklist de configuração não operacional");
+    const accessGovernance = expect(await workspace("/settings/access"), 200, "access governance").access;
+    if (!accessGovernance.some((item: any) => item.membership_id === assignedInvestigator.membershipId && item.roles.some((role: string) => /Investigador/i.test(role)))) throw new Error("governança de acesso não identificou o investigador");
     expect(await workspace(`/cases/${caseRow.id}/transitions`, { method: "POST", body: JSON.stringify({ to_status: "closed", reason: "inválida", lock_version: caseRow.lock_version }) }), 409, "invalid transition");
     let transition = expect(await workspace(`/cases/${caseRow.id}/transitions`, { method: "POST", body: JSON.stringify({ to_status: "triage", lock_version: caseRow.lock_version }) }, assignedInvestigator), 200, "triage by investigator");
     transition = expect(await workspace(`/cases/${caseRow.id}/transitions`, { method: "POST", body: JSON.stringify({ to_status: "investigation", lock_version: transition.lock_version }) }, assignedInvestigator), 200, "investigation by investigator");
@@ -248,6 +269,10 @@ export async function runIntegrityE2E(): Promise<Evidence> {
     expect(await workspace(`/cases/${caseRow.id}/assignments`, { method: "POST", body: JSON.stringify({ membership_id: blocked.membershipId, reason: "Tentativa bloqueada" }) }), 409, "conflicted assignment");
     expect(await workspace(`/cases/${caseRow.id}/assignments`, { method: "POST", body: JSON.stringify({ membership_id: adminA.membershipId, reason: "Responsável confirmado" }) }), 201, "assignment");
     const task = expect(await workspace(`/cases/${caseRow.id}/tasks`, { method: "POST", body: JSON.stringify({ title: "Validar evidências", assignee_membership_id: assignedInvestigator.membershipId, due_at: new Date(Date.now() - 3600000).toISOString(), priority: "high" }) }, assignedInvestigator), 201, "task").task;
+    const editedTask = expect(await workspace(`/cases/${caseRow.id}/tasks/${task.id}`, { method: "PATCH", body: JSON.stringify({ title: "Validar cadeia de custódia", description: "Conferir checksum e origem.", priority: "urgent", assignee_membership_id: assignedInvestigator.membershipId, reason: "Escopo profissional detalhado" }) }, assignedInvestigator), 200, "task edit").task;
+    if (editedTask.title !== "Validar cadeia de custódia" || editedTask.priority !== "urgent") throw new Error("edição completa de tarefa não persistida");
+    const subtask = expect(await workspace(`/cases/${caseRow.id}/tasks`, { method: "POST", body: JSON.stringify({ title: "Conferir checksum", parent_task_id: task.id, assignee_membership_id: assignedInvestigator.membershipId, priority: "normal" }) }, assignedInvestigator), 201, "subtask").task;
+    if (subtask.parent_task_id !== task.id) throw new Error("subtarefa sem vínculo ao caso/tarefa principal");
     const overdue = expect(await workspace(`/cases/${caseRow.id}/tasks?overdue=true`, {}, assignedInvestigator), 200, "overdue tasks").tasks;
     if (!overdue.some((item: any) => item.id === task.id)) throw new Error("tarefa vencida ausente");
     expect(await workspace(`/cases/${caseRow.id}/tasks/${task.id}`, { method: "PATCH", body: JSON.stringify({ status: "done", reason: "Investigação concluída" }) }, assignedInvestigator), 200, "task done");
@@ -258,14 +283,26 @@ export async function runIntegrityE2E(): Promise<Evidence> {
     const trackingMessages = expect(await publicApi("/track", { method: "POST", body: JSON.stringify({ protocol: submitted.protocol, secret: submitted.access_secret }) }), 200, "tracking messages").tracking;
     const serialized = JSON.stringify(trackingMessages);
     if (!serialized.includes("Mensagem pública do comitê E2E") || serialized.includes("Nota interna confidencial E2E")) throw new Error("fronteira mensagem pública/interna violada");
+    const notifications = expect(await workspace("/notifications", {}, assignedInvestigator), 200, "notification center");
+    if (!notifications.notifications.some((item: any) => ["new_task","external_message"].includes(item.notification_type))) throw new Error("eventos operacionais ausentes da central de notificações");
+    const unreadNotification = notifications.notifications.find((item: any) => !item.read_at);
+    if (!unreadNotification) throw new Error("notificação não lida esperada");
+    const readNotification = expect(await workspace(`/notifications/${unreadNotification.id}/read`, { method: "PATCH" }, assignedInvestigator), 200, "mark notification read").notification;
+    if (!readNotification.read_at) throw new Error("notificação não foi marcada como lida");
+    evidence.notifications = true;
 
     const pdf = new Uint8Array(Buffer.from("%PDF-1.4\n1 0 obj\n<<>>\nendobj\n%%EOF"));
     const evidenceUpload = expect(await workspace(`/cases/${caseRow.id}/evidence`, { method: "POST", headers: { "content-type": "application/pdf", "x-file-name": "evidencia.pdf", "x-visible-to-reporter": "true" }, body: pdf }, assignedInvestigator), 201, "workspace evidence");
+    const expectedChecksum = crypto.createHash("sha256").update(pdf).digest("hex");
+    if (evidenceUpload.checksum_sha256 !== expectedChecksum) throw new Error("checksum SHA-256 não retornado no upload interno");
+    const storedEvidence = value(await db.from("integrity_attachments").select("files!inner(checksum_sha256)").eq("id", evidenceUpload.id).single(), "stored evidence checksum");
+    if ((storedEvidence as any).files?.checksum_sha256 !== expectedChecksum) throw new Error("checksum SHA-256 não persistido");
     expect(await workspace(`/cases/${caseRow.id}/evidence`, { method: "POST", headers: { "content-type": "application/x-msdownload", "x-file-name": "malware.exe" }, body: new Uint8Array([1, 2, 3]) }, assignedInvestigator), 415, "invalid mime");
     const signed = expect(await workspace(`/cases/${caseRow.id}/evidence/${evidenceUpload.id}/url`, { method: "POST" }, assignedInvestigator), 200, "signed URL");
     if (signed.expires_in !== 120 || (await fetch(signed.url)).status !== 200) throw new Error("signed URL inválida");
     expect(await workspace(`/cases/${caseRow.id}/evidence/${evidenceUpload.id}/url`, { method: "POST" }, adminB, tenantB.id), 404, "cross tenant evidence");
     const publicUpload = expect(await publicApi("/attachments", { method: "POST", headers: { "content-type": "application/pdf", "x-file-name": "complemento.pdf", "x-integrity-protocol": submitted.protocol, "x-integrity-secret": submitted.access_secret }, body: pdf }), 201, "public evidence");
+    if (publicUpload.checksum_sha256 !== expectedChecksum) throw new Error("checksum SHA-256 não retornado no upload público");
     const publicSigned = expect(await publicApi(`/attachments/${publicUpload.id}/url`, { method: "POST", body: JSON.stringify({ protocol: submitted.protocol, secret: submitted.access_secret }) }), 200, "public signed URL");
     if ((await fetch(publicSigned.url)).status !== 200) throw new Error("public signed URL inválida");
 
@@ -274,6 +311,10 @@ export async function runIntegrityE2E(): Promise<Evidence> {
     if (directList.ok && Array.isArray(directObjects) && directObjects.length > 0) throw new Error("enumeração pública do bucket permitida");
     transition = expect(await workspace(`/cases/${caseRow.id}/transitions`, { method: "POST", body: JSON.stringify({ to_status: "decision", lock_version: transition.lock_version }) }), 200, "decision transition");
     const closed = expect(await workspace(`/cases/${caseRow.id}/decision`, { method: "POST", body: JSON.stringify({ final_classification: "Procedente", conclusion: "Conclusão interna confidencial E2E", measures_taken: "Providências internas E2E", internal_justification: "Fundamentação interna confidencial E2E", reporter_outcome: "Tratamento concluído e providências adotadas.", lock_version: transition.lock_version }) }), 200, "decision close");
+    const retentionState = value(await db.from("integrity_cases").select("retention_state,retention_due_at").eq("id", caseRow.id).single(), "retention lifecycle");
+    if (retentionState.retention_state !== "active" || !retentionState.retention_due_at) throw new Error("lifecycle de retenção não foi iniciado no encerramento");
+    const retentionEvaluation = expect(await workspace("/settings/retention/evaluate", { method: "POST" }), 200, "retention evaluation");
+    if (retentionEvaluation.physical_purge !== false) throw new Error("avaliação de retenção permitiu purge físico");
     const afterClose = expect(await publicApi("/track", { method: "POST", body: JSON.stringify({ protocol: submitted.protocol, secret: submitted.access_secret }) }), 200, "closed tracking").tracking;
     const closedJson = JSON.stringify(afterClose);
     if (!closedJson.includes("Tratamento concluído") || closedJson.includes("Conclusão interna confidencial") || closedJson.includes("Fundamentação interna")) throw new Error("decisão interna vazou no canal público");
@@ -297,6 +338,22 @@ export async function runIntegrityE2E(): Promise<Evidence> {
     const reportExport = await workspace(`/cases/${caseRow.id}/report.csv`);
     expect(reportExport, 200, "case report CSV export");
     if (!reportExport.headers.get("content-disposition")?.includes("integrity-")) throw new Error("relatório individual sem nome de arquivo");
+    const identifiedCase = value(await db.from("integrity_cases").select("id").eq("report_id", identifiedReport.id).single(), "identified case");
+    const dossierOmitted = await workspace(`/cases/${identifiedCase.id}/dossier.pdf`);
+    expect(dossierOmitted, 200, "dossier identity omitted");
+    if (!Buffer.isBuffer(dossierOmitted.body) || !dossierOmitted.body.subarray(0,8).toString().startsWith("%PDF-1.4")) throw new Error("dossiê não retornou PDF válido");
+    if (dossierOmitted.body.toString("latin1").includes("Pessoa E2E")) throw new Error("identidade incluída no dossiê padrão");
+    const dossierWithIdentity = await workspace(`/cases/${identifiedCase.id}/dossier.pdf?include_identity=true`);
+    expect(dossierWithIdentity, 200, "dossier identity authorized");
+    if (!Buffer.isBuffer(dossierWithIdentity.body) || !dossierWithIdentity.body.toString("latin1").includes("Pessoa E2E")) throw new Error("identidade autorizada ausente do dossiê");
+    const forbiddenPdfText = dossierWithIdentity.body.toString("latin1");
+    if (/secret_hash|signedUrl|token=|access_secret/i.test(forbiddenPdfText)) throw new Error("dossiê contém material proibido");
+    expect(await workspace(`/cases/${identifiedCase.id}/dossier.pdf`, {}, assignedInvestigator), 403, "investigator dossier denied");
+    expect(await workspace(`/cases/${identifiedCase.id}/dossier.pdf`, {}, adminB, tenantA.id), 403, "platform admin dossier denied");
+    if (process.env.SAVE_PDF_QA === "1") { await mkdir("tmp/pdfs", { recursive: true }); await writeFile("tmp/pdfs/integrity-phase4f-dossier.pdf", dossierWithIdentity.body); }
+    evidence.dossierPdf = true;
+    evidence.dossierIdentityDefaultOmitted = true;
+    evidence.platformAdminDossierDenied = true;
     const auditRows = value(await db.from("platform_audit_logs").select("action").eq("metadata->>tenant_id", tenantA.id).in("action", ["integrity.cases.exported", "integrity.case_report.exported", "integrity.channel.tested"]), "integrity audit");
     if (new Set(auditRows.map((row: any) => row.action)).size !== 3) throw new Error("auditoria de governança incompleta");
 
@@ -308,11 +365,11 @@ export async function runIntegrityE2E(): Promise<Evidence> {
       if (attempt.status !== 404) throw new Error(`rate limit tentativa ${i + 1}: HTTP ${attempt.status}`);
     }
     if (!limited) throw new Error("rate limit persistente não bloqueou");
-    Object.assign(evidence, { anonymous: true, identified: true, tenantIsolation: true, rbac: true, assignedInvestigator: true, committeeScope: true, compliance: true, protectedIdentity: true, configurationLifecycle: true, routingPreview: true, orphanProtection: true, conflict: true, storagePrivate: true, signedUrls: true, tasks: true, messagesBoundary: true, recommendation: true, decision: true, reopen: true, adminAggregateOnly: true, dashboard: true, channelReadiness: true, filtersPagination: true, exportsAudited: true });
+    Object.assign(evidence, { anonymous: true, identified: true, tenantIsolation: true, rbac: true, assignedInvestigator: true, committeeScope: true, compliance: true, protectedIdentity: true, configurationLifecycle: true, routingPreview: true, orphanProtection: true, conflict: true, storagePrivate: true, signedUrls: true, evidenceChecksum: true, tasks: true, subtasks: true, taskEditing: true, messagesBoundary: true, recommendation: true, decision: true, reopen: true, retentionLifecycle: true, templates: true, accessGovernance: true, adminAggregateOnly: true, dashboard: true, channelReadiness: true, filtersPagination: true, exportsAudited: true });
   } catch (error) {
     primaryError = error;
   } finally {
-    try { await cleanup(db, runId, tenantIds, userIds, platformUser); evidence.cleanup = true; evidence.residualTenants = 0; evidence.residualAuth = 0; }
+    try { await cleanup(db, runId, tenantIds, userIds, platformUsers); evidence.cleanup = true; evidence.residualTenants = 0; evidence.residualAuth = 0; }
     catch (cleanupError: any) { if (primaryError) throw new AggregateError([primaryError, cleanupError], "E2E e cleanup falharam"); throw cleanupError; }
   }
   if (primaryError) throw primaryError;
