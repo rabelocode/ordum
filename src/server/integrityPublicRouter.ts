@@ -180,7 +180,30 @@ export function createIntegrityPublicRouter(getSupabaseAdmin: () => any) {
         return res.status(400).json({ error: "Mensagem inválida." });
       if (!(await rate(req, res, "message", 10, 900, parsed.data.protocol)))
         return;
-      const result = await getSupabaseAdmin().rpc(
+      const db = getSupabaseAdmin();
+      const authorization = await db.rpc("authorize_integrity_reporter", {
+        p_protocol: parsed.data.protocol,
+        p_access_secret: parsed.data.secret,
+      });
+      const access = authorization.data?.[0];
+      if (authorization.error || !access)
+        return res
+          .status(404)
+          .json({ error: "Não foi possível validar o acompanhamento." });
+      const settings = await db
+        .from("integrity_settings")
+        .select("communication_policy")
+        .eq("tenant_id", access.tenant_id)
+        .maybeSingle();
+      if (settings.error)
+        return res.status(500).json({
+          error: "Não foi possível validar a política de comunicação.",
+        });
+      if (settings.data?.communication_policy?.allow_reporter_messages === false)
+        return res.status(403).json({
+          error: "O envio de novas mensagens está desativado neste canal.",
+        });
+      const result = await db.rpc(
         "post_integrity_reporter_message",
         {
           p_protocol: parsed.data.protocol,

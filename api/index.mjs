@@ -3740,6 +3740,10 @@ var settingsSchema = z6.object({
   automatic_acknowledgement: z6.string().trim().min(5).max(2e3),
   branding: z6.record(z6.string(), z6.unknown()).default({}),
   attachment_policy: z6.record(z6.string(), z6.unknown()).default({}),
+  communication_policy: z6.record(z6.string(), z6.unknown()).default({
+    allow_reporter_messages: true,
+    allow_case_messages: true
+  }),
   routing_rules: z6.array(z6.unknown()).default([]),
   treatment_sla_hours: z6.number().int().min(1).max(17520).default(720),
   default_assignee_membership_id: z6.string().uuid().nullable().optional(),
@@ -3792,11 +3796,18 @@ var decisionSchema = z6.object({
   reporter_outcome: z6.string().trim().max(3e3).nullable().optional(),
   lock_version: z6.number().int().positive()
 });
+var recommendationSchema = z6.object({
+  recommendation: z6.string().trim().min(10).max(1e4),
+  justification: z6.string().trim().min(10).max(5e3)
+});
 var committeeSchema = z6.object({
   name: z6.string().trim().min(2).max(120),
   description: z6.string().trim().max(1e3).nullable().optional(),
   member_ids: z6.array(z6.string().uuid()).max(50).default([]),
   active: z6.boolean().default(true)
+});
+var committeeUpdateSchema = committeeSchema.extend({
+  status: z6.enum(["active", "inactive", "archived"])
 });
 var routingSchema = z6.object({
   name: z6.string().trim().min(2).max(120),
@@ -3805,9 +3816,19 @@ var routingSchema = z6.object({
   assignee_membership_id: z6.string().uuid().nullable().optional(),
   committee_id: z6.string().uuid().nullable().optional(),
   priority: z6.number().int().min(0).max(1e4).default(100),
-  active: z6.boolean().default(true)
+  active: z6.boolean().default(true),
+  is_fallback: z6.boolean().default(false)
 }).refine((value) => value.assignee_membership_id || value.committee_id, {
   message: "Defina um respons\xE1vel ou comit\xEA."
+}).refine((value) => !value.is_fallback || !value.category_id && !value.unit_id, {
+  message: "A regra fallback n\xE3o pode restringir categoria ou unidade."
+});
+var routingUpdateSchema = routingSchema.extend({
+  status: z6.enum(["active", "inactive", "archived"])
+});
+var routingPreviewSchema = z6.object({
+  category_id: z6.string().uuid().nullable().optional(),
+  unit_id: z6.string().uuid().nullable().optional()
 });
 function createIntegrityRouter(getSupabaseAdmin2, authOverrides) {
   const router = express.Router();
@@ -3822,34 +3843,55 @@ function createIntegrityRouter(getSupabaseAdmin2, authOverrides) {
     auth.requireTenantSolution("integridade")
   );
   const asyncHandler = (fn) => (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
-  const requireAny = (...permissions) => (req, res, next) => {
+  const requireAny = (...permissions2) => (req, res, next) => {
     const granted = req.tenantContext?.permissions || [];
-    if (!permissions.some((permission) => granted.includes(permission)))
+    if (!permissions2.some((permission) => granted.includes(permission)))
       return res.status(403).json({ error: "Voc\xEA n\xE3o possui permiss\xE3o para esta opera\xE7\xE3o." });
     next();
   };
   const tenantId = (req) => req.tenantContext.tenant.id;
   const membershipId = (req) => req.tenantContext.membership.id;
+  const permissions = (req) => req.tenantContext.permissions || [];
+  const hasPermission2 = (req, permission) => permissions(req).includes(permission);
+  async function scopedCommitteeIds(db, req) {
+    const result = await db.from("integrity_committee_members").select("committee_id,integrity_committees!inner(tenant_id,status)").eq("membership_id", membershipId(req)).eq("active", true).eq("integrity_committees.tenant_id", tenantId(req)).eq("integrity_committees.status", "active");
+    if (result.error) throw result.error;
+    return (result.data || []).map((item) => item.committee_id);
+  }
+  async function scopeCaseQuery(query, db, req) {
+    if (hasPermission2(req, "integrity.cases.read")) return query;
+    if (!hasPermission2(req, "integrity.cases.read_assigned"))
+      return query.eq("id", "00000000-0000-0000-0000-000000000000");
+    const committees = await scopedCommitteeIds(db, req);
+    const filters = [`owner_membership_id.eq.${membershipId(req)}`];
+    if (committees.length) filters.push(`committee_id.in.(${committees.join(",")})`);
+    return query.or(filters.join(","));
+  }
   async function findCase(db, req, id, select = "id,tenant_id,report_id,status,lock_version,owner_membership_id,first_action_at") {
-    return db.from("integrity_cases").select(select).eq("id", id).eq("tenant_id", tenantId(req)).maybeSingle();
+    let query = db.from("integrity_cases").select(select).eq("id", id).eq("tenant_id", tenantId(req));
+    query = await scopeCaseQuery(query, db, req);
+    return query.maybeSingle();
   }
   router.get(
     "/dashboard",
-    requireAny("integrity.analytics.read", "integrity.cases.read"),
+    requireAny("integrity.analytics.read", "integrity.cases.read", "integrity.cases.read_assigned"),
     asyncHandler(async (req, res) => {
       const db = getSupabaseAdmin2();
-      const [{ data: cases, error }, overdueTasks] = await Promise.all([
-        db.from("integrity_cases").select(
-          "status,severity,sla_due_at,first_response_due_at,treatment_due_at,first_action_at,closed_at,created_at,category_id,unit_id"
-        ).eq("tenant_id", tenantId(req)),
-        db.from("integrity_case_tasks").select("id,integrity_cases!inner(tenant_id)", {
-          count: "exact",
-          head: true
-        }).eq("integrity_cases.tenant_id", tenantId(req)).in("status", ["open", "in_progress"]).lt("due_at", (/* @__PURE__ */ new Date()).toISOString())
-      ]);
-      if (error || overdueTasks.error)
+      let caseQuery = db.from("integrity_cases").select(
+        "id,status,severity,sla_due_at,first_response_due_at,treatment_due_at,first_action_at,closed_at,created_at,category_id,unit_id"
+      ).eq("tenant_id", tenantId(req));
+      caseQuery = await scopeCaseQuery(caseQuery, db, req);
+      const caseResult = await caseQuery;
+      const accessibleIds = (caseResult.data || []).map((item) => item.id).filter(Boolean);
+      let taskQuery = db.from("integrity_case_tasks").select("id", {
+        count: "exact",
+        head: true
+      }).in("status", ["open", "in_progress"]).lt("due_at", (/* @__PURE__ */ new Date()).toISOString());
+      taskQuery = accessibleIds.length ? taskQuery.in("case_id", accessibleIds) : taskQuery.eq("case_id", "00000000-0000-0000-0000-000000000000");
+      const overdueTasks = await taskQuery;
+      if (caseResult.error || overdueTasks.error)
         return res.status(500).json({ error: "N\xE3o foi poss\xEDvel carregar os indicadores." });
-      const rows = cases || [];
+      const rows = caseResult.data || [];
       return res.json({
         ...integrityDashboard(rows),
         tasks_overdue: overdueTasks.count || 0,
@@ -3859,7 +3901,7 @@ function createIntegrityRouter(getSupabaseAdmin2, authOverrides) {
   );
   router.get(
     "/members",
-    requireAny("integrity.cases.assign", "integrity.cases.manage"),
+    requireAny("integrity.cases.assign", "integrity.cases.manage", "integrity.cases.investigate"),
     asyncHandler(async (req, res) => {
       const db = getSupabaseAdmin2();
       const memberships = await db.from("memberships").select("id,user_id").eq("tenant_id", tenantId(req)).eq("status", "active").order("created_at");
@@ -3885,7 +3927,7 @@ function createIntegrityRouter(getSupabaseAdmin2, authOverrides) {
   );
   router.get(
     "/cases",
-    requireAny("integrity.cases.read"),
+    requireAny("integrity.cases.read", "integrity.cases.read_assigned"),
     asyncHandler(async (req, res) => {
       const parsed = listSchema.safeParse(req.query);
       if (!parsed.success)
@@ -3897,6 +3939,7 @@ function createIntegrityRouter(getSupabaseAdmin2, authOverrides) {
         "id,protocol,status,severity,priority,sla_due_at,first_response_due_at,treatment_due_at,first_action_at,created_at,updated_at,owner_membership_id,lock_version,integrity_categories(name),integrity_units(name),integrity_reports!inner(subject)",
         { count: "exact" }
       ).eq("tenant_id", tenantId(req));
+      query = await scopeCaseQuery(query, db, req);
       if (q.search)
         query = query.ilike("protocol", `%${q.search.replace(/[%_,]/g, "")}%`);
       if (q.status) query = query.eq("status", q.status);
@@ -3928,7 +3971,7 @@ function createIntegrityRouter(getSupabaseAdmin2, authOverrides) {
   );
   router.get(
     "/cases/:id",
-    requireAny("integrity.cases.read"),
+    requireAny("integrity.cases.read", "integrity.cases.read_assigned"),
     asyncHandler(async (req, res) => {
       const db = getSupabaseAdmin2();
       const result = await findCase(
@@ -3946,7 +3989,7 @@ function createIntegrityRouter(getSupabaseAdmin2, authOverrides) {
   );
   router.get(
     "/cases/:id/timeline",
-    requireAny("integrity.cases.read"),
+    requireAny("integrity.cases.read", "integrity.cases.read_assigned"),
     asyncHandler(async (req, res) => {
       const db = getSupabaseAdmin2();
       const found = await findCase(db, req, req.params.id);
@@ -3960,7 +4003,7 @@ function createIntegrityRouter(getSupabaseAdmin2, authOverrides) {
   );
   router.post(
     "/cases/:id/transitions",
-    requireAny("integrity.cases.manage"),
+    requireAny("integrity.cases.manage", "integrity.cases.investigate", "integrity.cases.reopen"),
     asyncHandler(async (req, res) => {
       const parsed = transitionSchema.safeParse(req.body);
       if (!parsed.success)
@@ -3970,6 +4013,8 @@ function createIntegrityRouter(getSupabaseAdmin2, authOverrides) {
       if (found.error || !found.data)
         return res.status(404).json({ error: "Caso n\xE3o encontrado." });
       const { to_status, reason, lock_version } = parsed.data;
+      const allowed = to_status === "reopened" ? hasPermission2(req, "integrity.cases.reopen") || hasPermission2(req, "integrity.cases.manage") : hasPermission2(req, "integrity.cases.investigate") || hasPermission2(req, "integrity.cases.manage");
+      if (!allowed) return res.status(403).json({ error: "Voc\xEA n\xE3o possui permiss\xE3o para esta transi\xE7\xE3o." });
       if (!canTransitionIntegrityCase(found.data.status, to_status))
         return res.status(409).json({
           error: `Transi\xE7\xE3o ${found.data.status} \u2192 ${to_status} n\xE3o permitida.`
@@ -4092,7 +4137,7 @@ function createIntegrityRouter(getSupabaseAdmin2, authOverrides) {
   );
   router.get(
     "/cases/:id/messages",
-    requireAny("integrity.cases.read"),
+    requireAny("integrity.cases.read", "integrity.cases.read_assigned"),
     asyncHandler(async (req, res) => {
       const db = getSupabaseAdmin2();
       const found = await findCase(db, req, req.params.id);
@@ -4108,15 +4153,29 @@ function createIntegrityRouter(getSupabaseAdmin2, authOverrides) {
   );
   router.post(
     "/cases/:id/messages",
-    requireAny("integrity.messages.send", "integrity.cases.manage"),
+    requireAny("integrity.messages.send", "integrity.notes.create", "integrity.cases.manage"),
     asyncHandler(async (req, res) => {
       const parsed = messageSchema.safeParse(req.body);
       if (!parsed.success)
         return res.status(400).json({ error: "Mensagem inv\xE1lida.", issues: parsed.error.issues });
+      const messagePermission = parsed.data.visible_to_reporter ? "integrity.messages.send" : "integrity.notes.create";
+      if (!hasPermission2(req, messagePermission) && !hasPermission2(req, "integrity.cases.manage"))
+        return res.status(403).json({ error: "Voc\xEA n\xE3o possui permiss\xE3o para este tipo de comunica\xE7\xE3o." });
       const db = getSupabaseAdmin2();
       const found = await findCase(db, req, req.params.id);
       if (!found.data)
         return res.status(404).json({ error: "Caso n\xE3o encontrado." });
+      if (parsed.data.visible_to_reporter) {
+        const settings = await db.from("integrity_settings").select("communication_policy").eq("tenant_id", tenantId(req)).maybeSingle();
+        if (settings.error)
+          return res.status(500).json({
+            error: "N\xE3o foi poss\xEDvel validar a pol\xEDtica de comunica\xE7\xE3o."
+          });
+        if (settings.data?.communication_policy?.allow_case_messages === false)
+          return res.status(403).json({
+            error: "Mensagens ao denunciante est\xE3o desativadas neste canal."
+          });
+      }
       const saved = await db.from("integrity_report_messages").insert({
         report_id: found.data.report_id,
         body: parsed.data.body,
@@ -4143,7 +4202,7 @@ function createIntegrityRouter(getSupabaseAdmin2, authOverrides) {
   );
   router.get(
     "/cases/:id/evidence",
-    requireAny("integrity.cases.read"),
+    requireAny("integrity.cases.read", "integrity.cases.read_assigned"),
     asyncHandler(async (req, res) => {
       const db = getSupabaseAdmin2();
       const found = await findCase(db, req, req.params.id);
@@ -4227,7 +4286,7 @@ function createIntegrityRouter(getSupabaseAdmin2, authOverrides) {
   );
   router.post(
     "/cases/:id/evidence/:evidenceId/url",
-    requireAny("integrity.cases.read"),
+    requireAny("integrity.cases.read", "integrity.cases.read_assigned"),
     asyncHandler(async (req, res) => {
       const db = getSupabaseAdmin2();
       const found = await findCase(db, req, req.params.id);
@@ -4289,7 +4348,7 @@ function createIntegrityRouter(getSupabaseAdmin2, authOverrides) {
   );
   router.get(
     "/cases/:id/tasks",
-    requireAny("integrity.cases.read"),
+    requireAny("integrity.cases.read", "integrity.cases.read_assigned"),
     asyncHandler(async (req, res) => {
       const db = getSupabaseAdmin2();
       const found = await findCase(db, req, req.params.id);
@@ -4311,7 +4370,7 @@ function createIntegrityRouter(getSupabaseAdmin2, authOverrides) {
   );
   router.post(
     "/cases/:id/tasks",
-    requireAny("integrity.cases.manage"),
+    requireAny("integrity.cases.manage", "integrity.cases.investigate"),
     asyncHandler(async (req, res) => {
       const parsed = taskSchema.safeParse(req.body);
       if (!parsed.success)
@@ -4349,7 +4408,7 @@ function createIntegrityRouter(getSupabaseAdmin2, authOverrides) {
   );
   router.patch(
     "/cases/:id/tasks/:taskId",
-    requireAny("integrity.cases.manage"),
+    requireAny("integrity.cases.manage", "integrity.cases.investigate"),
     asyncHandler(async (req, res) => {
       const parsed = taskStatusSchema.safeParse(req.body);
       if (!parsed.success)
@@ -4392,12 +4451,14 @@ function createIntegrityRouter(getSupabaseAdmin2, authOverrides) {
   );
   router.post(
     "/cases/:id/decision",
-    requireAny("integrity.cases.manage"),
+    requireAny("integrity.cases.close", "integrity.cases.manage"),
     asyncHandler(async (req, res) => {
       const parsed = decisionSchema.safeParse(req.body);
       if (!parsed.success)
         return res.status(400).json({ error: "Preencha todos os campos internos da decis\xE3o." });
       const db = getSupabaseAdmin2();
+      const found = await findCase(db, req, req.params.id);
+      if (!found.data) return res.status(404).json({ error: "Caso n\xE3o encontrado." });
       const saved = await db.rpc("decide_and_close_integrity_case", {
         p_case_id: req.params.id,
         p_tenant_id: tenantId(req),
@@ -4417,6 +4478,39 @@ function createIntegrityRouter(getSupabaseAdmin2, authOverrides) {
       }
       const result = Array.isArray(saved.data) ? saved.data[0] : saved.data;
       return res.json(result);
+    })
+  );
+  router.post(
+    "/cases/:id/recommendation",
+    requireAny("integrity.cases.recommend", "integrity.cases.manage"),
+    asyncHandler(async (req, res) => {
+      const parsed = recommendationSchema.safeParse(req.body);
+      if (!parsed.success) return res.status(400).json({ error: "Informe recomenda\xE7\xE3o e fundamenta\xE7\xE3o." });
+      const db = getSupabaseAdmin2();
+      const found = await findCase(db, req, req.params.id);
+      if (!found.data) return res.status(404).json({ error: "Caso n\xE3o encontrado." });
+      const saved = await db.from("integrity_case_events").insert({
+        report_id: found.data.report_id,
+        case_id: req.params.id,
+        event_type: "decision_recommended",
+        actor_membership_id: membershipId(req),
+        note: parsed.data.recommendation,
+        metadata: { justification: parsed.data.justification }
+      }).select("id,created_at").single();
+      if (saved.error) return res.status(500).json({ error: "N\xE3o foi poss\xEDvel registrar a recomenda\xE7\xE3o." });
+      return res.status(201).json({ recommendation: saved.data });
+    })
+  );
+  router.get(
+    "/cases/:id/identity",
+    requireAny("integrity.identity.read"),
+    asyncHandler(async (req, res) => {
+      const db = getSupabaseAdmin2();
+      const found = await findCase(db, req, req.params.id);
+      if (!found.data) return res.status(404).json({ error: "Caso n\xE3o encontrado." });
+      const identity = await db.from("integrity_report_identities").select("name,email,phone,consented_at").eq("report_id", found.data.report_id).maybeSingle();
+      if (identity.error) return res.status(500).json({ error: "N\xE3o foi poss\xEDvel consultar a identidade protegida." });
+      return res.json({ identity: identity.data });
     })
   );
   router.get(
@@ -4457,15 +4551,35 @@ function createIntegrityRouter(getSupabaseAdmin2, authOverrides) {
       ].find((result) => result.error);
       if (failed)
         return res.status(500).json({ error: "N\xE3o foi poss\xEDvel carregar as configura\xE7\xF5es." });
+      const userIds = (members.data || []).map((item) => item.user_id);
+      const profiles = userIds.length ? await db.from("profiles").select("id,full_name").in("id", userIds) : { data: [], error: null };
+      if (profiles.error) return res.status(500).json({ error: "N\xE3o foi poss\xEDvel carregar os nomes dos respons\xE1veis." });
+      const profileNames = new Map((profiles.data || []).map((profile) => [profile.id, profile.full_name]));
+      const namedMembers = (members.data || []).map((member) => ({ ...member, name: profileNames.get(member.user_id) || "Membro do tenant" }));
+      const checks = [
+        { key: "texts", label: "Textos e instru\xE7\xF5es", complete: Boolean(settings.data?.configured_at && settings.data?.introduction) },
+        { key: "channel", label: "Canal ativo", complete: (channels.data || []).some((item) => item.active) },
+        { key: "mode", label: "Modo de identifica\xE7\xE3o", complete: Boolean(settings.data?.allows_anonymous || settings.data?.allows_identified) },
+        { key: "categories", label: "Categorias ativas", complete: (categories.data || []).some((item) => item.active) },
+        { key: "committee", label: "Comit\xEA ativo com membros", complete: (committees.data || []).some((item) => item.status === "active" && (committeeMembers.data || []).some((member) => member.committee_id === item.id && member.active)) },
+        { key: "routing", label: "Roteamento ou fallback ativo", complete: (routingRules.data || []).some((item) => item.status === "active" && item.active) || Boolean(settings.data?.default_assignee_membership_id || settings.data?.default_committee_id) },
+        { key: "sla", label: "SLAs definidos", complete: Boolean(settings.data?.default_sla_hours && settings.data?.treatment_sla_hours) }
+      ];
       return res.json({
         settings: settings.data,
         channels: channels.data || [],
         categories: categories.data || [],
         units: units.data || [],
-        members: members.data || [],
+        members: namedMembers,
         committees: committees.data || [],
         committee_members: committeeMembers.data || [],
-        routing_rules: routingRules.data || []
+        routing_rules: routingRules.data || [],
+        configuration_status: {
+          operational: checks.every((item) => item.complete),
+          completed: checks.filter((item) => item.complete).length,
+          total: checks.length,
+          items: checks
+        }
       });
     })
   );
@@ -4632,6 +4746,12 @@ function createIntegrityRouter(getSupabaseAdmin2, authOverrides) {
         return res.status(400).json({ error: "Regra de roteamento inv\xE1lida." });
       const db = getSupabaseAdmin2();
       const value = parsed.data;
+      let conflictQuery = db.from("integrity_routing_rules").select("id,name").eq("tenant_id", tenantId(req)).eq("status", "active").eq("priority", value.priority).eq("is_fallback", value.is_fallback);
+      conflictQuery = value.category_id ? conflictQuery.eq("category_id", value.category_id) : conflictQuery.is("category_id", null);
+      conflictQuery = value.unit_id ? conflictQuery.eq("unit_id", value.unit_id) : conflictQuery.is("unit_id", null);
+      const conflicting = await conflictQuery.limit(1);
+      if (conflicting.error) return res.status(500).json({ error: "N\xE3o foi poss\xEDvel validar conflitos de roteamento." });
+      if (conflicting.data?.length) return res.status(409).json({ error: `Conflito com a regra ${conflicting.data[0].name}. Ajuste escopo ou prioridade.` });
       if (value.assignee_membership_id) {
         const member = await db.from("memberships").select("id").eq("id", value.assignee_membership_id).eq("tenant_id", tenantId(req)).eq("status", "active").maybeSingle();
         if (!member.data)
@@ -4642,10 +4762,103 @@ function createIntegrityRouter(getSupabaseAdmin2, authOverrides) {
         if (!committee.data)
           return res.status(400).json({ error: "Comit\xEA inv\xE1lido." });
       }
-      const rule = await db.from("integrity_routing_rules").insert({ tenant_id: tenantId(req), ...value }).select("*").single();
+      const rule = await db.from("integrity_routing_rules").insert({ tenant_id: tenantId(req), ...value, status: value.active ? "active" : "inactive" }).select("*").single();
       if (rule.error)
         return res.status(500).json({ error: "N\xE3o foi poss\xEDvel criar a regra." });
       return res.status(201).json({ routing_rule: rule.data });
+    })
+  );
+  router.patch(
+    "/settings/committees/:id",
+    requireAny("integrity.settings.manage"),
+    asyncHandler(async (req, res) => {
+      const parsed = committeeUpdateSchema.safeParse(req.body);
+      if (!parsed.success) return res.status(400).json({ error: "Comit\xEA inv\xE1lido." });
+      const db = getSupabaseAdmin2();
+      const current = await db.from("integrity_committees").select("id,status").eq("id", req.params.id).eq("tenant_id", tenantId(req)).maybeSingle();
+      if (!current.data) return res.status(404).json({ error: "Comit\xEA n\xE3o encontrado." });
+      if (parsed.data.member_ids.length) {
+        const members = await db.from("memberships").select("id").eq("tenant_id", tenantId(req)).eq("status", "active").in("id", parsed.data.member_ids);
+        if (members.error || members.data?.length !== parsed.data.member_ids.length)
+          return res.status(400).json({ error: "Todos os membros devem estar ativos neste tenant." });
+      }
+      if (parsed.data.status !== "active") {
+        const activeCases = await db.from("integrity_cases").select("id", { count: "exact", head: true }).eq("tenant_id", tenantId(req)).eq("committee_id", req.params.id).not("status", "in", "(closed,archived)");
+        if (activeCases.error) return res.status(500).json({ error: "N\xE3o foi poss\xEDvel validar casos do comit\xEA." });
+        if (activeCases.count) return res.status(409).json({ error: `Este comit\xEA possui ${activeCases.count} caso(s) ativo(s). Reatribua antes de desativar.` });
+      }
+      const saved = await db.from("integrity_committees").update({
+        name: parsed.data.name,
+        description: parsed.data.description || null,
+        status: parsed.data.status,
+        active: parsed.data.status === "active",
+        archived_at: parsed.data.status === "archived" ? (/* @__PURE__ */ new Date()).toISOString() : null,
+        archived_by_membership_id: parsed.data.status === "archived" ? membershipId(req) : null,
+        updated_at: (/* @__PURE__ */ new Date()).toISOString()
+      }).eq("id", req.params.id).eq("tenant_id", tenantId(req)).select("*").single();
+      if (saved.error) return res.status(saved.error.code === "23505" ? 409 : 500).json({ error: "N\xE3o foi poss\xEDvel atualizar o comit\xEA." });
+      const disabled = await db.from("integrity_committee_members").update({ active: false }).eq("committee_id", req.params.id);
+      if (disabled.error) return res.status(500).json({ error: "Comit\xEA atualizado, mas os membros n\xE3o foram sincronizados." });
+      if (parsed.data.member_ids.length) {
+        const linked = await db.from("integrity_committee_members").upsert(parsed.data.member_ids.map((id, index) => ({
+          committee_id: req.params.id,
+          membership_id: id,
+          role: index === 0 ? "chair" : "member",
+          active: true
+        })), { onConflict: "committee_id,membership_id" });
+        if (linked.error) return res.status(500).json({ error: "Comit\xEA atualizado, mas os membros n\xE3o foram sincronizados." });
+      }
+      return res.json({ committee: saved.data });
+    })
+  );
+  router.post(
+    "/settings/routing/preview",
+    requireAny("integrity.settings.manage"),
+    asyncHandler(async (req, res) => {
+      const parsed = routingPreviewSchema.safeParse(req.body);
+      if (!parsed.success) return res.status(400).json({ error: "Cen\xE1rio de teste inv\xE1lido." });
+      const db = getSupabaseAdmin2();
+      const rules = await db.from("integrity_routing_rules").select("*").eq("tenant_id", tenantId(req)).eq("status", "active").eq("active", true).order("priority").order("created_at");
+      if (rules.error) return res.status(500).json({ error: "N\xE3o foi poss\xEDvel simular o roteamento." });
+      const candidates = (rules.data || []).filter(
+        (rule) => (!rule.category_id || rule.category_id === parsed.data.category_id) && (!rule.unit_id || rule.unit_id === parsed.data.unit_id)
+      ).sort((a, b) => {
+        if (a.is_fallback !== b.is_fallback) return a.is_fallback ? 1 : -1;
+        const specificity = (rule) => Number(Boolean(rule.category_id)) + Number(Boolean(rule.unit_id));
+        return specificity(b) - specificity(a) || a.priority - b.priority || a.created_at.localeCompare(b.created_at);
+      });
+      const selected = candidates[0] || null;
+      const selectedSpecificity = selected ? Number(Boolean(selected.category_id)) + Number(Boolean(selected.unit_id)) : -1;
+      const conflicts = selected ? candidates.filter((rule) => rule.id !== selected.id && rule.is_fallback === selected.is_fallback && rule.priority === selected.priority && Number(Boolean(rule.category_id)) + Number(Boolean(rule.unit_id)) === selectedSpecificity) : [];
+      return res.json({ selected, conflicts, matched: candidates.length, deterministic: conflicts.length === 0 });
+    })
+  );
+  router.patch(
+    "/settings/routing/:id",
+    requireAny("integrity.settings.manage"),
+    asyncHandler(async (req, res) => {
+      const parsed = routingUpdateSchema.safeParse(req.body);
+      if (!parsed.success) return res.status(400).json({ error: "Regra de roteamento inv\xE1lida." });
+      const db = getSupabaseAdmin2();
+      const current = await db.from("integrity_routing_rules").select("id").eq("id", req.params.id).eq("tenant_id", tenantId(req)).maybeSingle();
+      if (!current.data) return res.status(404).json({ error: "Regra n\xE3o encontrada." });
+      const value = parsed.data;
+      let conflictQuery = db.from("integrity_routing_rules").select("id,name").eq("tenant_id", tenantId(req)).neq("id", req.params.id).eq("status", "active").eq("priority", value.priority).eq("is_fallback", value.is_fallback);
+      conflictQuery = value.category_id ? conflictQuery.eq("category_id", value.category_id) : conflictQuery.is("category_id", null);
+      conflictQuery = value.unit_id ? conflictQuery.eq("unit_id", value.unit_id) : conflictQuery.is("unit_id", null);
+      const conflicting = await conflictQuery.limit(1);
+      if (conflicting.error) return res.status(500).json({ error: "N\xE3o foi poss\xEDvel validar conflitos." });
+      if (value.status === "active" && conflicting.data?.length)
+        return res.status(409).json({ error: `Conflito com a regra ${conflicting.data[0].name}.` });
+      const saved = await db.from("integrity_routing_rules").update({
+        ...value,
+        active: value.status === "active",
+        archived_at: value.status === "archived" ? (/* @__PURE__ */ new Date()).toISOString() : null,
+        archived_by_membership_id: value.status === "archived" ? membershipId(req) : null,
+        updated_at: (/* @__PURE__ */ new Date()).toISOString()
+      }).eq("id", req.params.id).eq("tenant_id", tenantId(req)).select("*").single();
+      if (saved.error) return res.status(saved.error.code === "23505" ? 409 : 500).json({ error: "N\xE3o foi poss\xEDvel atualizar a regra." });
+      return res.json({ routing_rule: saved.data });
     })
   );
   return router;
@@ -4788,7 +5001,24 @@ function createIntegrityPublicRouter(getSupabaseAdmin2) {
         return res.status(400).json({ error: "Mensagem inv\xE1lida." });
       if (!await rate(req, res, "message", 10, 900, parsed.data.protocol))
         return;
-      const result = await getSupabaseAdmin2().rpc(
+      const db = getSupabaseAdmin2();
+      const authorization = await db.rpc("authorize_integrity_reporter", {
+        p_protocol: parsed.data.protocol,
+        p_access_secret: parsed.data.secret
+      });
+      const access = authorization.data?.[0];
+      if (authorization.error || !access)
+        return res.status(404).json({ error: "N\xE3o foi poss\xEDvel validar o acompanhamento." });
+      const settings = await db.from("integrity_settings").select("communication_policy").eq("tenant_id", access.tenant_id).maybeSingle();
+      if (settings.error)
+        return res.status(500).json({
+          error: "N\xE3o foi poss\xEDvel validar a pol\xEDtica de comunica\xE7\xE3o."
+        });
+      if (settings.data?.communication_policy?.allow_reporter_messages === false)
+        return res.status(403).json({
+          error: "O envio de novas mensagens est\xE1 desativado neste canal."
+        });
+      const result = await db.rpc(
         "post_integrity_reporter_message",
         {
           p_protocol: parsed.data.protocol,

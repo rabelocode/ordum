@@ -39,7 +39,7 @@ export function usePilotOverview(input: { tenant: any; activeModules: ModuleId[]
       setState((current) => ({ ...current, loading: true, error: null }));
       try {
         const tenantId = input.tenant.id;
-        const canReadIntegrity = input.permissions.some((key) => ['integrity.cases.read', 'integrity.cases.manage'].includes(key));
+        const canReadIntegrity = input.permissions.some((key) => ['integrity.cases.read', 'integrity.cases.read_assigned', 'integrity.cases.manage'].includes(key));
         const canReadPeople = input.permissions.some((key) => key.startsWith('people.'));
         const canReadTalent = input.permissions.some((key) => key.startsWith('talents.'));
         const [integrity, people, talent, members] = await Promise.all([

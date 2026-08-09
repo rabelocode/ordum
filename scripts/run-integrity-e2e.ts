@@ -106,22 +106,30 @@ export async function runIntegrityE2E(): Promise<Evidence> {
     value(await db.from("tenant_solutions").insert([{ tenant_id: tenantA.id, solution_id: solution.id, status: "active" }, { tenant_id: tenantB.id, solution_id: solution.id, status: "active" }]).select(), "tenant solutions");
     const roleA = value(await db.from("roles").insert({ tenant_id: tenantA.id, key: "tenant_admin", name: "Admin E2E", is_system: true }).select("id").single(), "role A");
     const roleB = value(await db.from("roles").insert({ tenant_id: tenantB.id, key: "tenant_admin", name: "Admin E2E", is_system: true }).select("id").single(), "role B");
+    const investigatorRole = value(await db.from("roles").select("id").eq("tenant_id", tenantA.id).eq("key", "integrity_investigator").single(), "investigator role");
+    const complianceRole = value(await db.from("roles").select("id").eq("tenant_id", tenantA.id).eq("key", "integrity_compliance").single(), "compliance role");
     const emptyRole = value(await db.from("roles").insert({ tenant_id: tenantA.id, key: "e2e_no_access", name: "Sem acesso" }).select("id").single(), "empty role");
     const adminA = await createUser(db, runId, "admin_a", tenantA.id, roleA.id);
     const adminB = await createUser(db, runId, "admin_b", tenantB.id, roleB.id);
     const blocked = await createUser(db, runId, "blocked", tenantA.id, emptyRole.id);
-    userIds.push(adminA.id, adminB.id, blocked.id);
+    const assignedInvestigator = await createUser(db, runId, "investigator_assigned", tenantA.id, investigatorRole.id);
+    const unassignedInvestigator = await createUser(db, runId, "investigator_unassigned", tenantA.id, investigatorRole.id);
+    const compliance = await createUser(db, runId, "compliance", tenantA.id, complianceRole.id);
+    userIds.push(adminA.id, adminB.id, blocked.id, assignedInvestigator.id, unassignedInvestigator.id, compliance.id);
     const platformRole = value(await db.from("platform_roles").select("id").eq("key", "admin").single(), "platform admin role");
     value(await db.from("platform_members").insert({ user_id: adminA.id, role_id: platformRole.id, status: "active", relationship_type: "partner" }).select("id").single(), "platform fixture");
     platformUser = adminA.id;
     const workspace = (path: string, options?: RequestInit, user = adminA, tenant = tenantA.id) => request(`/api/workspace/integrity${path}`, options, user.token, tenant);
     const publicApi = (path: string, options?: RequestInit) => request(`/api/public/integrity${path}`, options);
 
-    expect(await workspace("/settings", { method: "PUT", body: JSON.stringify({ introduction: "Canal seguro para o teste funcional descartável da Ordum.", instructions: "Descreva os fatos com clareza.", allows_anonymous: true, allows_identified: true, default_sla_hours: 24, treatment_sla_hours: 72, automatic_acknowledgement: "Seu relato foi recebido com segurança.", branding: { accent: "#3457D5" }, attachment_policy: { enabled: true, max_files: 3, max_size_mb: 2 }, routing_rules: [] }) }), 200, "settings");
+    expect(await workspace("/settings", { method: "PUT", body: JSON.stringify({ introduction: "Canal seguro para o teste funcional descartável da Ordum.", instructions: "Descreva os fatos com clareza.", allows_anonymous: true, allows_identified: true, default_sla_hours: 12, treatment_sla_hours: 48, automatic_acknowledgement: "Seu relato foi recebido com segurança.", branding: { accent: "#3457D5" }, attachment_policy: { enabled: true, max_files: 3, max_size_mb: 2 }, communication_policy: { allow_reporter_messages: true, allow_case_messages: true }, routing_rules: [] }) }), 200, "settings");
     const category = expect(await workspace("/settings/categories", { method: "POST", body: JSON.stringify({ name: "Assédio", slug: `assedio-${suffix}`, default_risk_level: "high", sla_hours: 12, active: true }) }), 201, "category").category;
     const unit = expect(await workspace("/settings/units", { method: "POST", body: JSON.stringify({ name: "Unidade Piloto", code: `U-${suffix}`, active: true }) }), 201, "unit").unit;
-    const committee = expect(await workspace("/settings/committees", { method: "POST", body: JSON.stringify({ name: "Comitê de Ética", member_ids: [adminA.membershipId], active: true }) }), 201, "committee").committee;
-    expect(await workspace("/settings/routing", { method: "POST", body: JSON.stringify({ name: "Rota piloto", category_id: category.id, unit_id: unit.id, assignee_membership_id: adminA.membershipId, committee_id: committee.id, priority: 1, active: true }) }), 201, "routing");
+    const committee = expect(await workspace("/settings/committees", { method: "POST", body: JSON.stringify({ name: "Comitê de Ética", member_ids: [assignedInvestigator.membershipId], active: true }) }), 201, "committee").committee;
+    const routing = expect(await workspace("/settings/routing", { method: "POST", body: JSON.stringify({ name: "Rota piloto", category_id: category.id, unit_id: unit.id, assignee_membership_id: assignedInvestigator.membershipId, committee_id: committee.id, priority: 1, active: true, is_fallback: false }) }), 201, "routing").routing_rule;
+    expect(await workspace("/settings/routing", { method: "POST", body: JSON.stringify({ name: "Rota conflitante", category_id: category.id, unit_id: unit.id, assignee_membership_id: adminA.membershipId, priority: 1, active: true, is_fallback: false }) }), 409, "routing conflict");
+    const preview = expect(await workspace("/settings/routing/preview", { method: "POST", body: JSON.stringify({ category_id: category.id, unit_id: unit.id }) }), 200, "routing preview");
+    if (preview.selected?.id !== routing.id || preview.deterministic !== true) throw new Error("preview de roteamento não determinístico");
     const channelSlug = `canal-${suffix}`;
     expect(await workspace("/settings/channels", { method: "POST", body: JSON.stringify({ name: "Canal E2E", public_title: "Canal de Integridade", public_slug: channelSlug, active: true, allows_anonymous: true, allows_identified: true }) }), 201, "channel");
     const channel = expect(await publicApi(`/channels/${channelSlug}`), 200, "public channel").channel;
@@ -141,32 +149,60 @@ export async function runIntegrityE2E(): Promise<Evidence> {
     const tracked = expect(await publicApi("/track", { method: "POST", body: JSON.stringify({ protocol: submitted.protocol, secret: submitted.access_secret }) }), 200, "valid tracking").tracking;
     if (!tracked) throw new Error("tracking vazio");
     const caseRow = value(await db.from("integrity_cases").select("id,status,lock_version,owner_membership_id,committee_id,first_response_due_at,treatment_due_at").eq("report_id", report.id).single(), "case created");
-    if (caseRow.owner_membership_id !== adminA.membershipId || caseRow.committee_id !== committee.id) throw new Error("roteamento automático não aplicado");
+    if (caseRow.owner_membership_id !== assignedInvestigator.membershipId || caseRow.committee_id !== committee.id) throw new Error("roteamento automático não aplicado");
     evidence.routing = true;
     expect(await workspace(`/cases/${caseRow.id}`, {}, adminB, tenantB.id), 404, "cross tenant case");
     expect(await workspace(`/cases/${caseRow.id}`, {}, blocked, tenantA.id), 403, "permission denied");
+    expect(await workspace(`/cases/${caseRow.id}`, {}, unassignedInvestigator, tenantA.id), 404, "unassigned investigator denied");
+    expect(await workspace(`/cases/${caseRow.id}`, {}, assignedInvestigator, tenantA.id), 200, "assigned investigator read");
+    expect(await workspace(`/cases/${caseRow.id}`, {}, compliance, tenantA.id), 200, "compliance read");
+    expect(await workspace(`/cases/${caseRow.id}/identity`, {}, assignedInvestigator, tenantA.id), 403, "investigator identity denied");
+    const rlsClient = (user: FixtureUser) => createClient(SUPABASE_URL, PUBLISHABLE, {
+      auth: { autoRefreshToken: false, persistSession: false },
+      global: { headers: { Authorization: `Bearer ${user.token}` } },
+    });
+    const assignedRows = value(await rlsClient(assignedInvestigator).from("integrity_cases").select("id").eq("id", caseRow.id), "RLS assigned investigator");
+    if (assignedRows.length !== 1) throw new Error("RLS não liberou caso atribuído ao investigador");
+    const unassignedRows = value(await rlsClient(unassignedInvestigator).from("integrity_cases").select("id").eq("id", caseRow.id), "RLS unassigned investigator");
+    if (unassignedRows.length !== 0) throw new Error("RLS liberou caso não atribuído ao investigador");
+    const crossTenantRows = value(await rlsClient(adminB).from("integrity_cases").select("id").eq("id", caseRow.id), "RLS cross tenant");
+    if (crossTenantRows.length !== 0) throw new Error("RLS liberou caso para outro tenant");
+    const protectedIdentityRows = value(await rlsClient(assignedInvestigator).from("integrity_report_identities").select("report_id").eq("report_id", report.id), "RLS protected identity");
+    if (protectedIdentityRows.length !== 0) throw new Error("RLS expôs identidade ao investigador");
+    evidence.rlsAssigned = true;
+    evidence.rlsUnassignedDenied = true;
+    evidence.rlsCrossTenantDenied = true;
+    evidence.rlsIdentityDenied = true;
+    expect(await workspace(`/settings/committees/${committee.id}`, { method: "PATCH", body: JSON.stringify({ name: "Comitê de Ética", description: "Comitê do piloto", member_ids: [assignedInvestigator.membershipId], active: false, status: "inactive" }) }), 409, "committee orphan protection");
+    expect(await workspace(`/settings/committees/${committee.id}`, { method: "PATCH", body: JSON.stringify({ name: "Comitê de Ética e Conduta", description: "Comitê do piloto", member_ids: [assignedInvestigator.membershipId, unassignedInvestigator.membershipId], active: true, status: "active" }) }), 200, "committee update");
+    expect(await workspace(`/cases/${caseRow.id}`, {}, unassignedInvestigator, tenantA.id), 200, "committee investigator read");
+    expect(await workspace(`/settings/routing/${routing.id}`, { method: "PATCH", body: JSON.stringify({ name: "Rota piloto atualizada", category_id: category.id, unit_id: unit.id, assignee_membership_id: assignedInvestigator.membershipId, committee_id: committee.id, priority: 2, active: true, is_fallback: false, status: "active" }) }), 200, "routing update");
+    const configured = expect(await workspace("/settings"), 200, "configuration checklist");
+    if (configured.configuration_status?.operational !== true) throw new Error("checklist de configuração não operacional");
     expect(await workspace(`/cases/${caseRow.id}/transitions`, { method: "POST", body: JSON.stringify({ to_status: "closed", reason: "inválida", lock_version: caseRow.lock_version }) }), 409, "invalid transition");
-    let transition = expect(await workspace(`/cases/${caseRow.id}/transitions`, { method: "POST", body: JSON.stringify({ to_status: "triage", lock_version: caseRow.lock_version }) }), 200, "triage");
-    transition = expect(await workspace(`/cases/${caseRow.id}/transitions`, { method: "POST", body: JSON.stringify({ to_status: "investigation", lock_version: transition.lock_version }) }), 200, "investigation");
+    let transition = expect(await workspace(`/cases/${caseRow.id}/transitions`, { method: "POST", body: JSON.stringify({ to_status: "triage", lock_version: caseRow.lock_version }) }, assignedInvestigator), 200, "triage by investigator");
+    transition = expect(await workspace(`/cases/${caseRow.id}/transitions`, { method: "POST", body: JSON.stringify({ to_status: "investigation", lock_version: transition.lock_version }) }, assignedInvestigator), 200, "investigation by investigator");
+    expect(await workspace(`/cases/${caseRow.id}/decision`, { method: "POST", body: JSON.stringify({ final_classification: "Teste", conclusion: "Conclusão bloqueada", measures_taken: "Nenhuma medida", internal_justification: "Sem permissão", lock_version: transition.lock_version }) }, assignedInvestigator), 403, "investigator close denied");
+    expect(await workspace(`/cases/${caseRow.id}/recommendation`, { method: "POST", body: JSON.stringify({ recommendation: "Recomenda-se análise conclusiva pelo compliance.", justification: "Evidências revisadas pelo investigador atribuído." }) }, assignedInvestigator), 201, "investigator recommendation");
     expect(await workspace(`/cases/${caseRow.id}/conflicts`, { method: "POST", body: JSON.stringify({ membership_id: blocked.membershipId, reason: "Pessoa relacionada ao relato" }) }), 201, "conflict");
     expect(await workspace(`/cases/${caseRow.id}/assignments`, { method: "POST", body: JSON.stringify({ membership_id: blocked.membershipId, reason: "Tentativa bloqueada" }) }), 409, "conflicted assignment");
     expect(await workspace(`/cases/${caseRow.id}/assignments`, { method: "POST", body: JSON.stringify({ membership_id: adminA.membershipId, reason: "Responsável confirmado" }) }), 201, "assignment");
-    const task = expect(await workspace(`/cases/${caseRow.id}/tasks`, { method: "POST", body: JSON.stringify({ title: "Validar evidências", assignee_membership_id: adminA.membershipId, due_at: new Date(Date.now() - 3600000).toISOString(), priority: "high" }) }), 201, "task").task;
-    const overdue = expect(await workspace(`/cases/${caseRow.id}/tasks?overdue=true`), 200, "overdue tasks").tasks;
+    const task = expect(await workspace(`/cases/${caseRow.id}/tasks`, { method: "POST", body: JSON.stringify({ title: "Validar evidências", assignee_membership_id: assignedInvestigator.membershipId, due_at: new Date(Date.now() - 3600000).toISOString(), priority: "high" }) }, assignedInvestigator), 201, "task").task;
+    const overdue = expect(await workspace(`/cases/${caseRow.id}/tasks?overdue=true`, {}, assignedInvestigator), 200, "overdue tasks").tasks;
     if (!overdue.some((item: any) => item.id === task.id)) throw new Error("tarefa vencida ausente");
-    expect(await workspace(`/cases/${caseRow.id}/tasks/${task.id}`, { method: "PATCH", body: JSON.stringify({ status: "done", reason: "Investigação concluída" }) }), 200, "task done");
-    expect(await workspace(`/cases/${caseRow.id}/tasks/${task.id}`, { method: "PATCH", body: JSON.stringify({ status: "open", reason: "Complementação necessária" }) }), 200, "task reopen");
-    expect(await workspace(`/cases/${caseRow.id}/messages`, { method: "POST", body: JSON.stringify({ body: "Nota interna confidencial E2E", visible_to_reporter: false }) }), 201, "internal note");
-    expect(await workspace(`/cases/${caseRow.id}/messages`, { method: "POST", body: JSON.stringify({ body: "Mensagem pública do comitê E2E", visible_to_reporter: true }) }), 201, "public message");
+    expect(await workspace(`/cases/${caseRow.id}/tasks/${task.id}`, { method: "PATCH", body: JSON.stringify({ status: "done", reason: "Investigação concluída" }) }, assignedInvestigator), 200, "task done");
+    expect(await workspace(`/cases/${caseRow.id}/tasks/${task.id}`, { method: "PATCH", body: JSON.stringify({ status: "open", reason: "Complementação necessária" }) }, assignedInvestigator), 200, "task reopen");
+    expect(await workspace(`/cases/${caseRow.id}/messages`, { method: "POST", body: JSON.stringify({ body: "Nota interna confidencial E2E", visible_to_reporter: false }) }, assignedInvestigator), 201, "internal note");
+    expect(await workspace(`/cases/${caseRow.id}/messages`, { method: "POST", body: JSON.stringify({ body: "Mensagem pública do comitê E2E", visible_to_reporter: true }) }, assignedInvestigator), 201, "public message");
     expect(await publicApi("/messages", { method: "POST", body: JSON.stringify({ protocol: submitted.protocol, secret: submitted.access_secret, body: "Complemento do denunciante E2E" }) }), 201, "reporter message");
     const trackingMessages = expect(await publicApi("/track", { method: "POST", body: JSON.stringify({ protocol: submitted.protocol, secret: submitted.access_secret }) }), 200, "tracking messages").tracking;
     const serialized = JSON.stringify(trackingMessages);
     if (!serialized.includes("Mensagem pública do comitê E2E") || serialized.includes("Nota interna confidencial E2E")) throw new Error("fronteira mensagem pública/interna violada");
 
     const pdf = new Uint8Array(Buffer.from("%PDF-1.4\n1 0 obj\n<<>>\nendobj\n%%EOF"));
-    const evidenceUpload = expect(await workspace(`/cases/${caseRow.id}/evidence`, { method: "POST", headers: { "content-type": "application/pdf", "x-file-name": "evidencia.pdf", "x-visible-to-reporter": "true" }, body: pdf }), 201, "workspace evidence");
-    expect(await workspace(`/cases/${caseRow.id}/evidence`, { method: "POST", headers: { "content-type": "application/x-msdownload", "x-file-name": "malware.exe" }, body: new Uint8Array([1, 2, 3]) }), 415, "invalid mime");
-    const signed = expect(await workspace(`/cases/${caseRow.id}/evidence/${evidenceUpload.id}/url`, { method: "POST" }), 200, "signed URL");
+    const evidenceUpload = expect(await workspace(`/cases/${caseRow.id}/evidence`, { method: "POST", headers: { "content-type": "application/pdf", "x-file-name": "evidencia.pdf", "x-visible-to-reporter": "true" }, body: pdf }, assignedInvestigator), 201, "workspace evidence");
+    expect(await workspace(`/cases/${caseRow.id}/evidence`, { method: "POST", headers: { "content-type": "application/x-msdownload", "x-file-name": "malware.exe" }, body: new Uint8Array([1, 2, 3]) }, assignedInvestigator), 415, "invalid mime");
+    const signed = expect(await workspace(`/cases/${caseRow.id}/evidence/${evidenceUpload.id}/url`, { method: "POST" }, assignedInvestigator), 200, "signed URL");
     if (signed.expires_in !== 120 || (await fetch(signed.url)).status !== 200) throw new Error("signed URL inválida");
     expect(await workspace(`/cases/${caseRow.id}/evidence/${evidenceUpload.id}/url`, { method: "POST" }, adminB, tenantB.id), 404, "cross tenant evidence");
     const publicUpload = expect(await publicApi("/attachments", { method: "POST", headers: { "content-type": "application/pdf", "x-file-name": "complemento.pdf", "x-integrity-protocol": submitted.protocol, "x-integrity-secret": submitted.access_secret }, body: pdf }), 201, "public evidence");
@@ -181,6 +217,7 @@ export async function runIntegrityE2E(): Promise<Evidence> {
     const afterClose = expect(await publicApi("/track", { method: "POST", body: JSON.stringify({ protocol: submitted.protocol, secret: submitted.access_secret }) }), 200, "closed tracking").tracking;
     const closedJson = JSON.stringify(afterClose);
     if (!closedJson.includes("Tratamento concluído") || closedJson.includes("Conclusão interna confidencial") || closedJson.includes("Fundamentação interna")) throw new Error("decisão interna vazou no canal público");
+    expect(await workspace(`/cases/${caseRow.id}/transitions`, { method: "POST", body: JSON.stringify({ to_status: "reopened", reason: "Tentativa sem alçada", lock_version: closed.lock_version }) }, assignedInvestigator), 403, "investigator reopen denied");
     const reopened = expect(await workspace(`/cases/${caseRow.id}/transitions`, { method: "POST", body: JSON.stringify({ to_status: "reopened", reason: "Nova evidência recebida", lock_version: closed.lock_version }) }), 200, "reopen");
     if (reopened.status !== "reopened") throw new Error("reabertura não persistida");
     const timeline = expect(await workspace(`/cases/${caseRow.id}/timeline`), 200, "timeline").events;
@@ -201,7 +238,7 @@ export async function runIntegrityE2E(): Promise<Evidence> {
       if (attempt.status !== 404) throw new Error(`rate limit tentativa ${i + 1}: HTTP ${attempt.status}`);
     }
     if (!limited) throw new Error("rate limit persistente não bloqueou");
-    Object.assign(evidence, { anonymous: true, identified: true, tenantIsolation: true, rbac: true, conflict: true, storagePrivate: true, signedUrls: true, tasks: true, messagesBoundary: true, decision: true, reopen: true, adminAggregateOnly: true, dashboard: true });
+    Object.assign(evidence, { anonymous: true, identified: true, tenantIsolation: true, rbac: true, assignedInvestigator: true, committeeScope: true, compliance: true, protectedIdentity: true, configurationLifecycle: true, routingPreview: true, orphanProtection: true, conflict: true, storagePrivate: true, signedUrls: true, tasks: true, messagesBoundary: true, recommendation: true, decision: true, reopen: true, adminAggregateOnly: true, dashboard: true });
   } catch (error) {
     primaryError = error;
   } finally {

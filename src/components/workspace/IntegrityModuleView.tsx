@@ -16,6 +16,8 @@ import { Button } from "../ui/Button";
 import { Input } from "../ui/Input";
 import { Skeleton } from "../ui/Skeleton";
 import { integrityApi, integrityFileApi, type ApiState } from "./integrityApi";
+import { IntegrityConfigurationStatus } from "./integrity/IntegrityConfigurationStatus";
+import { useIntegrityCasePermissions } from "./integrity/useIntegrityCasePermissions";
 
 type Props = {
   tenant: { id: string; name?: string };
@@ -49,6 +51,7 @@ export function IntegrityModuleView({ tenant, user, onBack }: Props) {
         caseId={caseId}
         canAssign={canAssign}
         canManageEvidence={canManageEvidence}
+        permissions={permissions}
         onBack={() => setCaseId(null)}
       />
     );
@@ -426,14 +429,25 @@ function CaseDetailOperational({
   caseId,
   canAssign,
   canManageEvidence,
+  permissions,
   onBack,
 }: {
   tenantId: string;
   caseId: string;
   canAssign: boolean;
   canManageEvidence: boolean;
+  permissions: string[];
   onBack: () => void;
 }) {
+  const {
+    canInvestigate,
+    canWriteNote,
+    canSendMessage,
+    canClose,
+    canReopen,
+    canRecommend,
+    canReadIdentity,
+  } = useIntegrityCasePermissions(permissions);
   const [state, setState] = useState<ApiState<any>>({
     data: null,
     loading: true,
@@ -453,6 +467,7 @@ function CaseDetailOperational({
   const [publicEvidence, setPublicEvidence] = useState(false);
   const [deletingEvidence, setDeletingEvidence] = useState<string | null>(null);
   const [deletionReason, setDeletionReason] = useState("");
+  const [identity, setIdentity] = useState<any>(undefined);
   const load = useCallback(async () => {
     setState((current) => ({ ...current, loading: true, error: "" }));
     try {
@@ -469,7 +484,7 @@ function CaseDetailOperational({
         integrityApi<any>(tenantId, `/cases/${caseId}/messages`),
         integrityApi<any>(tenantId, `/cases/${caseId}/tasks`),
         integrityApi<any>(tenantId, `/cases/${caseId}/evidence`),
-        canAssign
+        canAssign || canInvestigate
           ? integrityApi<any>(tenantId, "/members")
           : Promise.resolve({ members: [] }),
       ]);
@@ -482,7 +497,7 @@ function CaseDetailOperational({
     } catch (error: any) {
       setState({ data: null, loading: false, error: error.message });
     }
-  }, [tenantId, caseId, canAssign]);
+  }, [tenantId, caseId, canAssign, canInvestigate]);
   useEffect(() => {
     load();
   }, [load]);
@@ -634,6 +649,24 @@ function CaseDetailOperational({
       "Decisão registrada e caso encerrado.",
     );
   }
+  async function recommend(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const form = new FormData(event.currentTarget);
+    await action(
+      () => integrityApi(tenantId, `/cases/${caseId}/recommendation`, {
+        method: "POST",
+        body: JSON.stringify({ recommendation: form.get("recommendation"), justification: form.get("recommendation_justification") }),
+      }),
+      "Recomendação registrada na timeline.",
+    );
+    event.currentTarget.reset();
+  }
+  async function revealIdentity() {
+    await action(async () => {
+      const result = await integrityApi<any>(tenantId, `/cases/${caseId}/identity`);
+      setIdentity(result.identity || null);
+    }, "Identidade protegida consultada com autorização.");
+  }
   if (state.loading)
     return (
       <Panel>
@@ -714,9 +747,18 @@ function CaseDetailOperational({
               <p className="mt-4 whitespace-pre-wrap text-sm leading-7">
                 {report.description}
               </p>
+              {report.reporter_mode === "identified" && canReadIdentity && (
+                <div className="mt-4 rounded-xl border border-blue-100 bg-blue-50 p-3 text-sm">
+                  {identity === undefined ? (
+                    <Button type="button" size="sm" variant="outline" onClick={revealIdentity} disabled={busy}>Consultar identidade protegida</Button>
+                  ) : identity ? (
+                    <dl className="grid gap-2 sm:grid-cols-3"><Meta label="Nome" value={identity.name} /><Meta label="E-mail" value={identity.email || "—"} /><Meta label="Telefone" value={identity.phone || "—"} /></dl>
+                  ) : <p>Identidade não informada.</p>}
+                </div>
+              )}
             </Card>
             <Card title="Tarefas de investigação">
-              <form onSubmit={createTask} className="grid gap-2 sm:grid-cols-2">
+              {canInvestigate && <form onSubmit={createTask} className="grid gap-2 sm:grid-cols-2">
                 <Input
                   name="title"
                   required
@@ -746,7 +788,7 @@ function CaseDetailOperational({
                 <Button type="submit" disabled={busy}>
                   Criar tarefa
                 </Button>
-              </form>
+              </form>}
               <div className="mt-4 space-y-2">
                 {tasks.length === 0 ? (
                   <p className="rounded-xl border border-dashed p-4 text-center text-sm text-gray-500">
@@ -775,7 +817,7 @@ function CaseDetailOperational({
                           · {task.priority}
                         </div>
                       </div>
-                      {task.status === "done" ? (
+                      {canInvestigate && (task.status === "done" ? (
                         <Button
                           size="sm"
                           variant="outline"
@@ -790,7 +832,7 @@ function CaseDetailOperational({
                         >
                           Concluir
                         </Button>
-                      )}
+                      ))}
                     </div>
                   ))
                 )}
@@ -913,7 +955,7 @@ function CaseDetailOperational({
                   </div>
                 ))}
               </div>
-              <form onSubmit={sendMessage} className="mt-4 space-y-2">
+              {(canWriteNote || canSendMessage) && <form onSubmit={sendMessage} className="mt-4 space-y-2">
                 <textarea
                   required
                   minLength={2}
@@ -928,16 +970,26 @@ function CaseDetailOperational({
                     type="checkbox"
                     checked={publicMessage}
                     onChange={(event) => setPublicMessage(event.target.checked)}
+                    disabled={!canSendMessage}
                   />
                   Enviar ao denunciante
                 </label>
-                <Button type="submit" disabled={busy}>
+                <Button type="submit" disabled={busy || (publicMessage ? !canSendMessage : !canWriteNote)}>
                   <MessageSquare className="mr-2 h-4 w-4" />
                   Registrar
                 </Button>
-              </form>
+              </form>}
             </Card>
-            {item.status === "decision" && (
+            {canRecommend && ["investigation", "decision"].includes(item.status) && (
+              <Card title="Recomendação">
+                <form onSubmit={recommend} className="space-y-3">
+                  <textarea name="recommendation" required minLength={10} rows={3} className="w-full rounded-xl border p-3" placeholder="Recomendação ao decisor" />
+                  <textarea name="recommendation_justification" required minLength={10} rows={3} className="w-full rounded-xl border p-3" placeholder="Fundamentação interna" />
+                  <Button type="submit" disabled={busy}>Registrar recomendação</Button>
+                </form>
+              </Card>
+            )}
+            {item.status === "decision" && canClose && (
               <Card title="Decisão e encerramento">
                 <form onSubmit={decide} className="space-y-3">
                   <Input
@@ -1036,13 +1088,13 @@ function CaseDetailOperational({
                   </Button>
                 </form>
               )}
-              <div className="mt-4 grid gap-2">
+              {(item.status === "closed" ? canReopen : canInvestigate) && <div className="mt-4 grid gap-2">
                 <TransitionButtons
                   status={item.status}
                   disabled={busy}
                   onTransition={transition}
                 />
-              </div>
+              </div>}
             </Card>
             <Card title="Timeline">
               <div className="max-h-[600px] space-y-4 overflow-auto">
@@ -1411,13 +1463,17 @@ function SettingsPanel({ tenantId }: { tenantId: string }) {
   });
   const [saved, setSaved] = useState("");
   const [busy, setBusy] = useState(false);
-  useEffect(() => {
-    integrityApi<any>(tenantId, "/settings")
-      .then((data) => setState({ data, loading: false, error: "" }))
-      .catch((error) =>
-        setState({ data: null, loading: false, error: error.message }),
-      );
+  const loadSettings = useCallback(async () => {
+    try {
+      const data = await integrityApi<any>(tenantId, "/settings");
+      setState({ data, loading: false, error: "" });
+    } catch (error: any) {
+      setState({ data: null, loading: false, error: error.message });
+    }
   }, [tenantId]);
+  useEffect(() => {
+    loadSettings();
+  }, [loadSettings]);
   if (state.loading)
     return (
       <Panel>
@@ -1441,6 +1497,10 @@ function SettingsPanel({ tenantId }: { tenantId: string }) {
     automatic_acknowledgement: "Seu relato foi recebido e será analisado.",
     branding: {},
     attachment_policy: { enabled: false, max_files: 3, max_size_mb: 5 },
+    communication_policy: {
+      allow_reporter_messages: true,
+      allow_case_messages: true,
+    },
     routing_rules: [],
   };
   async function submit(event: React.FormEvent<HTMLFormElement>) {
@@ -1466,6 +1526,11 @@ function SettingsPanel({ tenantId }: { tenantId: string }) {
             max_files: Number(form.get("max_files") || 3),
             max_size_mb: Number(form.get("max_size_mb") || 5),
           },
+          communication_policy: {
+            allow_reporter_messages:
+              form.get("allow_reporter_messages") === "on",
+            allow_case_messages: form.get("allow_case_messages") === "on",
+          },
           default_assignee_membership_id:
             settings.default_assignee_membership_id || null,
           default_committee_id: settings.default_committee_id || null,
@@ -1486,6 +1551,7 @@ function SettingsPanel({ tenantId }: { tenantId: string }) {
   }
   return (
     <Panel>
+      <IntegrityConfigurationStatus status={state.data.configuration_status} />
       <div className="mb-6">
         <h2 className="text-2xl font-bold">Configurações do canal</h2>
         <p className="mt-1 text-sm text-[#626866]">
@@ -1590,6 +1656,31 @@ function SettingsPanel({ tenantId }: { tenantId: string }) {
             </label>
           </div>
         </div>
+        <fieldset className="rounded-xl border border-[#DDD8CF] p-4">
+          <legend className="px-1 text-sm font-bold">Comunicação permitida</legend>
+          <div className="mt-2 grid gap-3 sm:grid-cols-2">
+            <label className="flex items-center gap-3 text-sm">
+              <input
+                name="allow_reporter_messages"
+                type="checkbox"
+                defaultChecked={
+                  settings.communication_policy?.allow_reporter_messages !== false
+                }
+              />
+              Denunciante pode complementar o relato
+            </label>
+            <label className="flex items-center gap-3 text-sm">
+              <input
+                name="allow_case_messages"
+                type="checkbox"
+                defaultChecked={
+                  settings.communication_policy?.allow_case_messages !== false
+                }
+              />
+              Comitê pode responder ao denunciante
+            </label>
+          </div>
+        </fieldset>
         <label className="block text-sm font-bold">
           Mensagem automática
           <textarea
@@ -1641,9 +1732,22 @@ function SettingsPanel({ tenantId }: { tenantId: string }) {
       <CommitteeRouting
         tenantId={tenantId}
         data={state.data}
+        onReload={loadSettings}
         onCreated={(key, item) =>
           setState({
             data: { ...state.data, [key]: [...state.data[key], item] },
+            loading: false,
+            error: "",
+          })
+        }
+        onUpdated={(key, item) =>
+          setState({
+            data: {
+              ...state.data,
+              [key]: state.data[key].map((current: any) =>
+                current.id === item.id ? item : current,
+              ),
+            },
             loading: false,
             error: "",
           })
@@ -1657,12 +1761,22 @@ function CommitteeRouting({
   tenantId,
   data,
   onCreated,
+  onUpdated,
+  onReload,
 }: {
   tenantId: string;
   data: any;
   onCreated: (key: string, item: any) => void;
+  onUpdated: (key: string, item: any) => void;
+  onReload: () => Promise<void>;
 }) {
   const [feedback, setFeedback] = useState("");
+  const memberName = (id: string) =>
+    data.members.find((member: any) => member.id === id)?.name || "Membro indisponível";
+  const committeeMembers = (committeeId: string) =>
+    data.committee_members
+      .filter((member: any) => member.committee_id === committeeId && member.active)
+      .map((member: any) => member.membership_id);
   async function createCommittee(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const formElement = event.currentTarget;
@@ -1682,17 +1796,66 @@ function CommitteeRouting({
         },
       );
       onCreated("committees", response.committee);
+      await onReload();
       formElement.reset();
       setFeedback("Comitê criado.");
     } catch (error: any) {
       setFeedback(error.message);
     }
   }
+  async function updateCommittee(
+    item: any,
+    status: "active" | "inactive" | "archived",
+    values?: { name: string; member_ids: string[] },
+  ) {
+    setFeedback("");
+    try {
+      const response = await integrityApi<any>(
+        tenantId,
+        `/settings/committees/${item.id}`,
+        {
+          method: "PATCH",
+          body: JSON.stringify({
+            name: values?.name || item.name,
+            description: item.description || null,
+            member_ids: values?.member_ids || committeeMembers(item.id),
+            active: status === "active",
+            status,
+          }),
+        },
+      );
+      onUpdated("committees", response.committee);
+      await onReload();
+      setFeedback(`Comitê ${status === "active" ? "ativado" : status === "inactive" ? "desativado" : "arquivado"}.`);
+    } catch (error: any) {
+      setFeedback(error.message);
+    }
+  }
+  async function editCommittee(event: React.FormEvent<HTMLFormElement>, item: any) {
+    event.preventDefault();
+    const form = new FormData(event.currentTarget);
+    await updateCommittee(item, item.status || (item.active ? "active" : "inactive"), {
+      name: String(form.get("committee_name") || "").trim(),
+      member_ids: form.getAll("committee_members").map(String),
+    });
+  }
   async function createRule(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const formElement = event.currentTarget;
     const form = new FormData(formElement);
     try {
+      const scenario = {
+        category_id: form.get("category") || null,
+        unit_id: form.get("unit") || null,
+      };
+      const preview = await integrityApi<any>(tenantId, "/settings/routing/preview", {
+        method: "POST",
+        body: JSON.stringify(scenario),
+      });
+      if (!preview.deterministic) {
+        setFeedback("O cenário possui regras empatadas. Ajuste a prioridade antes de salvar.");
+        return;
+      }
       const response = await integrityApi<any>(tenantId, "/settings/routing", {
         method: "POST",
         body: JSON.stringify({
@@ -1701,13 +1864,39 @@ function CommitteeRouting({
           unit_id: form.get("unit") || null,
           assignee_membership_id: form.get("assignee") || null,
           committee_id: form.get("committee") || null,
-          priority: 100,
+          priority: Number(form.get("priority") || 100),
           active: true,
+          is_fallback: form.get("is_fallback") === "on",
         }),
       });
       onCreated("routing_rules", response.routing_rule);
+      await onReload();
       formElement.reset();
       setFeedback("Regra criada.");
+    } catch (error: any) {
+      setFeedback(error.message);
+    }
+  }
+  async function updateRule(item: any, status: "active" | "inactive" | "archived") {
+    setFeedback("");
+    try {
+      const response = await integrityApi<any>(tenantId, `/settings/routing/${item.id}`, {
+        method: "PATCH",
+        body: JSON.stringify({
+          name: item.name,
+          category_id: item.category_id,
+          unit_id: item.unit_id,
+          assignee_membership_id: item.assignee_membership_id,
+          committee_id: item.committee_id,
+          priority: item.priority,
+          active: status === "active",
+          is_fallback: item.is_fallback,
+          status,
+        }),
+      });
+      onUpdated("routing_rules", response.routing_rule);
+      await onReload();
+      setFeedback(`Regra ${status === "active" ? "ativada" : status === "inactive" ? "desativada" : "arquivada"}.`);
     } catch (error: any) {
       setFeedback(error.message);
     }
@@ -1724,9 +1913,43 @@ function CommitteeRouting({
             data.committees.map((item: any) => (
               <div
                 key={item.id}
-                className="rounded-lg bg-[#F6F5F2] p-3 text-sm font-medium"
+                className="rounded-lg bg-[#F6F5F2] p-3 text-sm"
               >
-                {item.name}
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <strong>{item.name}</strong>
+                  <span className="rounded-full bg-white px-2 py-1 text-[11px] font-bold">{item.status || (item.active ? "active" : "inactive")}</span>
+                </div>
+                <p className="mt-1 text-xs text-[#626866]">
+                  {committeeMembers(item.id).map(memberName).join(", ") || "Sem membros ativos"}
+                </p>
+                <form onSubmit={(event) => editCommittee(event, item)} className="mt-3 grid gap-2">
+                  <Input name="committee_name" required minLength={2} defaultValue={item.name} aria-label="Nome do comitê" />
+                  <label className="text-xs font-bold">
+                    Membros ativos
+                    <select
+                      name="committee_members"
+                      multiple
+                      defaultValue={committeeMembers(item.id)}
+                      className="mt-1 h-20 w-full rounded-xl border bg-white p-2 text-sm font-normal"
+                    >
+                      {data.members.map((member: any) => (
+                        <option key={member.id} value={member.id}>{member.name}</option>
+                      ))}
+                    </select>
+                  </label>
+                  <Button type="submit" variant="outline">Salvar comitê</Button>
+                </form>
+                <div className="mt-2 flex flex-wrap gap-2">
+                  {(item.status || (item.active ? "active" : "inactive")) !== "active" && (
+                    <Button type="button" variant="outline" onClick={() => updateCommittee(item, "active")}>Ativar</Button>
+                  )}
+                  {(item.status || (item.active ? "active" : "inactive")) === "active" && (
+                    <Button type="button" variant="outline" onClick={() => updateCommittee(item, "inactive")}>Desativar</Button>
+                  )}
+                  {(item.status || "active") !== "archived" && (
+                    <Button type="button" variant="outline" onClick={() => updateCommittee(item, "archived")}>Arquivar</Button>
+                  )}
+                </div>
               </div>
             ))
           ) : (
@@ -1751,7 +1974,7 @@ function CommitteeRouting({
             >
               {data.members.map((member: any) => (
                 <option key={member.id} value={member.id}>
-                  {member.id.slice(0, 8)}
+                  {member.name}
                 </option>
               ))}
             </select>
@@ -1773,7 +1996,24 @@ function CommitteeRouting({
                 key={item.id}
                 className="rounded-lg bg-[#F6F5F2] p-3 text-sm font-medium"
               >
-                {item.name}
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <strong>{item.name}</strong>
+                  <span className="rounded-full bg-white px-2 py-1 text-[11px] font-bold">{item.status || (item.active ? "active" : "inactive")}</span>
+                </div>
+                <p className="mt-1 text-xs text-[#626866]">
+                  Prioridade {item.priority}{item.is_fallback ? " · fallback" : ""}
+                </p>
+                <div className="mt-2 flex flex-wrap gap-2">
+                  {(item.status || (item.active ? "active" : "inactive")) !== "active" && (
+                    <Button type="button" variant="outline" onClick={() => updateRule(item, "active")}>Ativar</Button>
+                  )}
+                  {(item.status || (item.active ? "active" : "inactive")) === "active" && (
+                    <Button type="button" variant="outline" onClick={() => updateRule(item, "inactive")}>Desativar</Button>
+                  )}
+                  {(item.status || "active") !== "archived" && (
+                    <Button type="button" variant="outline" onClick={() => updateRule(item, "archived")}>Arquivar</Button>
+                  )}
+                </div>
               </div>
             ))
           ) : (
@@ -1809,7 +2049,7 @@ function CommitteeRouting({
             <option value="">Sem responsável direto</option>
             {data.members.map((item: any) => (
               <option key={item.id} value={item.id}>
-                {item.id.slice(0, 8)}
+                {item.name}
               </option>
             ))}
           </select>
@@ -1821,8 +2061,12 @@ function CommitteeRouting({
               </option>
             ))}
           </select>
+          <Input name="priority" type="number" min={0} max={10000} defaultValue={100} aria-label="Prioridade da regra" />
+          <label className="flex items-center gap-2 rounded-xl border p-2 text-sm">
+            <input name="is_fallback" type="checkbox" /> Regra fallback
+          </label>
           <Button type="submit" variant="integrity">
-            Criar regra
+            Testar e criar regra
           </Button>
         </form>
       </div>

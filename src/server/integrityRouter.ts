@@ -55,6 +55,10 @@ const settingsSchema = z.object({
   automatic_acknowledgement: z.string().trim().min(5).max(2000),
   branding: z.record(z.string(), z.unknown()).default({}),
   attachment_policy: z.record(z.string(), z.unknown()).default({}),
+  communication_policy: z.record(z.string(), z.unknown()).default({
+    allow_reporter_messages: true,
+    allow_case_messages: true,
+  }),
   routing_rules: z.array(z.unknown()).default([]),
   treatment_sla_hours: z.number().int().min(1).max(17520).default(720),
   default_assignee_membership_id: z.string().uuid().nullable().optional(),
@@ -115,11 +119,18 @@ const decisionSchema = z.object({
   reporter_outcome: z.string().trim().max(3000).nullable().optional(),
   lock_version: z.number().int().positive(),
 });
+const recommendationSchema = z.object({
+  recommendation: z.string().trim().min(10).max(10000),
+  justification: z.string().trim().min(10).max(5000),
+});
 const committeeSchema = z.object({
   name: z.string().trim().min(2).max(120),
   description: z.string().trim().max(1000).nullable().optional(),
   member_ids: z.array(z.string().uuid()).max(50).default([]),
   active: z.boolean().default(true),
+});
+const committeeUpdateSchema = committeeSchema.extend({
+  status: z.enum(["active", "inactive", "archived"]),
 });
 const routingSchema = z
   .object({
@@ -130,10 +141,21 @@ const routingSchema = z
     committee_id: z.string().uuid().nullable().optional(),
     priority: z.number().int().min(0).max(10000).default(100),
     active: z.boolean().default(true),
+    is_fallback: z.boolean().default(false),
   })
   .refine((value) => value.assignee_membership_id || value.committee_id, {
     message: "Defina um responsável ou comitê.",
+  })
+  .refine((value) => !value.is_fallback || (!value.category_id && !value.unit_id), {
+    message: "A regra fallback não pode restringir categoria ou unidade.",
   });
+const routingUpdateSchema = routingSchema.extend({
+  status: z.enum(["active", "inactive", "archived"]),
+});
+const routingPreviewSchema = z.object({
+  category_id: z.string().uuid().nullable().optional(),
+  unit_id: z.string().uuid().nullable().optional(),
+});
 
 export function createIntegrityRouter(
   getSupabaseAdmin: () => any,
@@ -168,6 +190,32 @@ export function createIntegrityRouter(
     (req as any).tenantContext.tenant.id as string;
   const membershipId = (req: express.Request) =>
     (req as any).tenantContext.membership.id as string;
+  const permissions = (req: express.Request) =>
+    ((req as any).tenantContext.permissions || []) as string[];
+  const hasPermission = (req: express.Request, permission: string) =>
+    permissions(req).includes(permission);
+
+  async function scopedCommitteeIds(db: any, req: express.Request) {
+    const result = await db
+      .from("integrity_committee_members")
+      .select("committee_id,integrity_committees!inner(tenant_id,status)")
+      .eq("membership_id", membershipId(req))
+      .eq("active", true)
+      .eq("integrity_committees.tenant_id", tenantId(req))
+      .eq("integrity_committees.status", "active");
+    if (result.error) throw result.error;
+    return (result.data || []).map((item: any) => item.committee_id);
+  }
+
+  async function scopeCaseQuery(query: any, db: any, req: express.Request) {
+    if (hasPermission(req, "integrity.cases.read")) return query;
+    if (!hasPermission(req, "integrity.cases.read_assigned"))
+      return query.eq("id", "00000000-0000-0000-0000-000000000000");
+    const committees = await scopedCommitteeIds(db, req);
+    const filters = [`owner_membership_id.eq.${membershipId(req)}`];
+    if (committees.length) filters.push(`committee_id.in.(${committees.join(",")})`);
+    return query.or(filters.join(","));
+  }
 
   async function findCase(
     db: any,
@@ -175,41 +223,44 @@ export function createIntegrityRouter(
     id: string,
     select = "id,tenant_id,report_id,status,lock_version,owner_membership_id,first_action_at",
   ) {
-    return db
+    let query = db
       .from("integrity_cases")
       .select(select)
       .eq("id", id)
-      .eq("tenant_id", tenantId(req))
-      .maybeSingle();
+      .eq("tenant_id", tenantId(req));
+    query = await scopeCaseQuery(query, db, req);
+    return query.maybeSingle();
   }
 
   router.get(
     "/dashboard",
-    requireAny("integrity.analytics.read", "integrity.cases.read"),
+    requireAny("integrity.analytics.read", "integrity.cases.read", "integrity.cases.read_assigned"),
     asyncHandler(async (req, res) => {
       const db = getSupabaseAdmin();
-      const [{ data: cases, error }, overdueTasks] = await Promise.all([
-        db
+      let caseQuery = db
           .from("integrity_cases")
           .select(
-            "status,severity,sla_due_at,first_response_due_at,treatment_due_at,first_action_at,closed_at,created_at,category_id,unit_id",
+            "id,status,severity,sla_due_at,first_response_due_at,treatment_due_at,first_action_at,closed_at,created_at,category_id,unit_id",
           )
-          .eq("tenant_id", tenantId(req)),
-        db
+          .eq("tenant_id", tenantId(req));
+      caseQuery = await scopeCaseQuery(caseQuery, db, req);
+      const caseResult = await caseQuery;
+      const accessibleIds = (caseResult.data || []).map((item: any) => item.id).filter(Boolean);
+      let taskQuery = db
           .from("integrity_case_tasks")
-          .select("id,integrity_cases!inner(tenant_id)", {
+          .select("id", {
             count: "exact",
             head: true,
           })
-          .eq("integrity_cases.tenant_id", tenantId(req))
           .in("status", ["open", "in_progress"])
-          .lt("due_at", new Date().toISOString()),
-      ]);
-      if (error || overdueTasks.error)
+          .lt("due_at", new Date().toISOString());
+      taskQuery = accessibleIds.length ? taskQuery.in("case_id", accessibleIds) : taskQuery.eq("case_id", "00000000-0000-0000-0000-000000000000");
+      const overdueTasks = await taskQuery;
+      if (caseResult.error || overdueTasks.error)
         return res
           .status(500)
           .json({ error: "Não foi possível carregar os indicadores." });
-      const rows = cases || [];
+      const rows = caseResult.data || [];
       return res.json({
         ...integrityDashboard(rows),
         tasks_overdue: overdueTasks.count || 0,
@@ -220,7 +271,7 @@ export function createIntegrityRouter(
 
   router.get(
     "/members",
-    requireAny("integrity.cases.assign", "integrity.cases.manage"),
+    requireAny("integrity.cases.assign", "integrity.cases.manage", "integrity.cases.investigate"),
     asyncHandler(async (req, res) => {
       const db = getSupabaseAdmin();
       const memberships = await db
@@ -258,7 +309,7 @@ export function createIntegrityRouter(
 
   router.get(
     "/cases",
-    requireAny("integrity.cases.read"),
+    requireAny("integrity.cases.read", "integrity.cases.read_assigned"),
     asyncHandler(async (req, res) => {
       const parsed = listSchema.safeParse(req.query);
       if (!parsed.success)
@@ -275,6 +326,7 @@ export function createIntegrityRouter(
           { count: "exact" },
         )
         .eq("tenant_id", tenantId(req));
+      query = await scopeCaseQuery(query, db, req);
       if (q.search)
         query = query.ilike("protocol", `%${q.search.replace(/[%_,]/g, "")}%`);
       if (q.status) query = query.eq("status", q.status);
@@ -315,7 +367,7 @@ export function createIntegrityRouter(
 
   router.get(
     "/cases/:id",
-    requireAny("integrity.cases.read"),
+    requireAny("integrity.cases.read", "integrity.cases.read_assigned"),
     asyncHandler(async (req, res) => {
       const db = getSupabaseAdmin();
       const result = await findCase(
@@ -336,7 +388,7 @@ export function createIntegrityRouter(
 
   router.get(
     "/cases/:id/timeline",
-    requireAny("integrity.cases.read"),
+    requireAny("integrity.cases.read", "integrity.cases.read_assigned"),
     asyncHandler(async (req, res) => {
       const db = getSupabaseAdmin();
       const found = await findCase(db, req, req.params.id);
@@ -358,7 +410,7 @@ export function createIntegrityRouter(
 
   router.post(
     "/cases/:id/transitions",
-    requireAny("integrity.cases.manage"),
+    requireAny("integrity.cases.manage", "integrity.cases.investigate", "integrity.cases.reopen"),
     asyncHandler(async (req, res) => {
       const parsed = transitionSchema.safeParse(req.body);
       if (!parsed.success)
@@ -370,6 +422,10 @@ export function createIntegrityRouter(
       if (found.error || !found.data)
         return res.status(404).json({ error: "Caso não encontrado." });
       const { to_status, reason, lock_version } = parsed.data;
+      const allowed = to_status === "reopened"
+        ? hasPermission(req, "integrity.cases.reopen") || hasPermission(req, "integrity.cases.manage")
+        : hasPermission(req, "integrity.cases.investigate") || hasPermission(req, "integrity.cases.manage");
+      if (!allowed) return res.status(403).json({ error: "Você não possui permissão para esta transição." });
       if (!canTransitionIntegrityCase(found.data.status, to_status))
         return res.status(409).json({
           error: `Transição ${found.data.status} → ${to_status} não permitida.`,
@@ -548,7 +604,7 @@ export function createIntegrityRouter(
 
   router.get(
     "/cases/:id/messages",
-    requireAny("integrity.cases.read"),
+    requireAny("integrity.cases.read", "integrity.cases.read_assigned"),
     asyncHandler(async (req, res) => {
       const db = getSupabaseAdmin();
       const found = await findCase(db, req, req.params.id);
@@ -571,17 +627,35 @@ export function createIntegrityRouter(
 
   router.post(
     "/cases/:id/messages",
-    requireAny("integrity.messages.send", "integrity.cases.manage"),
+    requireAny("integrity.messages.send", "integrity.notes.create", "integrity.cases.manage"),
     asyncHandler(async (req, res) => {
       const parsed = messageSchema.safeParse(req.body);
       if (!parsed.success)
         return res
           .status(400)
           .json({ error: "Mensagem inválida.", issues: parsed.error.issues });
+      const messagePermission = parsed.data.visible_to_reporter ? "integrity.messages.send" : "integrity.notes.create";
+      if (!hasPermission(req, messagePermission) && !hasPermission(req, "integrity.cases.manage"))
+        return res.status(403).json({ error: "Você não possui permissão para este tipo de comunicação." });
       const db = getSupabaseAdmin();
       const found = await findCase(db, req, req.params.id);
       if (!found.data)
         return res.status(404).json({ error: "Caso não encontrado." });
+      if (parsed.data.visible_to_reporter) {
+        const settings = await db
+          .from("integrity_settings")
+          .select("communication_policy")
+          .eq("tenant_id", tenantId(req))
+          .maybeSingle();
+        if (settings.error)
+          return res.status(500).json({
+            error: "Não foi possível validar a política de comunicação.",
+          });
+        if (settings.data?.communication_policy?.allow_case_messages === false)
+          return res.status(403).json({
+            error: "Mensagens ao denunciante estão desativadas neste canal.",
+          });
+      }
       const saved = await db
         .from("integrity_report_messages")
         .insert({
@@ -619,7 +693,7 @@ export function createIntegrityRouter(
 
   router.get(
     "/cases/:id/evidence",
-    requireAny("integrity.cases.read"),
+    requireAny("integrity.cases.read", "integrity.cases.read_assigned"),
     asyncHandler(async (req, res) => {
       const db = getSupabaseAdmin();
       const found = await findCase(db, req, req.params.id);
@@ -730,7 +804,7 @@ export function createIntegrityRouter(
 
   router.post(
     "/cases/:id/evidence/:evidenceId/url",
-    requireAny("integrity.cases.read"),
+    requireAny("integrity.cases.read", "integrity.cases.read_assigned"),
     asyncHandler(async (req, res) => {
       const db = getSupabaseAdmin();
       const found = await findCase(db, req, req.params.id);
@@ -822,7 +896,7 @@ export function createIntegrityRouter(
 
   router.get(
     "/cases/:id/tasks",
-    requireAny("integrity.cases.read"),
+    requireAny("integrity.cases.read", "integrity.cases.read_assigned"),
     asyncHandler(async (req, res) => {
       const db = getSupabaseAdmin();
       const found = await findCase(db, req, req.params.id);
@@ -852,7 +926,7 @@ export function createIntegrityRouter(
 
   router.post(
     "/cases/:id/tasks",
-    requireAny("integrity.cases.manage"),
+    requireAny("integrity.cases.manage", "integrity.cases.investigate"),
     asyncHandler(async (req, res) => {
       const parsed = taskSchema.safeParse(req.body);
       if (!parsed.success)
@@ -908,7 +982,7 @@ export function createIntegrityRouter(
 
   router.patch(
     "/cases/:id/tasks/:taskId",
-    requireAny("integrity.cases.manage"),
+    requireAny("integrity.cases.manage", "integrity.cases.investigate"),
     asyncHandler(async (req, res) => {
       const parsed = taskStatusSchema.safeParse(req.body);
       if (!parsed.success)
@@ -972,7 +1046,7 @@ export function createIntegrityRouter(
 
   router.post(
     "/cases/:id/decision",
-    requireAny("integrity.cases.manage"),
+    requireAny("integrity.cases.close", "integrity.cases.manage"),
     asyncHandler(async (req, res) => {
       const parsed = decisionSchema.safeParse(req.body);
       if (!parsed.success)
@@ -980,6 +1054,8 @@ export function createIntegrityRouter(
           .status(400)
           .json({ error: "Preencha todos os campos internos da decisão." });
       const db = getSupabaseAdmin();
+      const found = await findCase(db, req, req.params.id);
+      if (!found.data) return res.status(404).json({ error: "Caso não encontrado." });
       const saved = await db.rpc("decide_and_close_integrity_case", {
         p_case_id: req.params.id,
         p_tenant_id: tenantId(req),
@@ -1001,6 +1077,44 @@ export function createIntegrityRouter(
       }
       const result = Array.isArray(saved.data) ? saved.data[0] : saved.data;
       return res.json(result);
+    }),
+  );
+
+  router.post(
+    "/cases/:id/recommendation",
+    requireAny("integrity.cases.recommend", "integrity.cases.manage"),
+    asyncHandler(async (req, res) => {
+      const parsed = recommendationSchema.safeParse(req.body);
+      if (!parsed.success) return res.status(400).json({ error: "Informe recomendação e fundamentação." });
+      const db = getSupabaseAdmin();
+      const found = await findCase(db, req, req.params.id);
+      if (!found.data) return res.status(404).json({ error: "Caso não encontrado." });
+      const saved = await db.from("integrity_case_events").insert({
+        report_id: found.data.report_id,
+        case_id: req.params.id,
+        event_type: "decision_recommended",
+        actor_membership_id: membershipId(req),
+        note: parsed.data.recommendation,
+        metadata: { justification: parsed.data.justification },
+      }).select("id,created_at").single();
+      if (saved.error) return res.status(500).json({ error: "Não foi possível registrar a recomendação." });
+      return res.status(201).json({ recommendation: saved.data });
+    }),
+  );
+
+  router.get(
+    "/cases/:id/identity",
+    requireAny("integrity.identity.read"),
+    asyncHandler(async (req, res) => {
+      const db = getSupabaseAdmin();
+      const found = await findCase(db, req, req.params.id);
+      if (!found.data) return res.status(404).json({ error: "Caso não encontrado." });
+      const identity = await db.from("integrity_report_identities")
+        .select("name,email,phone,consented_at")
+        .eq("report_id", found.data.report_id)
+        .maybeSingle();
+      if (identity.error) return res.status(500).json({ error: "Não foi possível consultar a identidade protegida." });
+      return res.json({ identity: identity.data });
     }),
   );
 
@@ -1075,15 +1189,37 @@ export function createIntegrityRouter(
         return res
           .status(500)
           .json({ error: "Não foi possível carregar as configurações." });
+      const userIds = (members.data || []).map((item: any) => item.user_id);
+      const profiles = userIds.length
+        ? await db.from("profiles").select("id,full_name").in("id", userIds)
+        : { data: [], error: null };
+      if (profiles.error) return res.status(500).json({ error: "Não foi possível carregar os nomes dos responsáveis." });
+      const profileNames = new Map((profiles.data || []).map((profile: any) => [profile.id, profile.full_name]));
+      const namedMembers = (members.data || []).map((member: any) => ({ ...member, name: profileNames.get(member.user_id) || "Membro do tenant" }));
+      const checks = [
+        { key: "texts", label: "Textos e instruções", complete: Boolean(settings.data?.configured_at && settings.data?.introduction) },
+        { key: "channel", label: "Canal ativo", complete: (channels.data || []).some((item: any) => item.active) },
+        { key: "mode", label: "Modo de identificação", complete: Boolean(settings.data?.allows_anonymous || settings.data?.allows_identified) },
+        { key: "categories", label: "Categorias ativas", complete: (categories.data || []).some((item: any) => item.active) },
+        { key: "committee", label: "Comitê ativo com membros", complete: (committees.data || []).some((item: any) => item.status === "active" && (committeeMembers.data || []).some((member: any) => member.committee_id === item.id && member.active)) },
+        { key: "routing", label: "Roteamento ou fallback ativo", complete: (routingRules.data || []).some((item: any) => item.status === "active" && item.active) || Boolean(settings.data?.default_assignee_membership_id || settings.data?.default_committee_id) },
+        { key: "sla", label: "SLAs definidos", complete: Boolean(settings.data?.default_sla_hours && settings.data?.treatment_sla_hours) },
+      ];
       return res.json({
         settings: settings.data,
         channels: channels.data || [],
         categories: categories.data || [],
         units: units.data || [],
-        members: members.data || [],
+        members: namedMembers,
         committees: committees.data || [],
         committee_members: committeeMembers.data || [],
         routing_rules: routingRules.data || [],
+        configuration_status: {
+          operational: checks.every((item) => item.complete),
+          completed: checks.filter((item) => item.complete).length,
+          total: checks.length,
+          items: checks,
+        },
       });
     }),
   );
@@ -1331,6 +1467,14 @@ export function createIntegrityRouter(
         return res.status(400).json({ error: "Regra de roteamento inválida." });
       const db = getSupabaseAdmin();
       const value = parsed.data;
+      let conflictQuery = db.from("integrity_routing_rules").select("id,name")
+        .eq("tenant_id", tenantId(req)).eq("status", "active").eq("priority", value.priority)
+        .eq("is_fallback", value.is_fallback);
+      conflictQuery = value.category_id ? conflictQuery.eq("category_id", value.category_id) : conflictQuery.is("category_id", null);
+      conflictQuery = value.unit_id ? conflictQuery.eq("unit_id", value.unit_id) : conflictQuery.is("unit_id", null);
+      const conflicting = await conflictQuery.limit(1);
+      if (conflicting.error) return res.status(500).json({ error: "Não foi possível validar conflitos de roteamento." });
+      if (conflicting.data?.length) return res.status(409).json({ error: `Conflito com a regra ${conflicting.data[0].name}. Ajuste escopo ou prioridade.` });
       if (value.assignee_membership_id) {
         const member = await db
           .from("memberships")
@@ -1355,7 +1499,7 @@ export function createIntegrityRouter(
       }
       const rule = await db
         .from("integrity_routing_rules")
-        .insert({ tenant_id: tenantId(req), ...value })
+        .insert({ tenant_id: tenantId(req), ...value, status: value.active ? "active" : "inactive" })
         .select("*")
         .single();
       if (rule.error)
@@ -1363,6 +1507,108 @@ export function createIntegrityRouter(
           .status(500)
           .json({ error: "Não foi possível criar a regra." });
       return res.status(201).json({ routing_rule: rule.data });
+    }),
+  );
+
+  router.patch(
+    "/settings/committees/:id",
+    requireAny("integrity.settings.manage"),
+    asyncHandler(async (req, res) => {
+      const parsed = committeeUpdateSchema.safeParse(req.body);
+      if (!parsed.success) return res.status(400).json({ error: "Comitê inválido." });
+      const db = getSupabaseAdmin();
+      const current = await db.from("integrity_committees").select("id,status")
+        .eq("id", req.params.id).eq("tenant_id", tenantId(req)).maybeSingle();
+      if (!current.data) return res.status(404).json({ error: "Comitê não encontrado." });
+      if (parsed.data.member_ids.length) {
+        const members = await db.from("memberships").select("id").eq("tenant_id", tenantId(req))
+          .eq("status", "active").in("id", parsed.data.member_ids);
+        if (members.error || members.data?.length !== parsed.data.member_ids.length)
+          return res.status(400).json({ error: "Todos os membros devem estar ativos neste tenant." });
+      }
+      if (parsed.data.status !== "active") {
+        const activeCases = await db.from("integrity_cases").select("id", { count: "exact", head: true })
+          .eq("tenant_id", tenantId(req)).eq("committee_id", req.params.id)
+          .not("status", "in", "(closed,archived)");
+        if (activeCases.error) return res.status(500).json({ error: "Não foi possível validar casos do comitê." });
+        if (activeCases.count) return res.status(409).json({ error: `Este comitê possui ${activeCases.count} caso(s) ativo(s). Reatribua antes de desativar.` });
+      }
+      const saved = await db.from("integrity_committees").update({
+        name: parsed.data.name,
+        description: parsed.data.description || null,
+        status: parsed.data.status,
+        active: parsed.data.status === "active",
+        archived_at: parsed.data.status === "archived" ? new Date().toISOString() : null,
+        archived_by_membership_id: parsed.data.status === "archived" ? membershipId(req) : null,
+        updated_at: new Date().toISOString(),
+      }).eq("id", req.params.id).eq("tenant_id", tenantId(req)).select("*").single();
+      if (saved.error) return res.status(saved.error.code === "23505" ? 409 : 500).json({ error: "Não foi possível atualizar o comitê." });
+      const disabled = await db.from("integrity_committee_members").update({ active: false }).eq("committee_id", req.params.id);
+      if (disabled.error) return res.status(500).json({ error: "Comitê atualizado, mas os membros não foram sincronizados." });
+      if (parsed.data.member_ids.length) {
+        const linked = await db.from("integrity_committee_members").upsert(parsed.data.member_ids.map((id, index) => ({
+          committee_id: req.params.id, membership_id: id, role: index === 0 ? "chair" : "member", active: true,
+        })), { onConflict: "committee_id,membership_id" });
+        if (linked.error) return res.status(500).json({ error: "Comitê atualizado, mas os membros não foram sincronizados." });
+      }
+      return res.json({ committee: saved.data });
+    }),
+  );
+
+  router.post(
+    "/settings/routing/preview",
+    requireAny("integrity.settings.manage"),
+    asyncHandler(async (req, res) => {
+      const parsed = routingPreviewSchema.safeParse(req.body);
+      if (!parsed.success) return res.status(400).json({ error: "Cenário de teste inválido." });
+      const db = getSupabaseAdmin();
+      const rules = await db.from("integrity_routing_rules").select("*")
+        .eq("tenant_id", tenantId(req)).eq("status", "active").eq("active", true)
+        .order("priority").order("created_at");
+      if (rules.error) return res.status(500).json({ error: "Não foi possível simular o roteamento." });
+      const candidates = (rules.data || []).filter((rule: any) =>
+        (!rule.category_id || rule.category_id === parsed.data.category_id) &&
+        (!rule.unit_id || rule.unit_id === parsed.data.unit_id),
+      ).sort((a: any, b: any) => {
+        if (a.is_fallback !== b.is_fallback) return a.is_fallback ? 1 : -1;
+        const specificity = (rule: any) => Number(Boolean(rule.category_id)) + Number(Boolean(rule.unit_id));
+        return specificity(b) - specificity(a) || a.priority - b.priority || a.created_at.localeCompare(b.created_at);
+      });
+      const selected = candidates[0] || null;
+      const selectedSpecificity = selected ? Number(Boolean(selected.category_id)) + Number(Boolean(selected.unit_id)) : -1;
+      const conflicts = selected ? candidates.filter((rule: any) => rule.id !== selected.id && rule.is_fallback === selected.is_fallback && rule.priority === selected.priority && Number(Boolean(rule.category_id)) + Number(Boolean(rule.unit_id)) === selectedSpecificity) : [];
+      return res.json({ selected, conflicts, matched: candidates.length, deterministic: conflicts.length === 0 });
+    }),
+  );
+
+  router.patch(
+    "/settings/routing/:id",
+    requireAny("integrity.settings.manage"),
+    asyncHandler(async (req, res) => {
+      const parsed = routingUpdateSchema.safeParse(req.body);
+      if (!parsed.success) return res.status(400).json({ error: "Regra de roteamento inválida." });
+      const db = getSupabaseAdmin();
+      const current = await db.from("integrity_routing_rules").select("id").eq("id", req.params.id)
+        .eq("tenant_id", tenantId(req)).maybeSingle();
+      if (!current.data) return res.status(404).json({ error: "Regra não encontrada." });
+      const value = parsed.data;
+      let conflictQuery = db.from("integrity_routing_rules").select("id,name").eq("tenant_id", tenantId(req))
+        .neq("id", req.params.id).eq("status", "active").eq("priority", value.priority).eq("is_fallback", value.is_fallback);
+      conflictQuery = value.category_id ? conflictQuery.eq("category_id", value.category_id) : conflictQuery.is("category_id", null);
+      conflictQuery = value.unit_id ? conflictQuery.eq("unit_id", value.unit_id) : conflictQuery.is("unit_id", null);
+      const conflicting = await conflictQuery.limit(1);
+      if (conflicting.error) return res.status(500).json({ error: "Não foi possível validar conflitos." });
+      if (value.status === "active" && conflicting.data?.length)
+        return res.status(409).json({ error: `Conflito com a regra ${conflicting.data[0].name}.` });
+      const saved = await db.from("integrity_routing_rules").update({
+        ...value,
+        active: value.status === "active",
+        archived_at: value.status === "archived" ? new Date().toISOString() : null,
+        archived_by_membership_id: value.status === "archived" ? membershipId(req) : null,
+        updated_at: new Date().toISOString(),
+      }).eq("id", req.params.id).eq("tenant_id", tenantId(req)).select("*").single();
+      if (saved.error) return res.status(saved.error.code === "23505" ? 409 : 500).json({ error: "Não foi possível atualizar a regra." });
+      return res.json({ routing_rule: saved.data });
     }),
   );
 

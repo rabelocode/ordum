@@ -81,7 +81,7 @@ export function WorkspaceApp() {
     window.location.hash = path;
   };
 
-  const canAccessIntegrity = hasPermission('integrity.cases.read') || hasPermission('integrity.cases.manage');
+  const canAccessIntegrity = hasPermission('integrity.cases.read') || hasPermission('integrity.cases.read_assigned') || hasPermission('integrity.cases.manage');
   const canAccessPeople = hasPermission('people.portal.read') || hasPermission('people.requests.create') || hasPermission('people.requests.manage');
   const canAccessTalent = hasPermission('talents.jobs.manage') || hasPermission('talents.candidates.manage') || hasPermission('talents.interviews.manage');
 
