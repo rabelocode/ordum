@@ -1,38 +1,37 @@
-Owner: codex
-Status: phase_4_partial
+Owner: chatgpt_backend
+Status: ready_for_review
 Branch: fix/admin-functional-recovery
-Verified code SHA: d356bf1
-Preview deployment: branch alias (Git integration)
-Preview URL: https://ordum-git-fix-admin-functional-recovery-ordum.vercel.app
-Scope: Fase 4 — Ordum Integridade Core
-
-Checks verified on 2026-08-09:
-- migrations remotas `20260809132523` e `20260809133226`: applied;
-- fluxo transacional público no Supabase, com rollback: PASS;
-- secret scan, migration validation, lint, typecheck, 119 tests (118 pass, 1 live E2E skip) e build: PASS;
-- live queries existentes e bloqueios públicos de Storage/control-plane: PASS;
-- Supabase Security Advisor: nenhuma ocorrência referente às novas tabelas de Integridade.
-- Preview da branch: READY; raiz HTTP 200; API sem autenticação HTTP 401; canal inexistente com estado acionável; mobile sem overflow; console/page errors e logs 5xx: 0.
-
-Entregue neste pacote:
-- Report e Case separados, timeline imutável, tarefas, conflitos, identidade protegida, unidades e configurações tenant-scoped;
-- protocolo + segredo bcrypt, projeção pública sem notas internas e canal público sem login;
-- cockpit, paginação/filtros, detalhe, comunicação interna/externa, atribuição e máquina de estados transacional;
-- control plane agregado no Admin sem conteúdo confidencial.
-
-Próximos pacotes internos:
-- Storage privado de evidências e anexos públicos controlados;
-- rate limiting persistente para submissão e acompanhamento;
-- tarefas, decisão/conclusão completas e configuração avançada de comitê/roteamento;
-- testes E2E autenticados e visual QA com tenant de homologação autorizado.
-
-Checks verified on 2026-08-09:
-- secret scan, migration validation, lint/typecheck, 104 tests and build: PASS;
-- Preview deployment: READY; root HTTP 200; diagnostics without auth HTTP 401; 5xx logs: 0;
-- E2E residue counts: Auth 0, platform_members 0, active platform_members 0;
-- live E2E preflight: correctly aborted before fixtures because E2E operator credentials and ASAAS_API_KEY are absent;
-- migration 20260806230000: still absent from official remote history; CLI repair blocked by missing Supabase CLI access token/link credentials.
-
-External requirements:
-- configure E2E_OPERATOR_EMAIL, E2E_OPERATOR_PASSWORD and ASAAS_API_KEY Sandbox in the controlled execution environment;
-- provide Supabase CLI access/link credentials to run `migration repair 20260806230000 --status applied` officially.
+Head: a2ba60f387f7bb5d2b9a82b038a22cbfb655161c
+Implemented:
+- Storage privado `ordum-integrity`, upload autenticado e público controlado, validação de MIME/assinatura/tamanho, URLs assinadas por 120 segundos e exclusão auditada.
+- Rate limiting persistente serverless para envio, acompanhamento, mensagens e upload público, com chave HMAC sem IP/protocolo em claro.
+- Tarefas de investigação, conclusão interna separada do resultado comunicável, reabertura motivada, comitês, roteamento automático, conflitos e timeline.
+- SLA de primeira ação e tratamento, filtros/indicadores operacionais, cockpit e detalhe responsivo com skeletons, estados vazios, feedback e confirmação sem `window.prompt`.
+- Control plane agregado no Admin Ordum com saúde, armazenamento, SLA e fronteira explícita sem conteúdo confidencial.
+- Mensagem pública de anonimato corrigida para não prometer anonimato absoluto.
+Database:
+- `20260809141338_integrity_operational_phase4b`: applied.
+- `20260809141818_integrity_operational_sla_defaults`: applied.
+- `20260809142426_integrity_operational_fk_indexes`: applied.
+- Bucket remoto: privado, 10 MB, allowlist MIME; nenhuma policy direta permite enumerar `ordum-integrity`.
+- Advisors revisados: rate-limit/secrets sem policy é fail-closed intencional; índices novos aplicados; RPCs públicos legados permanecem como blocker de cutover.
+Tests:
+- Secret scan PASS: 282 arquivos rastreados.
+- Migration validation PASS: 20 migrations ordenadas.
+- Lint/typecheck PASS.
+- Testes PASS: 136 aprovados, 0 falhas, 1 live E2E comercial explicitamente ignorado (137 total).
+- Build cliente, servidor e Vercel PASS; live queries PASS.
+- QA SQL remoto do rate limit: 3 permitidas, 2 bloqueadas, resíduos 0.
+Preview:
+- READY — dpl_22xxuQSSNgJqXWGNT5yps2CC1bec
+- https://ordum-9hgooclwj-ordum.vercel.app
+QA:
+- Raiz com conteúdo, sem overlay, erros ou warnings de console; mensagem de anonimato revisada presente.
+- Canal inexistente exibe estado acionável; viewport 390x844 sem overflow ou tela branca.
+- GET canal inexistente: HTTP 404; POST acompanhamento inválido: HTTP 404; logs 5xx do deployment: 0.
+- Supabase remoto: bucket privado confirmado e rate limit persistente executado com cleanup confirmado.
+Blockers:
+- Revogar os RPCs públicos legados de submissão/acompanhamento somente após merge/deploy do novo frontend; revogação antecipada quebraria a produção atual e permitiria bypass do rate limit até o cutover.
+- Fluxo completo autenticado com evidência real não foi executado por ausência de fixture/conta de homologação descartável autorizada; nenhum dado real foi poluído.
+Suggested next package:
+- Cutover coordenado dos endpoints públicos com revogação dos RPCs legados e E2E autenticado em tenant de homologação descartável.
