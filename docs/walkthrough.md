@@ -59,5 +59,14 @@ Implementamos na branch `fix/admin-functional-recovery` o pacote completo de Bil
 
 ### 2. Deploy no Vercel Preview
 - **Branch**: `fix/admin-functional-recovery`
-- **Preview Deployment**: https://ordum-git-fix-admin-functional-recovery-ordum.vercel.app
+- **Preview Deployment validado**: `dpl_HnEGSnZgVFLSneVhCxj7ijrfnqVC` — https://ordum-rm1hztbhp-ordum.vercel.app
 - **Status**: **● Ready**
+
+### 3. Fechamento E2E em 2026-08-09
+- O preflight autenticado ocorre antes de qualquer fixture e falha de forma explícita quando uma variável obrigatória não existe.
+- O cleanup valida erros do Supabase, respeita integridade referencial, confirma remoção no Asaas e verifica resíduos por IDs e `runId`.
+- Scripts de expurgo não removem mais `platform_members` suspensos globalmente; somente fixtures com domínio, padrão e metadata E2E concordantes são elegíveis.
+- Resíduos comprovados: Auth E2E `0`; platform_members E2E `0`; platform_members E2E ativos `0`.
+- Preview: raiz HTTP `200`, diagnóstico sem autenticação HTTP `401`, logs `5xx` do deployment `0`.
+- O ciclo live não foi registrado como concluído: faltam `E2E_OPERATOR_EMAIL`, `E2E_OPERATOR_PASSWORD` e `ASAAS_API_KEY` Sandbox no ambiente controlado.
+- A migration `20260806230000` permanece fora do histórico remoto oficial; o reparo por CLI depende de acesso/link do Supabase e não foi substituído por inserção manual.
