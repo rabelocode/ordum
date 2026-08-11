@@ -7,7 +7,8 @@ import { getLeadNextStatuses, LEAD_STATUS_LABELS } from '../../domain/transition
 import { userFacingApiError } from '../../lib/userFacingError';
 
 export function LeadsPage() {
-  const { session, hasPlatformPermission } = useAccess();
+  const { session, platformRole, hasPlatformPermission } = useAccess();
+  const canManageCommercial = platformRole?.key === 'admin' || hasPlatformPermission('platform.commercial.manage');
   const [leads, setLeads] = useState<any[]>([]);
   const [pagination, setPagination] = useState({ page: 1, totalPages: 1, total: 0 });
   const [search, setSearch] = useState('');
@@ -185,7 +186,7 @@ export function LeadsPage() {
       <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
         <div><p className="text-xs font-bold uppercase tracking-[.18em] text-[#B66E45]">Comercial</p><h1 className="mt-1 text-3xl font-black text-[#202322]">Leads</h1>
         <p className="text-sm text-[#626866] mt-1">Do primeiro contato à proposta, com a próxima ação sempre visível.</p></div>
-        {hasPlatformPermission('platform.commercial.manage') ? <button onClick={() => { setCreateOpen(true); setCreateForm((value) => ({ ...value, team_id: value.team_id || teams[0]?.id || '' })); }} className="inline-flex items-center justify-center gap-2 rounded-xl bg-[#B66E45] px-4 py-2.5 text-sm font-bold text-white"><Plus className="h-4 w-4"/>Novo lead</button> : null}
+        {canManageCommercial ? <button onClick={() => { setCreateOpen(true); setCreateForm((value) => ({ ...value, team_id: value.team_id || teams[0]?.id || '' })); }} className="inline-flex items-center justify-center gap-2 rounded-xl bg-[#B66E45] px-4 py-2.5 text-sm font-bold text-white"><Plus className="h-4 w-4"/>Novo lead</button> : null}
       </div>
 
       <div className="flex items-center gap-2 overflow-x-auto rounded-2xl bg-white p-4 text-xs font-bold text-[#626866] ring-1 ring-[#DDD8CF]/70">{["Lead","Contato","Demonstração","Qualificado","Proposta","Ganho ou perdido"].map((item,index)=><React.Fragment key={item}><span className="shrink-0 rounded-full bg-[#F6F5F2] px-3 py-1.5">{item}</span>{index<5?<ArrowRight className="h-3.5 w-3.5 shrink-0 text-[#B66E45]"/>:null}</React.Fragment>)}</div>
@@ -222,7 +223,7 @@ export function LeadsPage() {
         {loading ? (
           <ListSkeleton rows={7} />
         ) : !leads.length ? (
-          <div className="p-10 text-center"><p className="font-bold text-[#202322]">Nenhum lead por aqui</p><p className="mt-1 text-sm text-[#626866]">Cadastre uma oportunidade para iniciar o acompanhamento comercial.</p>{hasPlatformPermission('platform.commercial.manage')?<button onClick={()=>setCreateOpen(true)} className="mt-4 rounded-xl bg-[#B66E45] px-4 py-2 text-sm font-bold text-white">Criar primeiro lead</button>:null}</div>
+          <div className="p-10 text-center"><p className="font-bold text-[#202322]">Nenhum lead por aqui</p><p className="mt-1 text-sm text-[#626866]">Cadastre uma oportunidade para iniciar o acompanhamento comercial.</p>{canManageCommercial?<button onClick={()=>setCreateOpen(true)} className="mt-4 rounded-xl bg-[#B66E45] px-4 py-2 text-sm font-bold text-white">Criar primeiro lead</button>:null}</div>
         ) : (
           <><div className="space-y-3 p-3 md:hidden">{leads.map(lead=>{const assignment=lead.assignment;const canClaim=assignment&&!assignment.owner_platform_member_id&&assignment.platform_teams?.allow_self_claim;const allowedNext=getLeadNextStatuses(lead.status);return <article key={lead.id} className="rounded-2xl border border-[#DDD8CF] p-4"><div className="flex items-start justify-between gap-3"><div><h2 className="font-black">{lead.name}</h2><p className="text-sm text-[#626866]">{lead.company||"Empresa não informada"}</p></div><span className="rounded-full bg-[#F6F5F2] px-2.5 py-1 text-xs font-bold">{LEAD_STATUS_LABELS[lead.status]||"Em andamento"}</span></div><p className="mt-3 text-xs text-[#626866]">Responsável: {lead.owner?.name||lead.owner?.email||"Não atribuído"}</p><div className="mt-4 flex flex-wrap gap-2">{canClaim?<button disabled={isActioning} onClick={()=>claimLead(lead.id)} className="rounded-lg bg-[#B66E45] px-3 py-2 text-xs font-bold text-white">Assumir</button>:null}<button disabled={isActioning} onClick={()=>setActivityModalLead(lead)} className="rounded-lg bg-gray-100 px-3 py-2 text-xs font-bold">Registrar contato</button><button disabled={isActioning} onClick={()=>setDemoModalLead(lead)} className="rounded-lg bg-gray-100 px-3 py-2 text-xs font-bold">Agendar demo</button><a href={`#/admin/propostas?lead=${lead.id}`} className="rounded-lg bg-orange-100 px-3 py-2 text-xs font-bold text-[#B66E45]">Criar proposta</a>{allowedNext[0]?<button disabled={isActioning} onClick={()=>{setTransitionModal({lead,targetStatus:allowedNext[0]});setTransitionReason("");}} className="rounded-lg border border-[#B66E45]/30 px-3 py-2 text-xs font-bold text-[#B66E45]">Avançar etapa</button>:null}</div></article>;})}</div><div className="hidden overflow-x-auto md:block">
             <table className="w-full text-sm">
