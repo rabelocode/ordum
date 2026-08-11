@@ -1,46 +1,47 @@
 Owner: chatgpt_backend
-Status: ready_for_review
+Status: ready_for_product_review
 Branch: fix/admin-functional-recovery
-Head: f3790ee926ad9ee0c2c04c475bf237f9b5d53eab
+Head: b8fda0eaedf07529aa3f81208c95660216b2b018
 Implemented:
-- Wizard único de implantação do Integridade, sincronizado ao onboarding comercial, com 16 etapas, teste obrigatório e estados `not_started`, `incomplete`, `ready_for_test`, `ready_for_publish` e `published`.
-- Estrutura organizacional tenant-scoped com matriz/filiais, departamentos, responsáveis e nomes legíveis em filtros, roteamento e indicadores.
-- Motor de roteamento determinístico e explicável por categoria, severidade, unidade, departamento, tipo de relato, identificação e conflito; atribui comitê/responsável/colaboradores, prioridade, SLA e escalonamento.
-- Scheduler server-side idempotente para SLA próximo/vencido, tarefa vencida, caso sem responsável/parado, decisão pendente, conflito e retenção; outbox sanitizada e Vercel Cron a cada 30 minutos.
-- Central de pendências operacional com CTAs; acompanhamento público com status sanitizado, ação necessária, mensagens, complementos e evidências sem dados internos.
-- Formulário público configurável com campos tipados/validados, textos de privacidade/confirmação e política de anonimato; QA mobile explícito em 390x844.
-- Dashboard executivo tenant-scoped, filtros e relatório agregado PDF/CSV auditado; Admin Ordum enriquecido exclusivamente com control plane/aggregate-only e CTA sem impersonation.
+- Integridade reorganizado em cinco áreas de negócio: Visão geral, Casos, Investigações, Relatórios e Configurações; implantação e regras técnicas ficaram dentro do contexto correto.
+- Home refeita para começar por atenção necessária, casos do usuário e somente os indicadores essenciais.
+- Caixa de casos refeita com visões rápidas, busca, filtros em drawer, paginação no servidor, responsável/atividade legíveis e cards mobile.
+- Detalhe do caso refeita com cabeçalho operacional, ações contextuais, visão geral, investigação, conversa, evidências e histórico; comunicação externa exige confirmação explícita e notas privadas permanecem separadas.
+- Configurações e primeiros passos simplificados com CTAs específicos, textos humanos e canal pronto/publicado; chaves internas e termos de banco não aparecem nos formulários.
+- Admin reorganizado por Comercial, Clientes, Financeiro, Operação e Administração; itens de engenharia/deploy foram retirados da navegação comum.
+- Dashboard Admin refeito para ações pendentes, funil comercial simples, receita e saúde de clientes, sem parede de métricas.
+- Página da empresa refeita em Resumo, Produtos, Comercial, Financeiro, Pessoas e acessos e Histórico; dados agregados do Integridade preservam a fronteira de confidencialidade.
+- Leads ganhou fluxo comercial legível, ações rápidas desktop/mobile e transições com mensagens humanas; propostas e contratos usam a camada centralizada de erros amigáveis.
+- API da caixa de casos passou a suportar Todos, Não atribuídos, Meus casos, Aguardando resposta e Encerrados, incluindo última atividade e mensagem pendente.
+- Fallbacks de nomes e checklist operacional foram traduzidos para linguagem de equipe, encaminhamento e prazos.
 Database:
-- `20260809204033_integrity_phase4g_deployment_automation` aplicada oficialmente: permissões, hierarquia, custom fields, routing avançado, outbox, scheduler, retenção, RLS e índices operacionais.
-- `20260809205518_integrity_phase4g_routing_scope_hardening` aplicada oficialmente: colaboradores de roteamento validados contra regra e membership do mesmo tenant.
-- RLS `USING`/`WITH CHECK` confirmada nas estruturas tenant-scoped; filas de outbox/scheduler são service-only e não possuem policy de navegador.
+- Nenhuma migration nova; infraestrutura, RLS e Storage existentes foram preservados.
 Tests:
-- Secret scan PASS (320 arquivos); migration validation PASS (30); lint/typecheck/build PASS.
-- Suite completa: 173 testes, 172 PASS, 0 FAIL, 1 live comercial SKIP explícito.
-- Live E2E final PASS: run `integrity_e2e_1786453854068_d0361191`; health 200; report 201; rate limit na tentativa 21; scheduler idempotente; routing determinístico; relatório executivo e QA browser/mobile PASS.
-- Negativos PASS: RPC público legado, não atribuído, cross-tenant, identidade, Storage, Platform Admin/dossiê e Admin aggregate-only.
-- Cleanup PASS; resíduos finais tenants=0 e Auth=0.
+- Secret scan PASS: 323 arquivos.
+- Migration validation PASS: 30 migrations ordenadas.
+- Lint PASS; typecheck PASS; build client/server/Vercel PASS.
+- Suite: 178 testes, 177 PASS, 0 FAIL, 1 live comercial SKIP explícito.
+- Live Integridade E2E PASS: run `integrity_e2e_1786460180307_c32b81e5`; health 200; report 201; browser QA e Admin Product QA PASS; rate limit na tentativa 21; cleanup PASS; tenants residuais 0; Auth residual 0.
 Preview:
-- READY — `dpl_6wqAW93BYT4PL7Py7hNCTxCd21RA`
-- https://ordum-nnlivykh4-ordum.vercel.app
-- Alias público/mobile: https://ordum-git-fix-admin-functional-recovery-ordum.vercel.app
+- READY — `dpl_DQe4JZhmy2RJkjpQPYnuqDwoHbny`
+- https://ordum-nnbcil55u-ordum.vercel.app
+- Alias: https://ordum-git-fix-admin-functional-recovery-ordum.vercel.app
 QA:
-- Fluxo descartável real PASS: onboarding/wizard -> hierarquia -> canal/teste/publicação -> denúncia anônima/identificada -> routing/comitê -> tarefa/evidência/mensagem -> scheduler/pendências -> decisão/encerramento/reabertura -> relatório/retenção.
-- Browser autenticado e público PASS em desktop/mobile; acompanhamento público sanitizado e sem overflow horizontal.
-- Vercel: deployment READY e 0 logs HTTP 5xx no período do E2E.
-Security:
-- Security Advisor: 58 achados, 0 ERROR, 13 WARN preexistentes e 45 INFO; nenhuma nova exposição 4G. Bucket privado e Admin aggregate-only preservados.
-- Segredo temporário local do Cron removido após o E2E; `CRON_SECRET` permanece somente no ambiente Preview da Vercel.
-Performance:
-- Performance Advisor: 227 achados, 0 ERROR, 31 WARN e 196 INFO. Índices compostos 4G cobrem hierarquia, custom fields, routing, outbox, pendências e retenção.
-- Três sobreposições permissivas 4G permanecem sem consolidação: não houve prova suficiente de equivalência/autorização sob tráfego representativo; segurança foi priorizada.
+- Admin desktop: dashboard por ação e empresa/produtos percorridos; navegação comercial validada; nenhum termo técnico proibido visível na empresa.
+- Integridade desktop: tenant_admin e compliance percorreram caixa, exportação, detalhe, tabs e configuração/primeiros passos.
+- Integridade mobile 390x844: investigador atribuído percorreu cards e detalhe; investigador não atribuído permaneceu bloqueado.
+- Canal público mobile, anonimato/identificação, RLS assigned/unassigned/cross-tenant/identity, mensagens, evidências, PDF, relatórios e aggregate-only validados.
+- Screenshots QA: `tmp/product-recovery/*` no ambiente da execução; inspeção visual aprovada sem overflow bloqueante.
+- Preview final respondeu HTTP 200; Vercel registrou 0 logs 5xx no deployment final.
 Blockers:
-- Billing/Asaas permanece dependência externa controlada e não foi alterado.
-- E-mail externo não foi simulado; somente in-app/outbox está habilitado até existir provider confiável.
-- Purge físico e anonimização irreversível permanecem fora do automático até política jurídica/operacional explícita.
+- `CRON_SECRET` é devolvido redigido pelo pull da Vercel; scheduler não foi reexecutado nesta rodada. O teste unitário de proteção/idempotência passou e a validação live anterior permanece registrada no handoff precedente.
+- Billing/Asaas continua como dependência externa controlada e não foi alterado.
+- Demonstrações, Billing e telas administrativas secundárias ainda usam diálogos legados; ficaram fora do P0 entregue e não devem ser considerados recuperados visualmente.
+- Fluxo comercial completo lead → demo → proposta → contrato não foi mutado em browser contra dados reais; regras/transições passaram na suíte, mas o QA visual descartável completo permanece pendente.
+- Assinatura eletrônica continua indisponível por ausência de provedor real; nenhum estado fictício foi adicionado.
 Suggested next package:
-- Homologar um piloto controlado com responsáveis reais e política de publicação.
-- Definir política jurídica de retenção/anonimização antes de qualquer purge.
-- Medir queries/policies 4G com tráfego piloto e consolidar apenas com equivalência comprovada.
-- Conectar provider externo de comunicação somente após configuração segura e consentimento.
-- Fechar configuração externa do Billing/Asaas Sandbox no pacote comercial dedicado.
+- Product review do P0 entregue com decisão sobre ajustes de densidade e nomenclatura.
+- Recuperar visualmente Demonstrações, Propostas e Contratos, removendo diálogos nativos restantes.
+- Criar fixture comercial descartável independente de Billing para QA browser lead → contrato.
+- Refinar Administração/Auditoria e esconder detalhes técnicos em drawer autorizado.
+- Revalidar o scheduler live somente com acesso seguro ao segredo do Preview.
