@@ -312,6 +312,9 @@ try {
     await page.getByText(email).waitFor();
   }
   await shot(page, "02-team-ready");
+  await page.setViewportSize({ width: 390, height: 844 });
+  await shot(page, "02b-team-mobile");
+  await page.setViewportSize({ width: 1440, height: 1000 });
   await page.goto(`${base}/#/admin/planos`, { waitUntil: "networkidle" });
   await page
     .getByRole("button", { name: /Criar plano/ })

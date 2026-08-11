@@ -6,6 +6,9 @@ import { AddTeamMemberModal } from '../../components/admin/AddTeamMemberModal';
 import { DetailSkeleton } from '../../components/ui/LoadingSkeletons';
 import { ActionDialog } from '../../components/ui/ActionDialog';
 
+const teamRoleLabel = (value: string) => ({ manager: 'Gerente', member: 'Membro' } as Record<string, string>)[value] || 'Membro';
+const relationshipLabel = (value?: string) => ({ partner: 'Sócio', employee: 'Funcionário', contractor: 'Prestador', representative: 'Representante', agency: 'Agência', other: 'Outro' } as Record<string, string>)[value || ''] || 'Não informado';
+
 export function TeamDetailPage({ teamId }: { teamId: string }) {
   const { session, platformRole } = useAccess();
   const [team, setTeam] = useState<PlatformTeam | null>(null);
@@ -171,8 +174,19 @@ export function TeamDetailPage({ teamId }: { teamId: string }) {
                 <div className="text-center p-8 text-gray-500 border border-dashed border-[#DDD8CF] rounded-2xl">
                   Nenhum membro nesta equipe.
                 </div>
-              ) : (
-                <div className="border border-[#DDD8CF]/40 rounded-2xl overflow-hidden">
+              ) : (<>
+                <div className="space-y-3 sm:hidden">
+                  {members.map(m => (
+                    <article key={m.platform_member_id} className="rounded-2xl border border-[#DDD8CF]/60 bg-white p-4">
+                      <div className="flex items-start justify-between gap-3">
+                        <div><div className="font-bold text-[#202322]">{m.user?.name || 'Sem nome'}</div><div className="break-all text-xs text-[#626866]">{m.user?.email}</div></div>
+                        <button type="button" aria-label={`Remover ${m.user?.name || 'pessoa'} da equipe`} onClick={() => setRemoveMemberId(m.platform_member_id)} className="rounded-lg p-2 text-red-500 hover:bg-red-50"><Trash2 className="h-5 w-5" /></button>
+                      </div>
+                      <dl className="mt-4 grid grid-cols-2 gap-3 text-sm"><div><dt className="text-xs font-bold uppercase text-[#777D7A]">Função</dt><dd className="mt-1 font-semibold">{teamRoleLabel(m.team_role)}</dd></div><div><dt className="text-xs font-bold uppercase text-[#777D7A]">Vínculo</dt><dd className="mt-1">{relationshipLabel(m.relationship_type)}</dd></div></dl>
+                    </article>
+                  ))}
+                </div>
+                <div className="hidden overflow-hidden rounded-2xl border border-[#DDD8CF]/40 sm:block">
                   <table className="w-full text-left border-collapse">
                     <thead>
                       <tr className="border-b border-[#DDD8CF]/40 bg-[#F6F5F2]/50 text-xs font-semibold text-gray-500 uppercase tracking-wider">
@@ -194,7 +208,7 @@ export function TeamDetailPage({ teamId }: { teamId: string }) {
                             <span className={`inline-flex items-center px-2 py-1 rounded text-xs font-medium uppercase tracking-wider ${
                               m.team_role === 'manager' ? 'bg-purple-100 text-purple-700' : 'bg-gray-100 text-gray-700'
                             }`}>
-                              {m.team_role}
+                              {teamRoleLabel(m.team_role)}
                             </span>
                           </td>
                           <td className="p-4">
@@ -203,10 +217,10 @@ export function TeamDetailPage({ teamId }: { teamId: string }) {
                             </span>
                           </td>
                           <td className="p-4">
-                            <span className="text-sm text-gray-600 capitalize">{m.relationship_type}</span>
+                            <span className="text-sm text-gray-600">{relationshipLabel(m.relationship_type)}</span>
                           </td>
                           <td className="p-4 pr-6 text-right">
-                            <button 
+                            <button type="button" aria-label={`Remover ${m.user?.name || 'pessoa'} da equipe`}
                               onClick={() => setRemoveMemberId(m.platform_member_id)}
                               className="p-2 text-red-400 hover:text-red-600 rounded-lg hover:bg-red-50 transition-colors"
                             >
@@ -218,7 +232,7 @@ export function TeamDetailPage({ teamId }: { teamId: string }) {
                     </tbody>
                   </table>
                 </div>
-              )}
+              </>)}
             </div>
           )}
 
