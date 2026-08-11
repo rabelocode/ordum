@@ -115,6 +115,57 @@ test('Functional Recovery - Mandatory Test Suite', async (suite) => {
     assert.match(responseData.error, /máquina de transição/);
   });
 
+  await suite.test('3b. Admin schedules a demo for an unassigned legacy lead by choosing a team', async () => {
+    let savedAssignment: any = null;
+    let savedDemo: any = null;
+    const mockDb = {
+      from: (table: string) => {
+        if (table === 'marketing_leads') return {
+          select: () => ({ eq: () => ({ maybeSingle: async () => ({ data: { id: 'lead-legacy', status: 'new' }, error: null }) }) }),
+          update: () => ({ eq: async () => ({ error: null }) }),
+        };
+        if (table === 'platform_lead_assignments') return {
+          select: () => ({ eq: () => ({ maybeSingle: async () => ({ data: null, error: null }) }) }),
+          insert: (payload: any) => ({ select: () => ({ single: async () => {
+            savedAssignment = { id: 'assignment-1', ...payload };
+            return { data: savedAssignment, error: null };
+          } }) }),
+        };
+        if (table === 'platform_teams') return {
+          select: () => ({ eq: () => ({ maybeSingle: async () => ({ data: { id: '11111111-1111-4111-8111-111111111111', status: 'active' }, error: null }) }) }),
+        };
+        if (table === 'commercial_demos') return {
+          insert: (payload: any) => ({ select: () => ({ single: async () => {
+            savedDemo = { id: 'demo-1', ...payload };
+            return { data: savedDemo, error: null };
+          } }) }),
+        };
+        if (table === 'commercial_activities' || table === 'platform_audit_logs') return { insert: async () => ({ error: null }) };
+        return {};
+      },
+    };
+    const router = createAdminLeadsRouter(() => mockDb, null);
+    const routeLayer = (router as any).stack.find((layer: any) => layer.route?.path === '/:id/demos' && layer.route?.methods?.post);
+    const finalHandler = routeLayer.route.stack[routeLayer.route.stack.length - 1].handle;
+    const req: any = {
+      params: { id: 'lead-legacy' },
+      body: { starts_at: '2026-08-20T15:00', team_id: '11111111-1111-4111-8111-111111111111', notes: 'Demonstração inicial' },
+      user: { id: 'user-admin-1' },
+      platformContext: { role: { key: 'admin' }, platformMember: { id: 'member-admin-1', status: 'active' }, teams: [], managedTeams: [] },
+      headers: {},
+      header: () => undefined,
+      socket: { remoteAddress: '127.0.0.1' },
+    };
+    let statusCode = 200;
+    let responseData: any = null;
+    const res: any = { status: (code: number) => { statusCode = code; return res; }, json: (data: any) => { responseData = data; return res; } };
+    await finalHandler(req, res);
+    assert.equal(statusCode, 201);
+    assert.equal(savedAssignment.team_id, req.body.team_id);
+    assert.equal(savedDemo.team_id, req.body.team_id);
+    assert.equal(responseData.id, 'demo-1');
+  });
+
   // Test 4: Proposal approval receives approval_notes
   await suite.test('4. Proposal approval requires approval_notes and passes reason to RPC', async () => {
     let rpcCalledWith: any = null;

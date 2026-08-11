@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import test from 'node:test';
+import { commercialApprovalAction } from '../src/server/billing/router';
 
 const read=(path:string)=>fs.readFileSync(path,'utf8');
 
@@ -40,6 +41,21 @@ test('workspace resolves contracted catalog keys into product routes',()=>{
 test('commercial approval conflicts use a human message and proposals have a default validity',()=>{
   assert.match(read('src/lib/userFacingError.ts'),/self_approval_forbidden[\s\S]*outra pessoa autorizada/);
   assert.match(read('src/pages/admin/ProposalsPage.tsx'),/valid_until:defaultValidity\(\)/);
+});
+
+test('commercial actions prevent predictable approval and demo errors before the request',()=>{
+  assert.equal(commercialApprovalAction({status:'pending_approval',created_by_user_id:'user-1'},'user-1',new Set(['user-1','user-2']),true),'requires_another_approver');
+  assert.equal(commercialApprovalAction({status:'pending_approval',created_by_user_id:'user-1'},'user-2',new Set(['user-1','user-2']),true),'available');
+  assert.equal(commercialApprovalAction({status:'pending_approval',created_by_user_id:'user-1'},'user-1',new Set(['user-1']),true),'available');
+  const leads=read('src/pages/admin/LeadsPage.tsx');
+  assert.match(leads,/Equipe responsável \*/);
+  assert.match(leads,/team_id: demoForm\.team_id/);
+  assert.match(leads,/Atribuir antes da proposta/);
+  const proposals=read('src/pages/admin/ProposalsPage.tsx');
+  assert.match(proposals,/Aguardando outra pessoa aprovadora/);
+  assert.match(proposals,/approval_action==='requires_another_approver'/);
+  assert.match(proposals,/Atribua o lead a uma equipe antes de criar a proposta/);
+  assert.match(read('src/server/billing/router.ts'),/lead_assignment_required/);
 });
 
 test('client onboarding exposes a tenant owner invitation without granting access before acceptance',()=>{

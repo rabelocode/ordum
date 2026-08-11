@@ -31,7 +31,7 @@ export function LeadsPage() {
   const [activityForm, setActivityForm] = useState({ subject: '', description: '' });
 
   const [demoModalLead, setDemoModalLead] = useState<any>(null);
-  const [demoForm, setDemoForm] = useState({ starts_at: new Date(Date.now() + 86400000).toISOString().slice(0, 16), notes: '' });
+  const [demoForm, setDemoForm] = useState({ starts_at: new Date(Date.now() + 86400000).toISOString().slice(0, 16), notes: '', team_id: '' });
 
   const api = useCallback(async (path: string, init?: RequestInit) => {
     const response = await fetch(path, {
@@ -153,17 +153,27 @@ export function LeadsPage() {
     try {
       await api(`/api/admin/leads/${demoModalLead.id}/demos`, {
         method: 'POST',
-        body: JSON.stringify({ starts_at: demoForm.starts_at, notes: demoForm.notes.trim() || null })
+        body: JSON.stringify({ starts_at: demoForm.starts_at, notes: demoForm.notes.trim() || null, team_id: demoForm.team_id })
       });
       setSuccess('Demonstração agendada com sucesso.');
       setDemoModalLead(null);
-      setDemoForm({ starts_at: new Date(Date.now() + 86400000).toISOString().slice(0, 16), notes: '' });
+      setDemoForm({ starts_at: new Date(Date.now() + 86400000).toISOString().slice(0, 16), notes: '', team_id: '' });
       await load(pagination.page);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Falha ao agendar demonstração.');
     } finally {
       setIsActioning(false);
     }
+  }
+
+  function openDemo(lead: any) {
+    setError(null);
+    setDemoModalLead(lead);
+    setDemoForm({
+      starts_at: new Date(Date.now() + 86400000).toISOString().slice(0, 16),
+      notes: '',
+      team_id: lead.assignment?.team_id || teams[0]?.id || '',
+    });
   }
 
   async function claimLead(leadId: string) {
@@ -186,7 +196,7 @@ export function LeadsPage() {
       <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
         <div><p className="text-xs font-bold uppercase tracking-[.18em] text-[#B66E45]">Comercial</p><h1 className="mt-1 text-3xl font-black text-[#202322]">Leads</h1>
         <p className="text-sm text-[#626866] mt-1">Do primeiro contato à proposta, com a próxima ação sempre visível.</p></div>
-        {canManageCommercial ? <button onClick={() => { setCreateOpen(true); setCreateForm((value) => ({ ...value, team_id: value.team_id || teams[0]?.id || '' })); }} className="inline-flex items-center justify-center gap-2 rounded-xl bg-[#B66E45] px-4 py-2.5 text-sm font-bold text-white"><Plus className="h-4 w-4"/>Novo lead</button> : null}
+        {canManageCommercial ? <button type="button" onClick={() => { setCreateOpen(true); setCreateForm((value) => ({ ...value, team_id: value.team_id || teams[0]?.id || '' })); }} className="inline-flex items-center justify-center gap-2 rounded-xl bg-[#B66E45] px-4 py-2.5 text-sm font-bold text-white"><Plus className="h-4 w-4"/>Novo lead</button> : null}
       </div>
 
       <div className="flex items-center gap-2 overflow-x-auto rounded-2xl bg-white p-4 text-xs font-bold text-[#626866] ring-1 ring-[#DDD8CF]/70">{["Lead","Contato","Demonstração","Qualificado","Proposta","Ganho ou perdido"].map((item,index)=><React.Fragment key={item}><span className="shrink-0 rounded-full bg-[#F6F5F2] px-3 py-1.5">{item}</span>{index<5?<ArrowRight className="h-3.5 w-3.5 shrink-0 text-[#B66E45]"/>:null}</React.Fragment>)}</div>
@@ -223,9 +233,9 @@ export function LeadsPage() {
         {loading ? (
           <ListSkeleton rows={7} />
         ) : !leads.length ? (
-          <div className="p-10 text-center"><p className="font-bold text-[#202322]">Nenhum lead por aqui</p><p className="mt-1 text-sm text-[#626866]">Cadastre uma oportunidade para iniciar o acompanhamento comercial.</p>{canManageCommercial?<button onClick={()=>setCreateOpen(true)} className="mt-4 rounded-xl bg-[#B66E45] px-4 py-2 text-sm font-bold text-white">Criar primeiro lead</button>:null}</div>
+          <div className="p-10 text-center"><p className="font-bold text-[#202322]">Nenhum lead por aqui</p><p className="mt-1 text-sm text-[#626866]">Cadastre uma oportunidade para iniciar o acompanhamento comercial.</p>{canManageCommercial?<button type="button" onClick={()=>setCreateOpen(true)} className="mt-4 rounded-xl bg-[#B66E45] px-4 py-2 text-sm font-bold text-white">Criar primeiro lead</button>:null}</div>
         ) : (
-          <><div className="space-y-3 p-3 md:hidden">{leads.map(lead=>{const assignment=lead.assignment;const canClaim=assignment&&!assignment.owner_platform_member_id&&assignment.platform_teams?.allow_self_claim;const allowedNext=getLeadNextStatuses(lead.status);return <article key={lead.id} className="rounded-2xl border border-[#DDD8CF] p-4"><div className="flex items-start justify-between gap-3"><div><h2 className="font-black">{lead.name}</h2><p className="text-sm text-[#626866]">{lead.company||"Empresa não informada"}</p></div><span className="rounded-full bg-[#F6F5F2] px-2.5 py-1 text-xs font-bold">{LEAD_STATUS_LABELS[lead.status]||"Em andamento"}</span></div><p className="mt-3 text-xs text-[#626866]">Responsável: {lead.owner?.name||lead.owner?.email||"Não atribuído"}</p><div className="mt-4 flex flex-wrap gap-2">{canClaim?<button disabled={isActioning} onClick={()=>claimLead(lead.id)} className="rounded-lg bg-[#B66E45] px-3 py-2 text-xs font-bold text-white">Assumir</button>:null}<button disabled={isActioning} onClick={()=>setActivityModalLead(lead)} className="rounded-lg bg-gray-100 px-3 py-2 text-xs font-bold">Registrar contato</button><button disabled={isActioning} onClick={()=>setDemoModalLead(lead)} className="rounded-lg bg-gray-100 px-3 py-2 text-xs font-bold">Agendar demo</button><a href={`#/admin/propostas?lead=${lead.id}`} className="rounded-lg bg-orange-100 px-3 py-2 text-xs font-bold text-[#B66E45]">Criar proposta</a>{allowedNext[0]?<button disabled={isActioning} onClick={()=>{setTransitionModal({lead,targetStatus:allowedNext[0]});setTransitionReason("");}} className="rounded-lg border border-[#B66E45]/30 px-3 py-2 text-xs font-bold text-[#B66E45]">Avançar etapa</button>:null}</div></article>;})}</div><div className="hidden overflow-x-auto md:block">
+          <><div className="space-y-3 p-3 md:hidden">{leads.map(lead=>{const assignment=lead.assignment;const canClaim=assignment&&!assignment.owner_platform_member_id&&assignment.platform_teams?.allow_self_claim;const allowedNext=getLeadNextStatuses(lead.status);return <article key={lead.id} className="rounded-2xl border border-[#DDD8CF] p-4"><div className="flex items-start justify-between gap-3"><div><h2 className="font-black">{lead.name}</h2><p className="text-sm text-[#626866]">{lead.company||"Empresa não informada"}</p></div><span className="rounded-full bg-[#F6F5F2] px-2.5 py-1 text-xs font-bold">{LEAD_STATUS_LABELS[lead.status]||"Em andamento"}</span></div><p className="mt-3 text-xs text-[#626866]">Responsável: {lead.owner?.name||lead.owner?.email||"Não atribuído"}</p><div className="mt-4 flex flex-wrap gap-2">{canClaim?<button type="button" disabled={isActioning} onClick={()=>claimLead(lead.id)} className="rounded-lg bg-[#B66E45] px-3 py-2 text-xs font-bold text-white">Assumir</button>:null}{canManageCommercial?<><button type="button" disabled={isActioning} onClick={()=>setActivityModalLead(lead)} className="rounded-lg bg-gray-100 px-3 py-2 text-xs font-bold">Registrar contato</button><button type="button" disabled={isActioning} onClick={()=>openDemo(lead)} className="rounded-lg bg-gray-100 px-3 py-2 text-xs font-bold">Agendar demo</button>{assignment?.team_id?<a href={`#/admin/propostas?lead=${lead.id}`} className="rounded-lg bg-orange-100 px-3 py-2 text-xs font-bold text-[#B66E45]">Criar proposta</a>:<button type="button" onClick={()=>setAssignModalLead(lead)} className="rounded-lg bg-orange-100 px-3 py-2 text-xs font-bold text-[#B66E45]">Atribuir antes da proposta</button>}{allowedNext[0]?<button type="button" disabled={isActioning} onClick={()=>{setTransitionModal({lead,targetStatus:allowedNext[0]});setTransitionReason("");}} className="rounded-lg border border-[#B66E45]/30 px-3 py-2 text-xs font-bold text-[#B66E45]">Avançar etapa</button>:null}</>:null}</div></article>;})}</div><div className="hidden overflow-x-auto md:block">
             <table className="w-full text-sm">
               <thead className="bg-[#F6F5F2] text-left">
                 <tr>
@@ -301,15 +311,15 @@ export function LeadsPage() {
                           <button disabled={isActioning} onClick={() => setAssignModalLead(lead)} className="rounded-lg bg-gray-100 px-2 py-1 text-xs hover:bg-gray-200">
                             Atribuir
                           </button>
-                          <button disabled={isActioning} onClick={() => setActivityModalLead(lead)} className="rounded-lg bg-gray-100 px-2 py-1 text-xs hover:bg-gray-200">
+                          {canManageCommercial ? <button type="button" disabled={isActioning} onClick={() => setActivityModalLead(lead)} className="rounded-lg bg-gray-100 px-2 py-1 text-xs hover:bg-gray-200">
                             Registrar contato
-                          </button>
-                          <button disabled={isActioning} onClick={() => setDemoModalLead(lead)} className="rounded-lg bg-gray-100 px-2 py-1 text-xs hover:bg-gray-200">
+                          </button> : null}
+                          {canManageCommercial ? <button type="button" disabled={isActioning} onClick={() => openDemo(lead)} className="rounded-lg bg-gray-100 px-2 py-1 text-xs hover:bg-gray-200">
                             Agendar demo
-                          </button>
-                          <a href={`#/admin/propostas?lead=${lead.id}`} className="rounded-lg bg-orange-100 px-2 py-1 text-xs font-semibold text-[#B66E45] hover:bg-orange-200">
+                          </button> : null}
+                          {canManageCommercial ? (assignment?.team_id ? <a href={`#/admin/propostas?lead=${lead.id}`} className="rounded-lg bg-orange-100 px-2 py-1 text-xs font-semibold text-[#B66E45] hover:bg-orange-200">
                             Criar proposta
-                          </a>
+                          </a> : <button type="button" onClick={() => setAssignModalLead(lead)} className="rounded-lg bg-orange-100 px-2 py-1 text-xs font-semibold text-[#B66E45] hover:bg-orange-200">Atribuir antes da proposta</button>) : null}
                         </div>
                       </td>
                     </tr>
@@ -372,7 +382,7 @@ export function LeadsPage() {
               <button type="button" onClick={() => setTransitionModal(null)} className="rounded-xl border px-4 py-2 text-sm">
                 Cancelar
               </button>
-              <button disabled={isActioning || !transitionReason.trim()} className="rounded-xl bg-[#B66E45] px-4 py-2 text-sm font-bold text-white disabled:opacity-50">
+              <button type="submit" disabled={isActioning || !transitionReason.trim()} className="rounded-xl bg-[#B66E45] px-4 py-2 text-sm font-bold text-white disabled:opacity-50">
                 {isActioning ? <Loader2 className="w-4 h-4 animate-spin" /> : 'Confirmar etapa'}
               </button>
             </div>
@@ -413,7 +423,7 @@ export function LeadsPage() {
               <button type="button" onClick={() => setActivityModalLead(null)} className="rounded-xl border px-4 py-2 text-sm">
                 Cancelar
               </button>
-              <button disabled={isActioning || !activityForm.subject.trim()} className="rounded-xl bg-[#B66E45] px-4 py-2 text-sm font-bold text-white disabled:opacity-50">
+              <button type="submit" disabled={isActioning || !activityForm.subject.trim()} className="rounded-xl bg-[#B66E45] px-4 py-2 text-sm font-bold text-white disabled:opacity-50">
                 {isActioning ? <Loader2 className="w-4 h-4 animate-spin" /> : 'Salvar Atividade'}
               </button>
             </div>
@@ -430,6 +440,18 @@ export function LeadsPage() {
               <button type="button" onClick={() => setDemoModalLead(null)} aria-label="Fechar"><X className="w-5 h-5" /></button>
             </div>
             <p className="text-xs text-gray-500">Lead: {demoModalLead.name} ({demoModalLead.company})</p>
+            <label className="block text-sm font-medium">
+              Equipe responsável *
+              <select
+                required
+                value={demoForm.team_id}
+                onChange={e => setDemoForm({ ...demoForm, team_id: e.target.value })}
+                className="mt-1 w-full rounded-xl border border-[#DDD8CF] p-2.5 text-sm"
+              >
+                <option value="">Selecione a equipe</option>
+                {teams.map(team => <option key={team.id} value={team.id}>{team.name}</option>)}
+              </select>
+            </label>
             <label className="block text-sm font-medium">
               Data e Hora *
               <input
@@ -454,7 +476,7 @@ export function LeadsPage() {
               <button type="button" onClick={() => setDemoModalLead(null)} className="rounded-xl border px-4 py-2 text-sm">
                 Cancelar
               </button>
-              <button disabled={isActioning || !demoForm.starts_at} className="rounded-xl bg-[#B66E45] px-4 py-2 text-sm font-bold text-white disabled:opacity-50">
+              <button type="submit" disabled={isActioning || !demoForm.starts_at || !demoForm.team_id} className="rounded-xl bg-[#B66E45] px-4 py-2 text-sm font-bold text-white disabled:opacity-50">
                 {isActioning ? <Loader2 className="w-4 h-4 animate-spin" /> : 'Agendar Demo'}
               </button>
             </div>

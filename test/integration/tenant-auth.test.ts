@@ -140,4 +140,33 @@ describe('Tenant and Platform Middlewares', () => {
       assert.strictEqual(res.status.calls[0][0], 403);
     });
   });
+
+  describe('resolvePlatformContext', () => {
+    it('injeta equipes e equipes gerenciadas usadas pelos escopos do Admin', async () => {
+      const req = reqHelper('token', undefined, 'userA');
+      const resultChain = (result: any) => {
+        const chain: any = { select: () => chain, eq: () => chain, maybeSingle: async () => result };
+        chain.then = (resolve: any) => Promise.resolve(result).then(resolve);
+        return chain;
+      };
+      req.supabaseAdmin = {
+        from: (table: string) => {
+          if (table === 'platform_members') return resultChain({ data: { id: 'member-1', status: 'active', relationship_type: 'employee', platform_roles: { id: 'role-1', key: 'manager' } } });
+          if (table === 'platform_role_permissions') return resultChain({ data: [{ platform_permissions: { key: 'platform.commercial.manage' } }] });
+          if (table === 'platform_team_members') return resultChain({ data: [
+            { team_role: 'manager', platform_teams: { id: 'team-1', member_lead_visibility: 'team' } },
+            { team_role: 'member', platform_teams: { id: 'team-2', member_lead_visibility: 'own' } },
+          ], error: null });
+          return resultChain({ data: [] });
+        },
+      };
+      const res = resHelper();
+      const next = fnMock();
+      await resolvePlatformContext(req as any, res as any, next as any);
+      assert.strictEqual(next.calls.length, 1);
+      assert.deepStrictEqual(req.platformContext.teams.map((team: any) => team.id), ['team-1', 'team-2']);
+      assert.deepStrictEqual(req.platformContext.managedTeams.map((team: any) => team.id), ['team-1']);
+      assert.strictEqual(req.platformContext.relationshipType, 'employee');
+    });
+  });
 });

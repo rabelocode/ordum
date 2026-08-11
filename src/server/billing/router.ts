@@ -26,6 +26,30 @@ function hasPermission(context: any, permission: string) {
   return context.role?.key === 'admin' || context.permissions.includes(permission);
 }
 
+async function activeCommercialApproverUserIds(db: any) {
+  const members = await db.from('platform_members').select('user_id,role_id').eq('status', 'active');
+  if (members.error || !members.data?.length) return new Set<string>();
+  const roleIds = [...new Set<string>(members.data.map((member: any) => member.role_id).filter(Boolean))];
+  const [roles, grants] = await Promise.all([
+    db.from('platform_roles').select('id,key').in('id', roleIds),
+    db.from('platform_role_permissions').select('role_id,platform_permissions!inner(key)').in('role_id', roleIds),
+  ]);
+  if (roles.error || grants.error) return new Set<string>();
+  const approvingRoles = new Set<string>((roles.data || []).filter((role: any) => role.key === 'admin').map((role: any) => role.id));
+  for (const grant of grants.data || []) {
+    const key = grant.platform_permissions?.key;
+    if (key === 'platform.commercial.approve' || key === 'platform.commercial.manage') approvingRoles.add(grant.role_id);
+  }
+  return new Set<string>(members.data.filter((member: any) => approvingRoles.has(member.role_id)).map((member: any) => member.user_id));
+}
+
+export function commercialApprovalAction(item: any, actorUserId: string, approverUserIds: Set<string>, allowed: boolean) {
+  if (item.status !== 'pending_approval') return null;
+  if (!allowed) return 'not_permitted';
+  if (item.created_by_user_id !== actorUserId) return 'available';
+  return [...approverUserIds].some((userId) => userId !== actorUserId) ? 'requires_another_approver' : 'available';
+}
+
 export function webhookTokenMatches(actual: string | undefined, expected: string | undefined) {
   if (!actual || !expected) return false;
   const left = Buffer.from(actual);
@@ -807,8 +831,13 @@ export function createBillingRouters(getSupabaseAdmin: () => any) {
     const { data, error } = await query;
     if (error) return res.status(500).json({ error: error.message });
     const scoped = req.platformContext.role.key === 'admin' ? data : (data || []).filter((item: any) => canReadAssignedResource(req.platformContext, item, 'member_lead_visibility'));
+    const approverUserIds = await activeCommercialApproverUserIds(getSupabaseAdmin());
+    const withActions = scoped.map((item: any) => ({
+      ...item,
+      approval_action: commercialApprovalAction(item, req.user.id, approverUserIds, hasPermission(req.platformContext, 'platform.commercial.approve')),
+    }));
     const { page, pageSize, from, to } = parsePagination(req.query);
-    return res.json(req.query.page !== undefined ? pageResult(scoped.slice(from, to + 1), scoped.length, page, pageSize) : scoped);
+    return res.json(req.query.page !== undefined ? pageResult(withActions.slice(from, to + 1), withActions.length, page, pageSize) : withActions);
   });
 
   adminRouter.post('/commercial/proposals', authenticateRequest, resolvePlatformContext, requirePlatformPermission('platform.commercial.manage'), async (req: any, res: any) => {
@@ -818,6 +847,10 @@ export function createBillingRouters(getSupabaseAdmin: () => any) {
     const db = getSupabaseAdmin();
     const assignmentResult = await db.from('platform_lead_assignments').select('*').eq('lead_id', input.lead_id).maybeSingle();
     const assignment = assignmentResult.data;
+    if (assignmentResult.error) return res.status(500).json({ error: 'Não foi possível verificar a equipe responsável pelo lead.' });
+    if (!assignment?.team_id) {
+      return res.status(409).json({ error: 'lead_assignment_required', message: 'Atribua o lead a uma equipe antes de criar a proposta.' });
+    }
     if (req.platformContext.role.key !== 'admin' && (!assignment || !canReadAssignedResource(req.platformContext, assignment, 'member_lead_visibility'))) {
       return res.status(403).json({ error: 'Lead fora do seu escopo.' });
     }
@@ -870,7 +903,7 @@ export function createBillingRouters(getSupabaseAdmin: () => any) {
     }
 
     const { data, error } = await db.from('commercial_proposals').insert({
-      lead_id: input.lead_id, plan_id: input.plan_id, team_id: input.team_id || assignment?.team_id || null,
+      lead_id: input.lead_id, plan_id: input.plan_id, team_id: input.team_id || assignment.team_id,
       owner_platform_member_id: ownerId,
       status: 'pending_approval', amount_cents: amountCents, cycle: input.cycle,
       billing_type: input.billing_type, valid_until: input.valid_until || null,
@@ -984,8 +1017,13 @@ export function createBillingRouters(getSupabaseAdmin: () => any) {
     const { data, error } = await query;
     if (error) return res.status(500).json({ error: error.message });
     const scoped = req.platformContext.role.key === 'admin' ? data : (data || []).filter((item: any) => canReadAssignedResource(req.platformContext, item, 'member_client_visibility'));
+    const approverUserIds = await activeCommercialApproverUserIds(getSupabaseAdmin());
+    const withActions = scoped.map((item: any) => ({
+      ...item,
+      approval_action: commercialApprovalAction(item, req.user.id, approverUserIds, hasPermission(req.platformContext, 'platform.commercial.approve')),
+    }));
     const { page, pageSize, from, to } = parsePagination(req.query);
-    return res.json(req.query.page !== undefined ? pageResult(scoped.slice(from, to + 1), scoped.length, page, pageSize) : scoped);
+    return res.json(req.query.page !== undefined ? pageResult(withActions.slice(from, to + 1), withActions.length, page, pageSize) : withActions);
   });
 
   adminRouter.post('/commercial/contracts', authenticateRequest, resolvePlatformContext, requirePlatformPermission('platform.commercial.manage'), async (req: any, res: any) => {

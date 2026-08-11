@@ -155,10 +155,31 @@ export const resolvePlatformContext = async (req: Request, res: Response, next: 
             }
         }
 
+        const { data: teamMemberships, error: teamMembershipsError } = await db
+            .from('platform_team_members')
+            .select('team_role, platform_teams(*)')
+            .eq('platform_member_id', platformMember.id)
+            .eq('status', 'active');
+
+        if (teamMembershipsError) {
+            return res.status(500).json({ error: "Platform team resolution error" });
+        }
+
+        const teams = (teamMemberships || [])
+            .map((membership: any) => membership.platform_teams)
+            .filter(Boolean);
+        const managedTeams = (teamMemberships || [])
+            .filter((membership: any) => membership.team_role === 'manager')
+            .map((membership: any) => membership.platform_teams)
+            .filter(Boolean);
+
         (req as any).platformContext = {
             platformMember,
             role,
-            permissions
+            relationshipType: platformMember.relationship_type,
+            permissions,
+            teams,
+            managedTeams,
         };
 
         next();

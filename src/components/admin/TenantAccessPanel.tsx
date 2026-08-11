@@ -158,7 +158,7 @@ export function TenantAccessPanel({
             <button type="button" onClick={() => setShowInvite(false)} className="rounded-xl border bg-white px-4 py-2.5 text-sm font-bold">
               Cancelar
             </button>
-            <button disabled={saving} className="inline-flex items-center justify-center gap-2 rounded-xl bg-[#B66E45] px-4 py-2.5 text-sm font-bold text-white disabled:opacity-60">
+            <button type="submit" disabled={saving} className="inline-flex items-center justify-center gap-2 rounded-xl bg-[#B66E45] px-4 py-2.5 text-sm font-bold text-white disabled:opacity-60">
               {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <UserPlus className="h-4 w-4" />}
               Enviar convite
             </button>

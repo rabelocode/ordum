@@ -373,29 +373,74 @@ export function createAdminLeadsRouter(getSupabaseAdmin: any, _old_requirePlatfo
     }
   });
 
+  const scheduleDemoSchema = z.object({
+    starts_at: z.string().min(1),
+    notes: z.string().trim().max(2000).optional().nullable(),
+    team_id: z.string().uuid().optional().nullable(),
+    owner_platform_member_id: z.string().uuid().optional().nullable(),
+  });
+
   router.post('/:id/demos', authenticateRequest, resolvePlatformContext, requirePlatformPermission(['platform.commercial.manage']), async (req: any, res: any) => {
     try {
       const db = getSupabaseAdmin();
+      const parsed = scheduleDemoSchema.safeParse(req.body);
+      if (!parsed.success) return res.status(400).json({ error: 'Informe uma data, hora e equipe válidas para a demonstração.' });
+      const input = parsed.data;
       const lead = await db.from('marketing_leads').select('*').eq('id', req.params.id).maybeSingle();
       if (lead.error || !lead.data) return res.status(404).json({ error: 'Lead não encontrado.' });
       const assignmentResult = await db.from('platform_lead_assignments').select('*').eq('lead_id', req.params.id).maybeSingle();
-      if (!assignmentResult.data || !canReadAssignedResource(req.platformContext, assignmentResult.data, 'member_lead_visibility')) {
+      let assignment = assignmentResult.data;
+      if (!assignment?.team_id) {
+        if (req.platformContext.role?.key !== 'admin') {
+          return res.status(409).json({ error: 'lead_assignment_required' });
+        }
+        if (!input.team_id) {
+          return res.status(409).json({ error: 'lead_assignment_required' });
+        }
+        const team = await db.from('platform_teams').select('id,status').eq('id', input.team_id).maybeSingle();
+        if (team.error || !team.data || team.data.status !== 'active') {
+          return res.status(400).json({ error: 'Selecione uma equipe comercial ativa.' });
+        }
+        const assignmentPayload = {
+          lead_id: req.params.id,
+          team_id: input.team_id,
+          owner_platform_member_id: input.owner_platform_member_id || req.platformContext.platformMember.id,
+          assigned_by_user_id: req.user.id,
+        };
+        const savedAssignment = assignment
+          ? await db.from('platform_lead_assignments').update(assignmentPayload).eq('lead_id', req.params.id).select().single()
+          : await db.from('platform_lead_assignments').insert(assignmentPayload).select().single();
+        if (savedAssignment.error || !savedAssignment.data) {
+          return res.status(400).json({ error: 'Não foi possível vincular o lead à equipe selecionada.' });
+        }
+        assignment = savedAssignment.data;
+        await db.from('platform_audit_logs').insert({
+          actor_user_id: req.user.id,
+          action: 'commercial.lead.assigned_for_demo',
+          entity_type: 'marketing_leads',
+          entity_id: req.params.id,
+          team_id: assignment.team_id,
+          severity: 'info',
+          ...auditContext(req, { result: 'success', after: { team_id: assignment.team_id, owner_platform_member_id: assignment.owner_platform_member_id } }),
+        });
+      }
+      if (!canReadAssignedResource(req.platformContext, assignment, 'member_lead_visibility')) {
         return res.status(403).json({ error: 'Lead fora do seu escopo.' });
       }
-      if (req.platformContext.role.key !== 'admin' && req.body.team_id && req.body.team_id !== assignmentResult.data.team_id) {
+      if (input.team_id && input.team_id !== assignment.team_id) {
          return res.status(403).json({ error: 'A demo deve pertencer à mesma equipe do lead.' });
       }
 
-      const starts_at = req.body.starts_at;
+      const starts_at = input.starts_at;
       if (!starts_at || isNaN(new Date(starts_at).getTime())) return res.status(400).json({ error: 'Data/hora inválida.' });
 
       const { data, error } = await db.from('commercial_demos').insert({
         lead_id: req.params.id,
-        team_id: req.body.team_id || assignmentResult.data.team_id,
-        owner_platform_member_id: req.body.owner_platform_member_id || assignmentResult.data.owner_platform_member_id || req.platformContext.platformMember.id,
+        team_id: assignment.team_id,
+        owner_platform_member_id: input.owner_platform_member_id || assignment.owner_platform_member_id || req.platformContext.platformMember.id,
         status: 'scheduled',
         starts_at,
-        notes: req.body.notes || null,
+        notes: input.notes || null,
       }).select().single();
       if (error) return res.status(400).json({ error: error.message });
 
@@ -404,7 +449,7 @@ export function createAdminLeadsRouter(getSupabaseAdmin: any, _old_requirePlatfo
         activity_type: 'demo',
         subject: 'Demonstração agendada',
         status: 'completed',
-        result: `Demo agendada para ${starts_at}. ${req.body.notes || ''}`,
+        result: `Demo agendada para ${starts_at}. ${input.notes || ''}`,
         created_by_user_id: req.user.id
       });
       await db.from('marketing_leads').update({ next_action: 'Demonstração', next_action_at: starts_at }).eq('id', req.params.id);

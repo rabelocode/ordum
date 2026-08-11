@@ -176,10 +176,19 @@ var init_tenantAuth = __esm({
             permissions = rolePerms.map((rp) => rp.platform_permissions?.key).filter(Boolean);
           }
         }
+        const { data: teamMemberships, error: teamMembershipsError } = await db.from("platform_team_members").select("team_role, platform_teams(*)").eq("platform_member_id", platformMember.id).eq("status", "active");
+        if (teamMembershipsError) {
+          return res.status(500).json({ error: "Platform team resolution error" });
+        }
+        const teams = (teamMemberships || []).map((membership) => membership.platform_teams).filter(Boolean);
+        const managedTeams = (teamMemberships || []).filter((membership) => membership.team_role === "manager").map((membership) => membership.platform_teams).filter(Boolean);
         req.platformContext = {
           platformMember,
           role,
-          permissions
+          relationshipType: platformMember.relationship_type,
+          permissions,
+          teams,
+          managedTeams
         };
         next();
       } catch (e) {
@@ -629,6 +638,7 @@ var router_exports = {};
 __export(router_exports, {
   acceptCommercialProposalCore: () => acceptCommercialProposalCore,
   buildDeterministicSandboxEvent: () => buildDeterministicSandboxEvent,
+  commercialApprovalAction: () => commercialApprovalAction,
   createBillingRouters: () => createBillingRouters,
   createContractFromProposalCore: () => createContractFromProposalCore,
   executeContractItemsRollback: () => executeContractItemsRollback,
@@ -645,6 +655,31 @@ import { createHash, timingSafeEqual } from "node:crypto";
 import { Router as Router6 } from "express";
 import { waitUntil } from "@vercel/functions";
 import { z as z6 } from "zod";
+function hasPermission2(context, permission) {
+  return context.role?.key === "admin" || context.permissions.includes(permission);
+}
+async function activeCommercialApproverUserIds(db) {
+  const members = await db.from("platform_members").select("user_id,role_id").eq("status", "active");
+  if (members.error || !members.data?.length) return /* @__PURE__ */ new Set();
+  const roleIds = [...new Set(members.data.map((member) => member.role_id).filter(Boolean))];
+  const [roles, grants] = await Promise.all([
+    db.from("platform_roles").select("id,key").in("id", roleIds),
+    db.from("platform_role_permissions").select("role_id,platform_permissions!inner(key)").in("role_id", roleIds)
+  ]);
+  if (roles.error || grants.error) return /* @__PURE__ */ new Set();
+  const approvingRoles = new Set((roles.data || []).filter((role) => role.key === "admin").map((role) => role.id));
+  for (const grant of grants.data || []) {
+    const key = grant.platform_permissions?.key;
+    if (key === "platform.commercial.approve" || key === "platform.commercial.manage") approvingRoles.add(grant.role_id);
+  }
+  return new Set(members.data.filter((member) => approvingRoles.has(member.role_id)).map((member) => member.user_id));
+}
+function commercialApprovalAction(item, actorUserId, approverUserIds, allowed) {
+  if (item.status !== "pending_approval") return null;
+  if (!allowed) return "not_permitted";
+  if (item.created_by_user_id !== actorUserId) return "available";
+  return [...approverUserIds].some((userId) => userId !== actorUserId) ? "requires_another_approver" : "available";
+}
 function webhookTokenMatches(actual, expected) {
   if (!actual || !expected) return false;
   const left = Buffer.from(actual);
@@ -1357,8 +1392,13 @@ function createBillingRouters(getSupabaseAdmin2) {
     const { data, error } = await query;
     if (error) return res.status(500).json({ error: error.message });
     const scoped = req.platformContext.role.key === "admin" ? data : (data || []).filter((item) => canReadAssignedResource(req.platformContext, item, "member_lead_visibility"));
+    const approverUserIds = await activeCommercialApproverUserIds(getSupabaseAdmin2());
+    const withActions = scoped.map((item) => ({
+      ...item,
+      approval_action: commercialApprovalAction(item, req.user.id, approverUserIds, hasPermission2(req.platformContext, "platform.commercial.approve"))
+    }));
     const { page, pageSize, from, to } = parsePagination(req.query);
-    return res.json(req.query.page !== void 0 ? pageResult(scoped.slice(from, to + 1), scoped.length, page, pageSize) : scoped);
+    return res.json(req.query.page !== void 0 ? pageResult(withActions.slice(from, to + 1), withActions.length, page, pageSize) : withActions);
   });
   adminRouter.post("/commercial/proposals", authenticateRequest, resolvePlatformContext, requirePlatformPermission("platform.commercial.manage"), async (req, res) => {
     const input = req.body;
@@ -1367,6 +1407,10 @@ function createBillingRouters(getSupabaseAdmin2) {
     const db = getSupabaseAdmin2();
     const assignmentResult = await db.from("platform_lead_assignments").select("*").eq("lead_id", input.lead_id).maybeSingle();
     const assignment = assignmentResult.data;
+    if (assignmentResult.error) return res.status(500).json({ error: "N\xE3o foi poss\xEDvel verificar a equipe respons\xE1vel pelo lead." });
+    if (!assignment?.team_id) {
+      return res.status(409).json({ error: "lead_assignment_required", message: "Atribua o lead a uma equipe antes de criar a proposta." });
+    }
     if (req.platformContext.role.key !== "admin" && (!assignment || !canReadAssignedResource(req.platformContext, assignment, "member_lead_visibility"))) {
       return res.status(403).json({ error: "Lead fora do seu escopo." });
     }
@@ -1407,7 +1451,7 @@ function createBillingRouters(getSupabaseAdmin2) {
     const { data, error } = await db.from("commercial_proposals").insert({
       lead_id: input.lead_id,
       plan_id: input.plan_id,
-      team_id: input.team_id || assignment?.team_id || null,
+      team_id: input.team_id || assignment.team_id,
       owner_platform_member_id: ownerId,
       status: "pending_approval",
       amount_cents: amountCents,
@@ -1521,8 +1565,13 @@ function createBillingRouters(getSupabaseAdmin2) {
     const { data, error } = await query;
     if (error) return res.status(500).json({ error: error.message });
     const scoped = req.platformContext.role.key === "admin" ? data : (data || []).filter((item) => canReadAssignedResource(req.platformContext, item, "member_client_visibility"));
+    const approverUserIds = await activeCommercialApproverUserIds(getSupabaseAdmin2());
+    const withActions = scoped.map((item) => ({
+      ...item,
+      approval_action: commercialApprovalAction(item, req.user.id, approverUserIds, hasPermission2(req.platformContext, "platform.commercial.approve"))
+    }));
     const { page, pageSize, from, to } = parsePagination(req.query);
-    return res.json(req.query.page !== void 0 ? pageResult(scoped.slice(from, to + 1), scoped.length, page, pageSize) : scoped);
+    return res.json(req.query.page !== void 0 ? pageResult(withActions.slice(from, to + 1), withActions.length, page, pageSize) : withActions);
   });
   adminRouter.post("/commercial/contracts", authenticateRequest, resolvePlatformContext, requirePlatformPermission("platform.commercial.manage"), async (req, res) => {
     return res.status(405).json({ error: "Crie o contrato a partir de uma proposta aprovada." });
@@ -2289,27 +2338,69 @@ function createAdminLeadsRouter(getSupabaseAdmin2, _old_requirePlatformAuth) {
       res.status(500).json({ error: e.message });
     }
   });
+  const scheduleDemoSchema = z.object({
+    starts_at: z.string().min(1),
+    notes: z.string().trim().max(2e3).optional().nullable(),
+    team_id: z.string().uuid().optional().nullable(),
+    owner_platform_member_id: z.string().uuid().optional().nullable()
+  });
   router.post("/:id/demos", authenticateRequest, resolvePlatformContext, requirePlatformPermission(["platform.commercial.manage"]), async (req, res) => {
     try {
       const db = getSupabaseAdmin2();
+      const parsed = scheduleDemoSchema.safeParse(req.body);
+      if (!parsed.success) return res.status(400).json({ error: "Informe uma data, hora e equipe v\xE1lidas para a demonstra\xE7\xE3o." });
+      const input = parsed.data;
       const lead = await db.from("marketing_leads").select("*").eq("id", req.params.id).maybeSingle();
       if (lead.error || !lead.data) return res.status(404).json({ error: "Lead n\xE3o encontrado." });
       const assignmentResult = await db.from("platform_lead_assignments").select("*").eq("lead_id", req.params.id).maybeSingle();
-      if (!assignmentResult.data || !canReadAssignedResource(req.platformContext, assignmentResult.data, "member_lead_visibility")) {
+      let assignment = assignmentResult.data;
+      if (!assignment?.team_id) {
+        if (req.platformContext.role?.key !== "admin") {
+          return res.status(409).json({ error: "lead_assignment_required" });
+        }
+        if (!input.team_id) {
+          return res.status(409).json({ error: "lead_assignment_required" });
+        }
+        const team = await db.from("platform_teams").select("id,status").eq("id", input.team_id).maybeSingle();
+        if (team.error || !team.data || team.data.status !== "active") {
+          return res.status(400).json({ error: "Selecione uma equipe comercial ativa." });
+        }
+        const assignmentPayload = {
+          lead_id: req.params.id,
+          team_id: input.team_id,
+          owner_platform_member_id: input.owner_platform_member_id || req.platformContext.platformMember.id,
+          assigned_by_user_id: req.user.id
+        };
+        const savedAssignment = assignment ? await db.from("platform_lead_assignments").update(assignmentPayload).eq("lead_id", req.params.id).select().single() : await db.from("platform_lead_assignments").insert(assignmentPayload).select().single();
+        if (savedAssignment.error || !savedAssignment.data) {
+          return res.status(400).json({ error: "N\xE3o foi poss\xEDvel vincular o lead \xE0 equipe selecionada." });
+        }
+        assignment = savedAssignment.data;
+        await db.from("platform_audit_logs").insert({
+          actor_user_id: req.user.id,
+          action: "commercial.lead.assigned_for_demo",
+          entity_type: "marketing_leads",
+          entity_id: req.params.id,
+          team_id: assignment.team_id,
+          severity: "info",
+          ...auditContext(req, { result: "success", after: { team_id: assignment.team_id, owner_platform_member_id: assignment.owner_platform_member_id } })
+        });
+      }
+      if (!canReadAssignedResource(req.platformContext, assignment, "member_lead_visibility")) {
         return res.status(403).json({ error: "Lead fora do seu escopo." });
       }
-      if (req.platformContext.role.key !== "admin" && req.body.team_id && req.body.team_id !== assignmentResult.data.team_id) {
+      if (input.team_id && input.team_id !== assignment.team_id) {
         return res.status(403).json({ error: "A demo deve pertencer \xE0 mesma equipe do lead." });
       }
-      const starts_at = req.body.starts_at;
+      const starts_at = input.starts_at;
       if (!starts_at || isNaN(new Date(starts_at).getTime())) return res.status(400).json({ error: "Data/hora inv\xE1lida." });
       const { data, error } = await db.from("commercial_demos").insert({
         lead_id: req.params.id,
-        team_id: req.body.team_id || assignmentResult.data.team_id,
-        owner_platform_member_id: req.body.owner_platform_member_id || assignmentResult.data.owner_platform_member_id || req.platformContext.platformMember.id,
+        team_id: assignment.team_id,
+        owner_platform_member_id: input.owner_platform_member_id || assignment.owner_platform_member_id || req.platformContext.platformMember.id,
         status: "scheduled",
         starts_at,
-        notes: req.body.notes || null
+        notes: input.notes || null
       }).select().single();
       if (error) return res.status(400).json({ error: error.message });
       await db.from("commercial_activities").insert({
@@ -2317,7 +2408,7 @@ function createAdminLeadsRouter(getSupabaseAdmin2, _old_requirePlatformAuth) {
         activity_type: "demo",
         subject: "Demonstra\xE7\xE3o agendada",
         status: "completed",
-        result: `Demo agendada para ${starts_at}. ${req.body.notes || ""}`,
+        result: `Demo agendada para ${starts_at}. ${input.notes || ""}`,
         created_by_user_id: req.user.id
       });
       await db.from("marketing_leads").update({ next_action: "Demonstra\xE7\xE3o", next_action_at: starts_at }).eq("id", req.params.id);
@@ -4528,7 +4619,7 @@ function createIntegrityRouter(getSupabaseAdmin2, authOverrides) {
   const tenantId = (req) => req.tenantContext.tenant.id;
   const membershipId = (req) => req.tenantContext.membership.id;
   const permissions = (req) => req.tenantContext.permissions || [];
-  const hasPermission2 = (req, permission) => permissions(req).includes(permission);
+  const hasPermission3 = (req, permission) => permissions(req).includes(permission);
   const csvCell2 = (value) => {
     let text = value == null ? "" : String(value);
     if (/^[=+\-@\t\r]/.test(text)) text = `'${text}`;
@@ -4596,8 +4687,8 @@ function createIntegrityRouter(getSupabaseAdmin2, authOverrides) {
     return (result.data || []).map((item) => item.committee_id);
   }
   async function scopeCaseQuery(query, db, req) {
-    if (hasPermission2(req, "integrity.cases.read")) return { query };
-    if (!hasPermission2(req, "integrity.cases.read_assigned"))
+    if (hasPermission3(req, "integrity.cases.read")) return { query };
+    if (!hasPermission3(req, "integrity.cases.read_assigned"))
       return { query: query.eq("id", "00000000-0000-0000-0000-000000000000") };
     const committees = await scopedCommitteeIds(db, req);
     const collaborators = await db.from("integrity_case_collaborators").select("case_id").eq("tenant_id", tenantId(req)).eq("membership_id", membershipId(req)).eq("active", true);
@@ -4888,7 +4979,7 @@ function createIntegrityRouter(getSupabaseAdmin2, authOverrides) {
       );
       if (!found.data) return res.status(404).json({ error: "Caso n\xE3o encontrado." });
       let identity = null;
-      if (hasPermission2(req, "integrity.identity.read")) {
+      if (hasPermission3(req, "integrity.identity.read")) {
         const identityResult = await db.from("integrity_report_identities").select("name,email,phone").eq("report_id", found.data.report_id).maybeSingle();
         if (identityResult.error) return res.status(500).json({ error: "N\xE3o foi poss\xEDvel preparar o relat\xF3rio." });
         identity = identityResult.data;
@@ -4968,7 +5059,7 @@ function createIntegrityRouter(getSupabaseAdmin2, authOverrides) {
       if (found.error || !found.data)
         return res.status(404).json({ error: "Caso n\xE3o encontrado." });
       const { to_status, reason, lock_version } = parsed.data;
-      const allowed = to_status === "reopened" ? hasPermission2(req, "integrity.cases.reopen") || hasPermission2(req, "integrity.cases.manage") : hasPermission2(req, "integrity.cases.investigate") || hasPermission2(req, "integrity.cases.manage");
+      const allowed = to_status === "reopened" ? hasPermission3(req, "integrity.cases.reopen") || hasPermission3(req, "integrity.cases.manage") : hasPermission3(req, "integrity.cases.investigate") || hasPermission3(req, "integrity.cases.manage");
       if (!allowed) return res.status(403).json({ error: "Voc\xEA n\xE3o possui permiss\xE3o para esta transi\xE7\xE3o." });
       if (!canTransitionIntegrityCase(found.data.status, to_status))
         return res.status(409).json({
@@ -5134,7 +5225,7 @@ function createIntegrityRouter(getSupabaseAdmin2, authOverrides) {
       if (!parsed.success)
         return res.status(400).json({ error: "Mensagem inv\xE1lida.", issues: parsed.error.issues });
       const messagePermission = parsed.data.visible_to_reporter ? "integrity.messages.send" : "integrity.notes.create";
-      if (!hasPermission2(req, messagePermission) && !hasPermission2(req, "integrity.cases.manage"))
+      if (!hasPermission3(req, messagePermission) && !hasPermission3(req, "integrity.cases.manage"))
         return res.status(403).json({ error: "Voc\xEA n\xE3o possui permiss\xE3o para este tipo de comunica\xE7\xE3o." });
       const db = getSupabaseAdmin2();
       const found = await findCase(db, req, req.params.id);
@@ -6190,7 +6281,7 @@ function createIntegrityRouter(getSupabaseAdmin2, authOverrides) {
     requireAny("integrity.dossier.export", "integrity.case_report.export"),
     asyncHandler(async (req, res) => {
       const includeIdentity = req.query.include_identity === "true";
-      if (includeIdentity && !hasPermission2(req, "integrity.identity.read"))
+      if (includeIdentity && !hasPermission3(req, "integrity.identity.read"))
         return res.status(403).json({ error: "A identidade exige permiss\xE3o espec\xEDfica." });
       const db = getSupabaseAdmin2();
       const found = await findCase(
