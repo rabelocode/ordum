@@ -67,8 +67,9 @@ export function CreateTeamModal({ isOpen, onClose, onSuccess }: { isOpen: boolea
           
           <form id="create-team-form" onSubmit={handleSubmit} className="space-y-4">
             <div>
-              <label className="block text-sm font-medium text-[#202322] mb-1">Nome da Equipe</label>
+              <label htmlFor="team-name" className="block text-sm font-medium text-[#202322] mb-1">Nome da Equipe</label>
               <input 
+                id="team-name"
                 required
                 type="text" 
                 className="w-full px-4 py-2 bg-white border border-[#DDD8CF] rounded-xl focus:outline-none focus:ring-2 focus:ring-[#B66E45]/20 focus:border-[#B66E45]"
@@ -78,8 +79,9 @@ export function CreateTeamModal({ isOpen, onClose, onSuccess }: { isOpen: boolea
             </div>
             
             <div>
-              <label className="block text-sm font-medium text-[#202322] mb-1">Descrição</label>
+              <label htmlFor="team-description" className="block text-sm font-medium text-[#202322] mb-1">Descrição</label>
               <textarea 
+                id="team-description"
                 className="w-full px-4 py-2 bg-white border border-[#DDD8CF] rounded-xl focus:outline-none focus:ring-2 focus:ring-[#B66E45]/20 focus:border-[#B66E45] resize-none h-20"
                 value={formData.description}
                 onChange={e => setFormData({...formData, description: e.target.value})}
@@ -88,8 +90,9 @@ export function CreateTeamModal({ isOpen, onClose, onSuccess }: { isOpen: boolea
             
             <div className="grid grid-cols-2 gap-4">
               <div>
-                <label className="block text-sm font-medium text-[#202322] mb-1">Tipo</label>
+                <label htmlFor="team-type" className="block text-sm font-medium text-[#202322] mb-1">Tipo</label>
                 <select 
+                  id="team-type"
                   className="w-full px-4 py-2 bg-white border border-[#DDD8CF] rounded-xl focus:outline-none focus:ring-2 focus:ring-[#B66E45]/20 focus:border-[#B66E45]"
                   value={formData.team_type}
                   onChange={e => setFormData({...formData, team_type: e.target.value})}
@@ -105,8 +108,9 @@ export function CreateTeamModal({ isOpen, onClose, onSuccess }: { isOpen: boolea
               </div>
               
               <div>
-                <label className="block text-sm font-medium text-[#202322] mb-1">Canal</label>
+                <label htmlFor="team-channel" className="block text-sm font-medium text-[#202322] mb-1">Canal</label>
                 <select 
+                  id="team-channel"
                   className="w-full px-4 py-2 bg-white border border-[#DDD8CF] rounded-xl focus:outline-none focus:ring-2 focus:ring-[#B66E45]/20 focus:border-[#B66E45]"
                   value={formData.channel}
                   onChange={e => setFormData({...formData, channel: e.target.value})}
@@ -123,8 +127,9 @@ export function CreateTeamModal({ isOpen, onClose, onSuccess }: { isOpen: boolea
               
               <div className="space-y-4">
                 <div>
-                  <label className="block text-sm font-medium text-[#202322] mb-1">Leads</label>
+                  <label htmlFor="team-lead-visibility" className="block text-sm font-medium text-[#202322] mb-1">Leads</label>
                   <select 
+                    id="team-lead-visibility"
                     className="w-full px-4 py-2 bg-white border border-[#DDD8CF] rounded-xl focus:outline-none focus:ring-2 focus:ring-[#B66E45]/20 focus:border-[#B66E45]"
                     value={formData.member_lead_visibility}
                     onChange={e => setFormData({...formData, member_lead_visibility: e.target.value})}
@@ -136,8 +141,9 @@ export function CreateTeamModal({ isOpen, onClose, onSuccess }: { isOpen: boolea
                 </div>
                 
                 <div>
-                  <label className="block text-sm font-medium text-[#202322] mb-1">Clientes</label>
+                  <label htmlFor="team-client-visibility" className="block text-sm font-medium text-[#202322] mb-1">Clientes</label>
                   <select 
+                    id="team-client-visibility"
                     className="w-full px-4 py-2 bg-white border border-[#DDD8CF] rounded-xl focus:outline-none focus:ring-2 focus:ring-[#B66E45]/20 focus:border-[#B66E45]"
                     value={formData.member_client_visibility}
                     onChange={e => setFormData({...formData, member_client_visibility: e.target.value})}

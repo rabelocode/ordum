@@ -57,6 +57,7 @@ test('commercial actions prevent predictable approval and demo errors before the
   assert.doesNotMatch(assignmentModal,/console\.error/);
   const proposals=read('src/pages/admin/ProposalsPage.tsx');
   assert.match(proposals,/Aguardando outra pessoa aprovadora/);
+  assert.match(proposals,/Prontas para enviar/);
   assert.match(proposals,/approval_action==='requires_another_approver'/);
   assert.match(proposals,/Atribua o lead a uma equipe antes de criar a proposta/);
   assert.match(read('src/server/billing/router.ts'),/lead_assignment_required/);
