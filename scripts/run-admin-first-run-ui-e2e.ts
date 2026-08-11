@@ -309,7 +309,7 @@ try {
     await memberSelect.selectOption(memberValue);
     await page.locator("#team-member-role").selectOption(role);
     await page.getByRole("button", { name: "Adicionar", exact: true }).click();
-    await page.getByText(email).waitFor();
+    await page.getByText(email).last().waitFor();
   }
   await shot(page, "02-team-ready");
   await page.setViewportSize({ width: 390, height: 844 });
