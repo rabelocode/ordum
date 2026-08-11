@@ -4551,7 +4551,7 @@ var listSchema = z7.object({
   from: z7.string().datetime().optional(),
   to: z7.string().datetime().optional(),
   sla: z7.enum(["due_soon", "overdue"]).optional(),
-  view: z7.enum(["all", "unassigned", "mine", "awaiting_reply", "closed"]).default("all"),
+  view: z7.enum(["all", "new", "unassigned", "mine", "awaiting_reply", "sla_critical", "closed"]).default("all"),
   page: z7.coerce.number().int().min(1).default(1),
   limit: z7.coerce.number().int().min(1).max(100).default(25),
   order: z7.enum([
@@ -4957,6 +4957,7 @@ function createIntegrityRouter(getSupabaseAdmin2, authOverrides) {
         { count: "exact" }
       ).eq("tenant_id", tenantId(req));
       query = (await scopeCaseQuery(query, db, req)).query;
+      if (q.view === "new") query = query.eq("status", "received");
       if (q.view === "unassigned") query = query.is("owner_membership_id", null).is("committee_id", null).not("status", "in", "(closed,archived)");
       if (q.view === "mine") query = query.eq("owner_membership_id", membershipId(req)).not("status", "in", "(closed,archived)");
       if (q.view === "closed") query = query.in("status", ["closed", "archived"]);
@@ -4991,6 +4992,10 @@ function createIntegrityRouter(getSupabaseAdmin2, authOverrides) {
       if (q.to) query = query.lte("created_at", q.to);
       const now = (/* @__PURE__ */ new Date()).toISOString();
       const soon = new Date(Date.now() + 864e5).toISOString();
+      if (q.view === "sla_critical")
+        query = query.or(
+          `and(first_action_at.is.null,first_response_due_at.lte.${soon}),treatment_due_at.lte.${soon}`
+        ).not("status", "in", "(closed,archived)");
       if (q.sla === "overdue")
         query = query.or(
           `and(first_action_at.is.null,first_response_due_at.lt.${now}),treatment_due_at.lt.${now}`
@@ -6754,12 +6759,13 @@ function createIntegrityPublicRouter(getSupabaseAdmin2) {
         return res.status(404).json({ error: "Canal n\xE3o encontrado, pausado ou indispon\xEDvel." });
       const channelRow = await db.from("integrity_channels").select("id,tenant_id,privacy_notice,confirmation_message").eq("public_slug", req.params.slug).eq("active", true).maybeSingle();
       if (channelRow.error || !channelRow.data) return res.status(404).json({ error: "Canal n\xE3o encontrado, pausado ou indispon\xEDvel." });
-      const [departments, fields] = await Promise.all([
+      const [departments, fields, organization] = await Promise.all([
         db.from("integrity_departments").select("id,unit_id,name").eq("tenant_id", channelRow.data.tenant_id).eq("active", true).order("name"),
-        db.from("integrity_custom_fields").select("id,field_key,label,help_text,field_type,required,options,sort_order").eq("tenant_id", channelRow.data.tenant_id).or(`channel_id.eq.${channelRow.data.id},channel_id.is.null`).eq("active", true).order("sort_order")
+        db.from("integrity_custom_fields").select("id,field_key,label,help_text,field_type,required,options,sort_order").eq("tenant_id", channelRow.data.tenant_id).or(`channel_id.eq.${channelRow.data.id},channel_id.is.null`).eq("active", true).order("sort_order"),
+        db.from("tenants").select("name").eq("id", channelRow.data.tenant_id).maybeSingle()
       ]);
-      if (departments.error || fields.error) return res.status(503).json({ error: "Configura\xE7\xE3o do canal temporariamente indispon\xEDvel." });
-      return res.json({ channel: { ...result.data, privacy_notice: channelRow.data.privacy_notice, confirmation_message: channelRow.data.confirmation_message, departments: departments.data || [], custom_fields: fields.data || [] } });
+      if (departments.error || fields.error || organization.error) return res.status(503).json({ error: "Configura\xE7\xE3o do canal temporariamente indispon\xEDvel." });
+      return res.json({ channel: { ...result.data, organization_name: organization.data?.name || result.data.channel_name, privacy_notice: channelRow.data.privacy_notice, confirmation_message: channelRow.data.confirmation_message, departments: departments.data || [], custom_fields: fields.data || [] } });
     })
   );
   router.post(

@@ -8,7 +8,7 @@ import { EmptyState, ErrorState, FilterSelect, Panel, Risk, statusLabel } from "
 
 type CaseFilters = { search:string; view:string; status:string; severity:string; sla:string; category_id:string; unit_id:string; committee_id:string; owner_id:string; order:string; direction:string };
 const DEFAULT_FILTERS: CaseFilters = { search:"",view:"all",status:"",severity:"",sla:"",category_id:"",unit_id:"",committee_id:"",owner_id:"",order:"updated_at",direction:"desc" };
-const VIEWS = [["all","Todos"],["unassigned","Não atribuídos"],["mine","Meus casos"],["awaiting_reply","Aguardando resposta"],["closed","Encerrados"]] as const;
+const VIEWS = [["all","Todos"],["new","Novos"],["unassigned","Sem responsável"],["mine","Meus casos"],["awaiting_reply","Aguardando resposta"],["sla_critical","SLA crítico"],["closed","Encerrados"]] as const;
 
 function dueAt(item:any){return [!item.first_action_at&&item.first_response_due_at,item.treatment_due_at].filter(Boolean).sort()[0]||item.sla_due_at||null;}
 function relativeActivity(value:string){const hours=Math.max(0,Math.floor((Date.now()-new Date(value).getTime())/36e5));if(hours<1)return "Agora";if(hours<24)return `Há ${hours}h`;const days=Math.floor(hours/24);return `Há ${days} dia${days===1?"":"s"}`;}

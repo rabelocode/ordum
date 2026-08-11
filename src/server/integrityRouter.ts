@@ -28,7 +28,7 @@ const listSchema = z.object({
   from: z.string().datetime().optional(),
   to: z.string().datetime().optional(),
   sla: z.enum(["due_soon", "overdue"]).optional(),
-  view: z.enum(["all", "unassigned", "mine", "awaiting_reply", "closed"]).default("all"),
+  view: z.enum(["all", "new", "unassigned", "mine", "awaiting_reply", "sla_critical", "closed"]).default("all"),
   page: z.coerce.number().int().min(1).default(1),
   limit: z.coerce.number().int().min(1).max(100).default(25),
   order: z
@@ -528,6 +528,7 @@ export function createIntegrityRouter(
         )
         .eq("tenant_id", tenantId(req));
       query = (await scopeCaseQuery(query, db, req)).query;
+      if (q.view === "new") query = query.eq("status", "received");
       if (q.view === "unassigned") query = query.is("owner_membership_id", null).is("committee_id", null).not("status", "in", "(closed,archived)");
       if (q.view === "mine") query = query.eq("owner_membership_id", membershipId(req)).not("status", "in", "(closed,archived)");
       if (q.view === "closed") query = query.in("status", ["closed", "archived"]);
@@ -566,6 +567,12 @@ export function createIntegrityRouter(
       if (q.to) query = query.lte("created_at", q.to);
       const now = new Date().toISOString();
       const soon = new Date(Date.now() + 864e5).toISOString();
+      if (q.view === "sla_critical")
+        query = query
+          .or(
+            `and(first_action_at.is.null,first_response_due_at.lte.${soon}),treatment_due_at.lte.${soon}`,
+          )
+          .not("status", "in", "(closed,archived)");
       if (q.sla === "overdue")
         query = query
           .or(

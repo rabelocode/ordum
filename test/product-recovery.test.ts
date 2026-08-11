@@ -20,9 +20,25 @@ test("navegação do Integridade apresenta áreas orientadas ao trabalho",()=>{
 
 test("caixa de casos possui visões rápidas, filtros recolhidos e lista mobile",()=>{
   const source=read("src/components/workspace/integrity/IntegrityCasesList.tsx");
-  for(const label of ["Todos","Não atribuídos","Meus casos","Aguardando resposta","Encerrados"]) assert.match(source,new RegExp(label));
+  for(const label of ["Todos","Novos","Sem responsável","Meus casos","Aguardando resposta","SLA crítico","Encerrados"]) assert.match(source,new RegExp(label));
   assert.match(source,/md:hidden/);
   assert.match(source,/Filtros avançados/);
+});
+
+test("canal público conduz o relato em seis etapas e entrega comprovante seguro",()=>{
+  const source=read("src/pages/public/IntegrityChannelPage.tsx");
+  for(const label of ["Sobre o ocorrido","Pessoas e local","Detalhes","Evidências","Identificação","Revisão"]) assert.match(source,new RegExp(label));
+  assert.match(source,/Copiar dados/);
+  assert.match(source,/Baixar comprovante/);
+  assert.match(source,/Seu relato/);
+});
+
+test("encerramento separa decisão interna da mensagem ao denunciante",()=>{
+  const source=read("src/components/workspace/integrity/CaseDecision.tsx");
+  assert.match(source,/Fundamentação interna/);
+  assert.match(source,/Somente a equipe de Integridade verá este conteúdo/);
+  assert.match(source,/Mensagem final ao denunciante/);
+  assert.match(source,/Antes de encerrar, confirme/);
 });
 
 test("comunicação exige confirmação explícita antes de mensagem externa",()=>{

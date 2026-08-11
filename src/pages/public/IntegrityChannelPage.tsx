@@ -1,6 +1,9 @@
 import React, { useEffect, useRef, useState } from "react";
 import {
   ArrowRight,
+  Check,
+  Clipboard,
+  Download,
   Eye,
   EyeOff,
   MessageSquare,
@@ -14,6 +17,7 @@ import { captureClientException } from "../../lib/observability";
 
 type Channel = {
   channel_name: string;
+  organization_name?: string;
   introduction?: string;
   instructions?: string;
   allows_anonymous: boolean;
@@ -73,6 +77,7 @@ async function publicIntegrity<T>(
 export function IntegrityChannelPage({ slug }: { slug: string }) {
   const [channel, setChannel] = useState<Channel | null>(null);
   const [mode, setMode] = useState<"report" | "track">("report");
+  const [reportStep, setReportStep] = useState(1);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -158,6 +163,9 @@ export function IntegrityChannelPage({ slug }: { slug: string }) {
         }),
       });
       setResult(response);
+      if (attachment) {
+        await uploadEvidenceFile(attachment, response.protocol, response.access_secret);
+      }
       captureAnalytics("report_submitted", {
         module: "integrity",
         status: "submitted",
@@ -174,6 +182,38 @@ export function IntegrityChannelPage({ slug }: { slug: string }) {
     } finally {
       setBusy(false);
     }
+  }
+
+  function validateStep() {
+    if (reportStep === 1 && !form.category) return "Escolha a categoria do relato para continuar.";
+    if (reportStep === 3 && (form.subject.trim().length < 3 || form.description.trim().length < 20)) return "Informe um assunto e descreva o ocorrido com pelo menos 20 caracteres.";
+    if (reportStep === 5 && form.reporter_mode === "identified" && form.name.trim().length < 2) return "Informe seu nome ou escolha permanecer anônimo.";
+    return "";
+  }
+
+  function nextStep() {
+    const message = validateStep();
+    if (message) return setError(message);
+    setError("");
+    setReportStep((current) => Math.min(6, current + 1));
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  }
+
+  async function copyReceipt() {
+    if (!result) return;
+    await navigator.clipboard.writeText(`Protocolo: ${result.protocol}\nCódigo de acesso: ${result.access_secret}`);
+    setUploadFeedback("Dados copiados. Guarde-os em um local seguro.");
+  }
+
+  function downloadReceipt() {
+    if (!result) return;
+    const text = [`Comprovante do Canal de Integridade`, ``, `Protocolo: ${result.protocol}`, `Código de acesso: ${result.access_secret}`, ``, `Guarde estas informações. Elas permitem acompanhar o relato e conversar com a equipe responsável.`].join("\n");
+    const url = URL.createObjectURL(new Blob([text], { type: "text/plain;charset=utf-8" }));
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `comprovante-${result.protocol}.txt`;
+    link.click();
+    URL.revokeObjectURL(url);
   }
 
   async function loadTracking(event: React.FormEvent) {
@@ -227,28 +267,26 @@ export function IntegrityChannelPage({ slug }: { slug: string }) {
       access_secret: credentials.secret,
     };
     if (!attachment || !access.protocol || !access.access_secret) return;
-    setBusy(true);
-    setUploadFeedback("");
-    try {
+    setBusy(true); setUploadFeedback("");
+    try { await uploadEvidenceFile(attachment, access.protocol, access.access_secret); }
+    catch (error: any) { setUploadFeedback(error.message); }
+    finally { setBusy(false); }
+  }
+  async function uploadEvidenceFile(file: File, protocol: string, secret: string) {
       const response = await fetch("/api/public/integrity/attachments", {
         method: "POST",
         headers: {
-          "Content-Type": attachment.type,
-          "x-file-name": attachment.name,
-          "x-integrity-protocol": access.protocol,
-          "x-integrity-secret": access.access_secret,
+          "Content-Type": file.type,
+          "x-file-name": file.name,
+          "x-integrity-protocol": protocol,
+          "x-integrity-secret": secret,
         },
-        body: attachment,
+        body: file,
       });
       const body = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(body.error || "Falha no upload.");
       setAttachment(null);
       setUploadFeedback("Anexo enviado com segurança.");
-    } catch (error: any) {
-      setUploadFeedback(error.message);
-    } finally {
-      setBusy(false);
-    }
   }
   async function downloadReporterEvidence(id: string) {
     try {
@@ -298,12 +336,12 @@ export function IntegrityChannelPage({ slug }: { slug: string }) {
           <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-full bg-white shadow-sm">
             <ShieldCheck className="h-8 w-8 text-[#3457D5]" />
           </div>
-          <h1 className="text-3xl font-bold text-[#202322]">
-            {channel.channel_name}
-          </h1>
+          <p className="text-xs font-bold uppercase tracking-[.2em] text-[#3457D5]">Canal seguro e confidencial</p>
+          <h1 className="mt-2 text-3xl font-bold text-[#202322]">Canal de Integridade — {channel.organization_name||channel.channel_name}</h1>
           <p className="mx-auto mt-3 max-w-2xl text-sm leading-6 text-[#626866]">
             {channel.introduction}
           </p>
+          <div className="mx-auto mt-5 grid max-w-2xl gap-2 text-left text-sm sm:grid-cols-2"><Trust text="Você pode fazer o relato de forma anônima."/><Trust text="A equipe pode conversar com você sem revelar sua identidade."/><Trust text="As informações são acessadas somente por pessoas autorizadas."/><Trust text="Relatar de boa-fé ajuda a construir um ambiente mais seguro."/></div>
         </header>
         <nav
           aria-label="Ações do canal"
@@ -312,6 +350,7 @@ export function IntegrityChannelPage({ slug }: { slug: string }) {
           <button
             onClick={() => {
               setMode("report");
+              setReportStep(1);
               setError("");
             }}
             className={`rounded-lg px-4 py-3 text-sm font-semibold ${mode === "report" ? "bg-[#3457D5] text-white" : "text-[#626866]"}`}
@@ -353,6 +392,8 @@ export function IntegrityChannelPage({ slug }: { slug: string }) {
                 onToggle={() => setShowSecret(!showSecret)}
               />
             </div>
+            <p className="mt-4 text-sm leading-6 text-[#626866]">Guarde essas informações. Elas permitem acompanhar o andamento e conversar com a equipe responsável sem revelar sua identidade.</p>
+            <div className="mt-5 grid gap-2 sm:grid-cols-2"><Button type="button" variant="outline" onClick={copyReceipt}><Clipboard className="mr-2 h-4 w-4"/>Copiar dados</Button><Button type="button" variant="outline" onClick={downloadReceipt}><Download className="mr-2 h-4 w-4"/>Baixar comprovante</Button></div>
             {channel.attachment_policy?.enabled && (
               <div className="mt-5 rounded-xl border border-[#DDD8CF] p-4 text-left">
                 <label className="text-sm font-bold">
@@ -410,6 +451,8 @@ export function IntegrityChannelPage({ slug }: { slug: string }) {
               }}
               className="space-y-6 rounded-2xl border border-[#DDD8CF] bg-white p-6 shadow-sm sm:p-8"
             >
+              <WizardProgress current={reportStep} />
+              {reportStep === 5 && <>
               <fieldset>
                 <legend className="mb-3 text-sm font-bold">
                   Como deseja relatar?
@@ -442,6 +485,8 @@ export function IntegrityChannelPage({ slug }: { slug: string }) {
                 pessoais desnecessários. O anonimato depende também das
                 informações que você escolher escrever.
               </p>
+              </>}
+              {reportStep === 1 && <>
               <Field label="Categoria">
                 <select
                   required
@@ -459,6 +504,9 @@ export function IntegrityChannelPage({ slug }: { slug: string }) {
                   ))}
                 </select>
               </Field>
+              <p className="text-sm leading-6 text-[#626866]">Escolha o tipo de situação que melhor representa o ocorrido. A equipe poderá ajustar essa classificação durante a triagem.</p>
+              </>}
+              {reportStep === 2 && <>
               {channel.units.length > 0 && (
                 <Field label="Unidade ou departamento">
                   <select
@@ -478,6 +526,9 @@ export function IntegrityChannelPage({ slug }: { slug: string }) {
                 </Field>
               )}
               {form.unit_id && (channel.departments || []).some((item)=>item.unit_id===form.unit_id) && <Field label="Departamento ou setor"><select value={form.department_id} onChange={(event)=>setForm({...form,department_id:event.target.value})} className="w-full rounded-xl border border-[#DDD8CF] bg-[#FAF8F3] px-3 py-2.5 text-sm"><option value="">Não informar</option>{(channel.departments||[]).filter((item)=>item.unit_id===form.unit_id).map((item)=><option key={item.id} value={item.id}>{item.name}</option>)}</select></Field>}
+              <p className="text-sm leading-6 text-[#626866]">Informe o local somente se isso ajudar a equipe a compreender o relato. Você pode deixar em branco.</p>
+              </>}
+              {reportStep === 3 && <>
               <Field label="Assunto">
                 <Input
                   required
@@ -513,7 +564,9 @@ export function IntegrityChannelPage({ slug }: { slug: string }) {
                 />
               </Field>
               {(channel.custom_fields||[]).map((field)=><CustomField key={field.id} field={field} value={customValues[field.field_key]} onChange={(value)=>setCustomValues((current)=>({...current,[field.field_key]:value}))}/>) }
-              {form.reporter_mode === "identified" && (
+              </>}
+              {reportStep === 4 && <section className="rounded-2xl border border-dashed border-[#AEBBEA] bg-[#F8FAFF] p-6 text-center"><ShieldCheck className="mx-auto h-9 w-9 text-[#3457D5]"/><h2 className="mt-3 text-lg font-bold">Você possui documentos, imagens ou outros arquivos?</h2><p className="mt-1 text-sm text-[#626866]">O envio é opcional. O arquivo será armazenado de forma privada e vinculado somente ao seu relato.</p>{channel.attachment_policy?.enabled?<label className="mt-5 block rounded-xl bg-white p-4 text-left text-sm font-bold ring-1 ring-[#DDD8CF]"><span>Selecionar evidência</span><input type="file" onChange={(event)=>setAttachment(event.target.files?.[0]||null)} className="mt-2 block w-full text-sm"/>{attachment?<small className="mt-2 block font-normal text-[#3457D5]">{attachment.name}</small>:null}</label>:<p className="mt-4 text-sm text-amber-800">Este canal não aceita anexos no momento.</p>}</section>}
+              {reportStep === 5 && form.reporter_mode === "identified" && (
                 <div className="grid gap-4 rounded-xl border border-[#DDD8CF] p-4 sm:grid-cols-2">
                   <Field label="Nome">
                     <Input
@@ -543,6 +596,8 @@ export function IntegrityChannelPage({ slug }: { slug: string }) {
                   </Field>
                 </div>
               )}
+              {reportStep === 6 && <>
+              <section className="rounded-2xl bg-[#F6F5F2] p-5"><h2 className="text-lg font-bold">Revise antes de enviar</h2><dl className="mt-4 grid gap-4 text-sm sm:grid-cols-2"><Review label="Categoria" value={channel.categories.find((item)=>item.slug===form.category)?.name}/><Review label="Assunto" value={form.subject}/><Review label="Local" value={channel.units.find((item)=>item.id===form.unit_id)?.name||"Não informado"}/><Review label="Identificação" value={form.reporter_mode==="anonymous"?"Permanecer anônimo":"Relato identificado"}/><Review label="Evidência" value={attachment?.name||"Nenhum arquivo"}/></dl><p className="mt-4 whitespace-pre-wrap text-sm leading-6 text-[#626866]">{form.description}</p></section>
               {channel.instructions && (
                 <p className="text-xs leading-5 text-[#626866]">
                   {channel.instructions}
@@ -553,14 +608,8 @@ export function IntegrityChannelPage({ slug }: { slug: string }) {
                   {channel.privacy_notice}
                 </p>
               )}
-              <Button
-                type="submit"
-                disabled={busy}
-                className="h-12 w-full bg-[#3457D5] text-white"
-              >
-                {busy ? "Enviando…" : "Enviar relato"}{" "}
-                <ArrowRight className="ml-2 h-4 w-4" />
-              </Button>
+              </>}
+              <div className="flex flex-col-reverse gap-2 border-t pt-5 sm:flex-row sm:justify-between">{reportStep>1?<Button type="button" variant="outline" disabled={busy} onClick={()=>{setError("");setReportStep((current)=>Math.max(1,current-1));}}>Voltar</Button>:<span/>}{reportStep<6?<Button key="continue-report" type="button" onClick={(event)=>{event.preventDefault();nextStep();}} className="bg-[#3457D5] text-white">Continuar <ArrowRight className="ml-2 h-4 w-4"/></Button>:<Button key="submit-report" type="submit" disabled={busy} className="h-12 bg-[#3457D5] text-white">{busy?"Enviando…":"Enviar relato"}<ArrowRight className="ml-2 h-4 w-4"/></Button>}</div>
             </form>
           )
         )}
@@ -603,6 +652,7 @@ export function IntegrityChannelPage({ slug }: { slug: string }) {
             </form>
             {tracking && (
               <div className="space-y-5">
+                <div><p className="text-xs font-bold uppercase tracking-[.18em] text-[#3457D5]">Acompanhamento seguro</p><h2 className="mt-1 text-2xl font-bold">Seu relato</h2><p className="mt-1 text-sm text-[#626866]">Acompanhe atualizações e converse com a equipe sem expor sua identidade.</p></div>
                 <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl bg-[#F6F5F2] p-4">
                   <div>
                     <div className="font-mono font-bold">
@@ -620,7 +670,7 @@ export function IntegrityChannelPage({ slug }: { slug: string }) {
                   </span>
                 </div>
                 {tracking.action_required ? <div role="status" className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm font-medium text-amber-900">A organização solicitou informações. Revise as mensagens e responda abaixo.</div> : null}
-                <div className="space-y-3">
+                <section><h3 className="mb-3 text-base font-bold">Mensagens</h3><div className="space-y-3">
                   {tracking.messages.map((message) => (
                     <article
                       key={message.id}
@@ -629,7 +679,7 @@ export function IntegrityChannelPage({ slug }: { slug: string }) {
                       <div className="mb-2 text-xs font-bold text-[#626866]">
                         {message.author_type === "reporter"
                           ? "Você"
-                          : "Comitê responsável"}{" "}
+                          : "Equipe de Integridade"}{" "}
                         · {new Date(message.created_at).toLocaleString("pt-BR")}
                       </div>
                       <p className="whitespace-pre-wrap leading-6">
@@ -637,7 +687,7 @@ export function IntegrityChannelPage({ slug }: { slug: string }) {
                       </p>
                     </article>
                   ))}
-                </div>
+                </div></section>
                 {tracking.attachments && tracking.attachments.length > 0 && (
                   <div className="rounded-xl border border-[#DDD8CF] p-4">
                     <h3 className="text-sm font-bold">Anexos disponíveis</h3>
@@ -727,6 +777,10 @@ function Field({
     </label>
   );
 }
+const WIZARD_STEPS = ["Sobre o ocorrido","Pessoas e local","Detalhes","Evidências","Identificação","Revisão"];
+function WizardProgress({current}:{current:number}) { return <div><div className="flex items-center justify-between text-xs font-bold text-[#626866]"><span>Etapa {current} de {WIZARD_STEPS.length}</span><span>{WIZARD_STEPS[current-1]}</span></div><div className="mt-3 grid grid-cols-6 gap-1" aria-label={`Etapa ${current}: ${WIZARD_STEPS[current-1]}`}>{WIZARD_STEPS.map((label,index)=><div key={label} title={label} className={`h-1.5 rounded-full ${index<current?"bg-[#3457D5]":"bg-[#DDD8CF]"}`}/>)}</div></div>; }
+function Trust({text}:{text:string}) { return <div className="flex gap-2 rounded-xl bg-white/70 p-3 ring-1 ring-[#DDD8CF]/70"><Check className="mt-0.5 h-4 w-4 shrink-0 text-emerald-600"/><span>{text}</span></div>; }
+function Review({label,value}:{label:string;value?:string}) { return <div><dt className="text-xs font-bold uppercase text-[#777D7A]">{label}</dt><dd className="mt-1 font-semibold text-[#202322]">{value||"Não informado"}</dd></div>; }
 function ModeOption({
   checked,
   onChange,

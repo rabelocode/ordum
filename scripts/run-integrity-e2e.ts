@@ -99,8 +99,8 @@ async function runBrowserQa(scenarios: Array<{ name: string; user: FixtureUser; 
     for (const scenario of scenarios) {
       const context = await browser.newContext({ viewport: scenario.mobile ? { width: 390, height: 844 } : { width: 1440, height: 1000 }, acceptDownloads: true });
       const page = await context.newPage();
-      page.on("console", (message) => { if (message.type() === "error") failures.push(`${scenario.name}: console ${message.text().slice(0, 120)}`); });
-      page.on("response", (response) => { if (response.status() >= 500) failures.push(`${scenario.name}: HTTP ${response.status()} ${new URL(response.url()).pathname}`); });
+      page.on("console", (message) => { if (message.type() === "error" && !message.text().includes("Failed to load resource")) failures.push(`${scenario.name}: console ${message.text().slice(0, 120)}`); });
+      page.on("response", (response) => { if (response.status() >= 400) failures.push(`${scenario.name}: HTTP ${response.status()} ${new URL(response.url()).pathname}`); });
       await page.goto(`${APP_URL}/#/login`, { waitUntil: "networkidle" });
       await page.locator('input[type="email"]').fill(scenario.user.email);
       await page.locator('input[type="password"]').fill(scenario.user.password);
@@ -155,13 +155,78 @@ async function runBrowserQa(scenarios: Array<{ name: string; user: FixtureUser; 
   if (failures.length) throw new Error(`browser QA: ${failures.join("; ")}`);
 }
 
+async function runInternalUiFlow(user: FixtureUser, subject: string) {
+  const browser = await chromium.launch({ headless: true });
+  const failures: string[] = [];
+  try {
+    const context = await browser.newContext({ viewport: { width: 1440, height: 1000 } });
+    const page = await context.newPage();
+    page.on("console", (message) => { if (message.type() === "error" && !message.text().includes("Failed to load resource")) failures.push(`console ${message.text().slice(0,120)}`); });
+    page.on("response", (response) => { if (response.status() >= 400) failures.push(`HTTP ${response.status()} ${new URL(response.url()).pathname}`); });
+    await page.goto(`${APP_URL}/#/login`, { waitUntil: "networkidle" });
+    await page.locator('input[type="email"]').fill(user.email);
+    await page.locator('input[type="password"]').fill(user.password);
+    await page.locator('button[type="submit"]').click();
+    await page.waitForURL(/#\/(workspace|admin)/, { timeout: 20000 });
+    await page.evaluate(() => { window.location.hash = "#/workspace/integridade"; });
+    await page.reload({ waitUntil: "networkidle" });
+    await page.locator('nav[aria-label] button').filter({ hasText: "Casos" }).click();
+    await page.getByText(subject, { exact: true }).first().click();
+    await page.getByRole("heading", { name: subject, exact: true }).waitFor();
+    const transition = async (label:string) => {
+      await Promise.all([
+        page.waitForResponse((response) => response.url().includes("/transitions") && response.request().method() === "POST" && response.status() === 200),
+        page.getByRole("button", { name: label, exact: true }).click(),
+      ]);
+      await page.getByText("Etapa do caso atualizada.", { exact: true }).waitFor();
+    };
+    await transition("Iniciar triagem");
+    await transition("Iniciar investigação");
+    await page.getByRole("button", { name: "Investigação", exact: true }).click();
+    await page.getByPlaceholder("Título da nova tarefa").fill("Validar informações recebidas");
+    await page.getByPlaceholder("Descrição e critério de conclusão").fill("Revisar o relato e registrar os pontos relevantes para a decisão.");
+    await page.getByRole("button", { name: "Criar tarefa", exact: true }).click();
+    await page.getByText("Tarefa criada.", { exact: true }).waitFor();
+    await page.getByRole("button", { name: "Comunicação", exact: true }).click();
+    await page.getByPlaceholder("Escreva uma resposta clara e sem informações internas...").fill("Recebemos seu complemento e a apuração foi iniciada.");
+    await page.getByRole("button", { name: "Enviar mensagem", exact: true }).click();
+    await page.getByRole("button", { name: "Confirmar envio", exact: true }).click();
+    await page.getByText("Mensagem enviada ao denunciante.", { exact: true }).waitFor();
+    await page.getByRole("tab", { name: "Notas da equipe", exact: true }).click();
+    await page.getByPlaceholder("Registre uma observação que não será exibida ao denunciante...").fill("Nota interna criada pela homologação de interface; não deve aparecer no portal público.");
+    await page.getByRole("button", { name: "Salvar nota", exact: true }).click();
+    await page.getByText("Nota privada registrada.", { exact: true }).waitFor();
+    await page.getByRole("button", { name: "Evidências", exact: true }).click();
+    await page.getByLabel("Selecionar evidência").setInputFiles({ name:"evidencia-qa.txt", mimeType:"text/plain", buffer:Buffer.from("Evidência descartável da homologação Ordum") });
+    await page.getByPlaceholder("Descreva por que este arquivo é relevante (opcional)").fill("Arquivo descartável da homologação pelo navegador.");
+    await page.getByRole("button", { name: "Adicionar evidência", exact: true }).click();
+    await page.getByText("Evidência adicionada com segurança.", { exact: true }).waitFor();
+    await transition("Registrar decisão");
+    await page.getByRole("button", { name: "Visão geral", exact: true }).click();
+    const decision = page.locator("section").filter({ hasText: "Decisão e encerramento" }).first();
+    await decision.getByLabel("Resultado").selectOption("substantiated");
+    await decision.getByLabel("Resumo da conclusão").fill("Os fatos relatados foram confirmados após a apuração.");
+    await decision.getByLabel("Medidas adotadas").fill("Foram definidas medidas internas proporcionais e acompanhamento preventivo.");
+    await decision.getByLabel("Fundamentação interna").fill("Fundamentação restrita registrada exclusivamente para a equipe autorizada.");
+    await decision.getByLabel(/Mensagem final ao denunciante/).fill("A apuração foi concluída e as providências cabíveis foram avaliadas.");
+    for (const checkbox of await decision.locator('input[type="checkbox"]').all()) await checkbox.check();
+    await decision.getByRole("button", { name: "Encerrar caso", exact: true }).click();
+    await page.getByText("Decisão registrada e caso encerrado.", { exact: true }).waitFor();
+    await page.getByPlaceholder("Motivo, quando necessário").fill("Nova informação recebida após o encerramento.");
+    await transition("Reabrir caso");
+    await page.screenshot({ path:"tmp/product-recovery/integrity-complete-ui-flow.png", fullPage:true });
+    await context.close();
+  } finally { await browser.close(); }
+  if (failures.length) throw new Error(`internal UI flow: ${failures.join("; ")}`);
+}
+
 async function runAdminProductQa(user:FixtureUser,tenantId:string,tenantName:string){
   const browser=await chromium.launch({headless:true});
   const failures:string[]=[];
   try{
     const context=await browser.newContext({viewport:{width:1440,height:1000}});const page=await context.newPage();
-    page.on("console",message=>{if(message.type()==="error")failures.push(`admin console ${message.text().slice(0,120)}`);});
-    page.on("response",response=>{if(response.status()>=500)failures.push(`admin HTTP ${response.status()} ${new URL(response.url()).pathname}`);});
+    page.on("console",message=>{if(message.type()==="error"&&!message.text().includes("Failed to load resource"))failures.push(`admin console ${message.text().slice(0,120)}`);});
+    page.on("response",response=>{if(response.status()>=400)failures.push(`admin HTTP ${response.status()} ${new URL(response.url()).pathname}`);});
     await page.goto(`${APP_URL}/#/login`,{waitUntil:"networkidle"});await page.locator('input[type="email"]').fill(user.email);await page.locator('input[type="password"]').fill(user.password);await page.locator('button[type="submit"]').click();await page.waitForURL(/#\/(workspace|admin)/,{timeout:20000});
     await page.evaluate(()=>{window.location.hash="#/admin";});await page.reload({waitUntil:"networkidle"});await page.getByRole("heading",{name:"Veja o que precisa da sua atenção."}).waitFor();
     for(const label of ["Comercial","Clientes","Financeiro","Operação","Administração"])await page.getByText(new RegExp(`^${label}$`,"i")).first().waitFor();
@@ -182,10 +247,39 @@ async function runPublicMobileQa(channelSlug: string, protocol: string, secret: 
     page.on("console", (message) => { if (message.type() === "error") failures.push(`console ${message.text().slice(0, 120)}`); });
     page.on("response", (response) => { if (response.status() >= 500) failures.push(`HTTP ${response.status()} ${new URL(response.url()).pathname}`); });
     await page.goto(`${APP_URL}/#/canal/${channelSlug}`, { waitUntil: "networkidle" });
-    await page.getByRole("heading", { name: "Canal de Integridade" }).waitFor();
-    await page.getByText("Local detalhado", { exact: true }).waitFor();
+    await page.getByRole("heading", { name: /Canal de Integridade/ }).waitFor();
     const overflow = await page.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth + 1);
     if (overflow) failures.push("overflow horizontal no canal mobile");
+    await page.getByRole("button", { name: "Fazer um relato", exact: true }).click();
+    await page.getByLabel("Categoria").selectOption({ index: 1 });
+    await page.getByRole("button", { name: /Continuar/ }).click();
+    await page.locator('[aria-label^="Etapa 2:"]').waitFor();
+    await page.getByRole("button", { name: /Continuar/ }).click();
+    await page.locator('[aria-label^="Etapa 3:"]').waitFor();
+    await page.getByLabel("Assunto").fill("Relato enviado integralmente pela interface");
+    await page.getByLabel("Descrição detalhada").fill("Descrição suficiente para comprovar, pelo navegador, o envio seguro de um relato anônimo descartável.");
+    await page.getByLabel("Local detalhado").fill("Área comum da unidade");
+    await page.getByRole("button", { name: /Continuar/ }).click();
+    await page.locator('[aria-label^="Etapa 4:"]').waitFor();
+    await page.getByRole("button", { name: /Continuar/ }).click();
+    await page.locator('[aria-label^="Etapa 5:"]').waitFor();
+    await page.getByRole("button", { name: /Continuar/ }).click();
+    await page.locator('[aria-label^="Etapa 6:"]').waitFor();
+    const submitReport = page.locator('form button[type="submit"]', { hasText: "Enviar relato" });
+    if (await submitReport.count() !== 1) throw new Error(`CTA final do relato ausente: ${(await page.locator("body").innerText()).replace(/\s+/g," ").slice(0,900)}`);
+    await submitReport.click();
+    await page.getByRole("heading", { name: "Relato recebido", exact: true }).waitFor();
+    await page.getByRole("button", { name: "Copiar dados", exact: true }).waitFor();
+    await page.getByRole("button", { name: "Baixar comprovante", exact: true }).waitFor();
+    await page.screenshot({ path: "tmp/product-recovery/public-report-receipt-mobile.png", fullPage: true });
+    await page.getByRole("button", { name: "Acompanhar agora", exact: true }).click();
+    await page.getByRole("button", { name: "Consultar", exact: true }).click();
+    await page.getByRole("heading", { name: "Seu relato", exact: true }).waitFor();
+    await page.getByLabel("Complementar informações").fill("Complemento enviado pela interface pública descartável.");
+    await page.getByRole("button", { name: "Enviar mensagem", exact: true }).click();
+    await page.getByText("Complemento enviado pela interface pública descartável.", { exact: true }).waitFor();
+    await page.screenshot({ path: "tmp/product-recovery/public-tracking-mobile.png", fullPage: true });
+    await page.goto(`${APP_URL}/#/canal/${channelSlug}`, { waitUntil: "networkidle" });
     await page.getByRole("button", { name: "Acompanhar relato", exact: true }).click();
     await page.getByLabel("Protocolo").fill(protocol);
     await page.getByLabel("Chave de acompanhamento").fill(secret);
@@ -325,8 +419,10 @@ export async function runIntegrityE2E(): Promise<Evidence> {
       { name: "investigator_assigned_mobile", user: assignedInvestigator, expectedCase: true, mobile: true },
       { name: "investigator_unassigned_desktop", user: unassignedInvestigator, expectedCase: false },
     ], reportBody.subject);
+    await runInternalUiFlow(compliance,"Relato enviado integralmente pela interface");
     await runAdminProductQa(adminA,tenantA.id,`Integrity E2E A ${suffix}`);
     evidence.browserQa = true;
+    evidence.internalUiFlow = true;
     evidence.adminProductQa = true;
     expect(await workspace(`/settings/committees/${committee.id}`, { method: "PATCH", body: JSON.stringify({ name: "Comitê de Ética", description: "Comitê do piloto", member_ids: [assignedInvestigator.membershipId], active: false, status: "inactive" }) }), 409, "committee orphan protection");
     expect(await workspace(`/settings/committees/${committee.id}`, { method: "PATCH", body: JSON.stringify({ name: "Comitê de Ética e Conduta", description: "Comitê do piloto", member_ids: [assignedInvestigator.membershipId, unassignedInvestigator.membershipId], active: true, status: "active" }) }), 200, "committee update");
