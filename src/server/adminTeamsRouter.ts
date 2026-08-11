@@ -20,7 +20,23 @@ export function createAdminTeamsRouter(getSupabaseAdmin: any, _old_requirePlatfo
       
       const { data, error } = await query;
       if (error) throw error;
-      res.json(data);
+      const teamIds = (data || []).map((team: any) => team.id);
+      if (!teamIds.length) return res.json([]);
+      const db = getSupabaseAdmin();
+      const [members, leads, clients] = await Promise.all([
+        db.from('platform_team_members').select('team_id,team_role,status').in('team_id', teamIds).eq('status', 'active'),
+        db.from('platform_lead_assignments').select('team_id').in('team_id', teamIds),
+        db.from('platform_client_assignments').select('team_id,status').in('team_id', teamIds).eq('status', 'active'),
+      ]);
+      for (const result of [members, leads, clients]) if (result.error) throw result.error;
+      const count = (rows: any[], teamId: string, predicate?: (row: any) => boolean) => rows.filter((row) => row.team_id === teamId && (!predicate || predicate(row))).length;
+      return res.json((data || []).map((team: any) => ({
+        ...team,
+        member_count: count(members.data || [], team.id),
+        manager_count: count(members.data || [], team.id, (row) => row.team_role === 'manager'),
+        lead_count: count(leads.data || [], team.id),
+        client_count: count(clients.data || [], team.id),
+      })));
     } catch (e: any) {
       res.status(500).json({ error: e.message });
     }
@@ -102,7 +118,8 @@ export function createAdminTeamsRouter(getSupabaseAdmin: any, _old_requirePlatfo
     member_lead_visibility: z.string().optional(),
     member_client_visibility: z.string().optional(),
     allow_self_claim: z.boolean().optional(),
-    settings: z.any().optional()
+    settings: z.any().optional(),
+    transfer_team_id: z.string().uuid().optional()
   });
 
   router.patch('/:id', authenticateRequest, resolvePlatformContext, requirePlatformPermission('platform.teams.manage'), async (req: any, res: any) => {
@@ -135,13 +152,21 @@ export function createAdminTeamsRouter(getSupabaseAdmin: any, _old_requirePlatfo
       if (Object.keys(updates).length === 0) return res.status(400).json({ error: 'No valid fields to update' });
 
       const before = await getSupabaseAdmin().from('platform_teams').select('*').eq('id', teamId).single();
-      
-      const { data, error } = await getSupabaseAdmin()
-        .from('platform_teams')
-        .update(updates)
-        .eq('id', teamId)
-        .select()
-        .single();
+      let data: any;
+      let error: any;
+      if (updates.status === 'inactive' && before.data?.status === 'active') {
+        const deactivated = await getSupabaseAdmin().rpc('admin_deactivate_commercial_team', { p_team_id: teamId, p_destination_team_id: input.data.transfer_team_id || null });
+        if (deactivated.error) {
+          if (deactivated.error.message?.startsWith('team_transfer_required:')) return res.status(409).json({ error: 'team_transfer_required', active_records: Number(deactivated.error.message.split(':')[1] || 0) });
+          if (deactivated.error.message === 'destination_team_invalid') return res.status(400).json({ error: 'A equipe de destino precisa estar ativa.' });
+          throw deactivated.error;
+        }
+        const refreshed = await getSupabaseAdmin().from('platform_teams').select('*').eq('id', teamId).single();
+        data = refreshed.data; error = refreshed.error;
+      } else {
+        const updated = await getSupabaseAdmin().from('platform_teams').update(updates).eq('id', teamId).select().single();
+        data = updated.data; error = updated.error;
+      }
         
       if (error) throw error;
       

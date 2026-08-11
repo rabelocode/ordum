@@ -65,6 +65,38 @@ export function csvCell(value: unknown) {
 export function createAdminControlPlaneRouter(getSupabaseAdmin: any) {
   const router = Router();
 
+  router.get('/control-plane/attention', authenticateRequest, resolvePlatformContext, requirePlatformPermission(['platform.commercial.read', 'platform.clients.read', 'platform.onboarding.read']), async (req: any, res: any) => {
+    try {
+      const db = getSupabaseAdmin();
+      const startOfDay = new Date(); startOfDay.setHours(0, 0, 0, 0);
+      const endOfDay = new Date(startOfDay.valueOf() + 86400000);
+      const [teams, leads, ownedLeads, demosToday, proposals, contracts, overdueOnboarding] = await Promise.all([
+        db.from('platform_teams').select('id', { count: 'exact', head: true }).eq('status', 'active'),
+        db.from('marketing_leads').select('id').not('status', 'in', '(converted,rejected,lost)'),
+        db.from('platform_lead_assignments').select('lead_id').not('owner_platform_member_id', 'is', null),
+        db.from('commercial_demos').select('id', { count: 'exact', head: true }).gte('starts_at', startOfDay.toISOString()).lt('starts_at', endOfDay.toISOString()).in('status', ['scheduled', 'approved']),
+        db.from('commercial_proposals').select('id,created_by_user_id').eq('status', 'pending_approval'),
+        db.from('commercial_contracts').select('id,status,external_signature_status,tenant_id').in('status', ['pending_approval', 'approved']),
+        db.from('onboarding_runs').select('id', { count: 'exact', head: true }).lt('due_at', new Date().toISOString()).neq('status', 'completed'),
+      ]);
+      for (const result of [teams, leads, ownedLeads, demosToday, proposals, contracts, overdueOnboarding]) if (result.error) throw result.error;
+      const proposalRows = proposals.data || [];
+      const contractRows = contracts.data || [];
+      return res.json({
+        commercial_setup_required: Number(teams.count || 0) === 0,
+        unassigned_leads: (leads.data || []).filter((lead: any) => !(ownedLeads.data || []).some((assignment: any) => assignment.lead_id === lead.id)).length,
+        demos_today: Number(demosToday.count || 0),
+        pending_proposals: proposalRows.length,
+        my_pending_proposals: proposalRows.filter((item: any) => item.created_by_user_id !== req.user.id).length,
+        pending_contracts: contractRows.filter((item: any) => item.status === 'pending_approval').length,
+        contracts_ready_to_activate: contractRows.filter((item: any) => item.status === 'approved' && item.external_signature_status === 'signed' && !item.tenant_id).length,
+        overdue_onboarding: Number(overdueOnboarding.count || 0),
+      });
+    } catch (error: any) {
+      return res.status(500).json({ error: 'Não foi possível carregar as pendências operacionais.' });
+    }
+  });
+
   router.get('/control-plane/metrics', authenticateRequest, resolvePlatformContext, requirePlatformPermission(['platform.commercial.read', 'platform.clients.read', 'platform.billing.read', 'platform.support.read']), async (req: any, res) => {
     try {
       const db = getSupabaseAdmin();

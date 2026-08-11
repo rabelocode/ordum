@@ -5,6 +5,7 @@ import { AssignLeadModal } from '../../components/admin/AssignLeadModal';
 import { ListSkeleton } from '../../components/ui/LoadingSkeletons';
 import { getLeadNextStatuses, LEAD_STATUS_LABELS } from '../../domain/transitions';
 import { userFacingApiError } from '../../lib/userFacingError';
+import { BulkAssignLeadsModal } from '../../components/admin/BulkAssignLeadsModal';
 
 export function LeadsPage() {
   const { session, platformRole, hasPlatformPermission } = useAccess();
@@ -14,6 +15,9 @@ export function LeadsPage() {
   const [search, setSearch] = useState('');
   const [status, setStatus] = useState('');
   const [priority, setPriority] = useState('');
+  const [assignment, setAssignment] = useState(() => new URLSearchParams(window.location.hash.split('?')[1] || '').get('assignment') || '');
+  const [selectedLeadIds, setSelectedLeadIds] = useState<string[]>([]);
+  const [bulkAssignOpen, setBulkAssignOpen] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
@@ -52,6 +56,7 @@ export function LeadsPage() {
       if (search) params.set('search', search);
       if (status) params.set('status', status);
       if (priority) params.set('priority', priority);
+      if (assignment) params.set('assignment', assignment);
       const data = await api(`/api/admin/leads?${params}`);
       setLeads(data.items);
       setPagination(data.pagination);
@@ -60,7 +65,7 @@ export function LeadsPage() {
     } finally {
       setLoading(false);
     }
-  }, [api, priority, search, session, status]);
+  }, [api, assignment, priority, search, session, status]);
 
   useEffect(() => {
     const timer = setTimeout(() => load(1), 250);
@@ -204,7 +209,14 @@ export function LeadsPage() {
       {error && <div role="alert" className="rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-700">{error}</div>}
       {success && <div role="status" className="rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-700">{success}</div>}
 
-      <div className="grid gap-3 sm:grid-cols-3 bg-white rounded-2xl border p-4">
+      <div className="flex flex-wrap items-center gap-2 rounded-2xl bg-white p-3 ring-1 ring-[#DDD8CF]/70">
+        {[['','Todos'],['unassigned','Sem responsável'],['assigned','Com responsável']].map(([value,label])=><button key={value} type="button" onClick={()=>{setAssignment(value);setSelectedLeadIds([]);}} className={`rounded-xl px-3 py-2 text-sm font-bold ${assignment===value?'bg-[#202322] text-white':'text-[#626866] hover:bg-[#F6F5F2]'}`}>{label}</button>)}
+        {canManageCommercial&&leads.some(lead=>!lead.owner)?<button type="button" onClick={()=>setSelectedLeadIds(leads.filter(lead=>!lead.owner).map(lead=>lead.id))} className="ml-auto rounded-xl border border-[#B66E45]/30 px-3 py-2 text-sm font-bold text-[#8B4E2F]">Selecionar sem responsável</button>:null}
+      </div>
+
+      {selectedLeadIds.length?<div className="sticky top-3 z-20 flex flex-col gap-3 rounded-2xl bg-[#202322] p-4 text-white shadow-xl sm:flex-row sm:items-center sm:justify-between"><div><strong>{selectedLeadIds.length} lead{selectedLeadIds.length===1?'':'s'} selecionado{selectedLeadIds.length===1?'':'s'}</strong><p className="text-xs text-white/60">A distribuição será registrada no histórico.</p></div><div className="flex gap-2"><button type="button" onClick={()=>setSelectedLeadIds([])} className="rounded-xl border border-white/20 px-3 py-2 text-sm font-bold">Limpar</button><button type="button" onClick={()=>setBulkAssignOpen(true)} className="rounded-xl bg-[#B66E45] px-4 py-2 text-sm font-bold">Distribuir leads</button></div></div>:null}
+
+      <div className="grid gap-3 bg-white rounded-2xl border p-4 sm:grid-cols-2 lg:grid-cols-4">
         <label className="relative">
           <Search className="absolute left-3 top-3 w-4 h-4 text-gray-400" />
           <input
@@ -227,6 +239,7 @@ export function LeadsPage() {
             <option key={item} value={item}>{priorityLabel(item)}</option>
           ))}
         </select>
+        <button type="button" onClick={()=>{setSearch('');setStatus('');setPriority('');setAssignment('');setSelectedLeadIds([]);}} className="rounded-xl border px-3 py-2.5 text-sm font-bold text-[#626866] hover:bg-[#F6F5F2]">Limpar filtros</button>
       </div>
 
       <div className="bg-white border rounded-2xl overflow-hidden">
@@ -353,6 +366,8 @@ export function LeadsPage() {
           currentAssignment={assignModalLead.assignment}
         />
       )}
+
+      {bulkAssignOpen?<BulkAssignLeadsModal leadIds={selectedLeadIds} teams={teams} onClose={()=>setBulkAssignOpen(false)} onSuccess={(count)=>{setBulkAssignOpen(false);setSelectedLeadIds([]);setSuccess(`${count} lead${count===1?' foi distribuído':'s foram distribuídos'}.`);void load(pagination.page);}}/>:null}
 
       {createOpen && <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/55 p-4" role="dialog" aria-modal="true" aria-labelledby="new-lead-title"><form onSubmit={createLead} className="max-h-[90vh] w-full max-w-lg space-y-4 overflow-y-auto rounded-2xl bg-white p-6 shadow-2xl"><div className="flex items-start justify-between gap-4"><div><h2 id="new-lead-title" className="text-xl font-black">Novo lead</h2><p className="mt-1 text-sm text-[#626866]">Registre somente os dados necessários para começar.</p></div><button type="button" aria-label="Fechar" onClick={()=>setCreateOpen(false)} className="rounded-lg p-2 hover:bg-gray-100"><X className="h-5 w-5"/></button></div>{teams.length===0?<div className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-950"><strong>Antes, crie uma equipe comercial.</strong><p className="mt-1">Ela será responsável pelo acompanhamento do lead.</p><a href="#/admin/equipes" className="mt-3 inline-flex rounded-lg bg-[#202322] px-3 py-2 font-bold text-white">Criar equipe</a></div>:null}<div className="grid gap-4 sm:grid-cols-2"><label className="text-sm font-bold">Contato<input required minLength={2} value={createForm.name} onChange={e=>setCreateForm({...createForm,name:e.target.value})} className="mt-1 w-full rounded-xl border p-2.5 font-normal" placeholder="Nome da pessoa"/></label><label className="text-sm font-bold">Empresa<input required minLength={2} value={createForm.company} onChange={e=>setCreateForm({...createForm,company:e.target.value})} className="mt-1 w-full rounded-xl border p-2.5 font-normal" placeholder="Nome da empresa"/></label><label className="text-sm font-bold">E-mail<input required type="email" value={createForm.email} onChange={e=>setCreateForm({...createForm,email:e.target.value})} className="mt-1 w-full rounded-xl border p-2.5 font-normal" placeholder="contato@empresa.com.br"/></label><label className="text-sm font-bold">Telefone<input value={createForm.phone} onChange={e=>setCreateForm({...createForm,phone:e.target.value})} className="mt-1 w-full rounded-xl border p-2.5 font-normal" placeholder="(11) 99999-9999"/></label><label className="text-sm font-bold sm:col-span-2">Equipe responsável<select required value={createForm.team_id} onChange={e=>setCreateForm({...createForm,team_id:e.target.value})} className="mt-1 w-full rounded-xl border p-2.5 font-normal"><option value="">Selecione</option>{teams.map(team=><option key={team.id} value={team.id}>{team.name}</option>)}</select></label><label className="text-sm font-bold sm:col-span-2">Origem<select value={createForm.source} onChange={e=>setCreateForm({...createForm,source:e.target.value})} className="mt-1 w-full rounded-xl border p-2.5 font-normal"><option>indicação</option><option>site</option><option>evento</option><option>prospecção</option><option>parceria</option></select></label></div><div className="flex justify-end gap-3"><button type="button" onClick={()=>setCreateOpen(false)} className="rounded-xl border px-4 py-2 text-sm font-bold">Cancelar</button><button type="submit" disabled={isActioning||!createForm.team_id} className="rounded-xl bg-[#B66E45] px-4 py-2 text-sm font-bold text-white disabled:opacity-50">{isActioning?<Loader2 className="h-4 w-4 animate-spin"/>:'Criar lead'}</button></div></form></div>}
 

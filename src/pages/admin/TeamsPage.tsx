@@ -1,120 +1,30 @@
-import React, { useState, useEffect } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { ArrowRight, Check, ChevronRight, Plus, ShieldCheck, Users } from 'lucide-react';
 import { useAccess } from '../../core/auth/AccessContext';
-import { Plus, ChevronRight } from 'lucide-react';
-import { PlatformTeam } from '../../types/platform';
 import { CreateTeamModal } from '../../components/admin/CreateTeamModal';
 import { ListSkeleton } from '../../components/ui/LoadingSkeletons';
+import { userFacingApiError } from '../../lib/userFacingError';
+
+type Team = { id:string; name:string; description?:string|null; team_type:string; channel:string; status:string; member_count?:number; manager_count?:number; lead_count?:number; client_count?:number };
 
 export function TeamsPage() {
   const { session } = useAccess();
-  const [teams, setTeams] = useState<PlatformTeam[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
-  const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
-
-  async function loadTeams() {
-    if (!session) return;
-    try {
-      const response = await fetch('/api/admin/teams', {
-        headers: { 'Authorization': `Bearer ${session.access_token}` }
-      });
-      if (response.ok) {
-        const data = await response.json();
-        setTeams(data);
-      }
-    } catch (e) {
-      console.error("Error loading teams:", e);
-    } finally {
-      setIsLoading(false);
-    }
-  }
-
-  useEffect(() => {
-    loadTeams();
-  }, [session]);
-
-  return (
-    <div className="max-w-7xl mx-auto">
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-8">
-        <div>
-          <h1 className="text-2xl sm:text-3xl font-bold text-[#202322] tracking-tight">Equipes</h1>
-          <p className="text-[#626866] mt-1">Gerencie as equipes de operação e vendas.</p>
-        </div>
-        <div className="flex items-center gap-3">
-          <button 
-            onClick={() => setIsCreateModalOpen(true)}
-            className="flex items-center gap-2 px-4 py-2.5 bg-[#121413] text-white rounded-xl font-medium hover:bg-[#202322] transition-colors shadow-sm"
-          >
-            <Plus className="w-4 h-4" />
-            <span className="hidden sm:inline">Nova Equipe</span>
-          </button>
-        </div>
-      </div>
-
-      <div className="bg-white border border-[#DDD8CF]/40 rounded-2xl shadow-sm overflow-hidden">
-        {isLoading ? (
-          <ListSkeleton rows={6} />
-        ) : teams.length === 0 ? (
-          <div className="p-8 text-center text-gray-500">Nenhuma equipe encontrada.</div>
-        ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-left border-collapse">
-              <thead>
-                <tr className="border-b border-[#DDD8CF]/40 bg-[#F6F5F2]/50 text-xs font-semibold text-gray-500 uppercase tracking-wider">
-                  <th className="p-4 pl-6">Nome</th>
-                  <th className="p-4">Tipo</th>
-                  <th className="p-4">Canal</th>
-                  <th className="p-4 text-center">Status</th>
-                  <th className="p-4"></th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-[#DDD8CF]/40">
-                {teams.map(team => (
-                  <tr key={team.id} className="hover:bg-gray-50/50 transition-colors group cursor-pointer" onClick={() => window.location.hash = `#/admin/equipes/${team.id}`}>
-                    <td className="p-4 pl-6">
-                      <div className="flex items-center gap-3">
-                        <div className="w-10 h-10 bg-gray-100 rounded-xl flex items-center justify-center text-gray-500 font-bold uppercase">
-                          {team.name.substring(0,2)}
-                        </div>
-                        <div>
-                          <div className="font-bold text-[#202322]">{team.name}</div>
-                          <div className="text-xs text-[#626866]">{team.description || "Sem descrição"}</div>
-                        </div>
-                      </div>
-                    </td>
-                    <td className="p-4">
-                      <span className="inline-flex items-center px-2 py-1 rounded text-xs font-medium bg-gray-100 text-gray-700 uppercase tracking-wider">
-                        {team.team_type}
-                      </span>
-                    </td>
-                    <td className="p-4">
-                      <span className="text-sm text-gray-600 capitalize">{team.channel}</span>
-                    </td>
-                    <td className="p-4 text-center">
-                      <span className={`inline-flex items-center px-2.5 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider ${team.status === 'active' ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-700'}`}>
-                        {team.status === 'active' ? 'Ativa' : 'Inativa'}
-                      </span>
-                    </td>
-                    <td className="p-4 pr-6 text-right">
-                      <button className="p-2 text-gray-400 hover:text-gray-900 rounded-lg hover:bg-gray-100 transition-colors">
-                        <ChevronRight className="w-5 h-5" />
-                      </button>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </div>
-
-      <CreateTeamModal 
-        isOpen={isCreateModalOpen} 
-        onClose={() => setIsCreateModalOpen(false)} 
-        onSuccess={() => {
-          setIsCreateModalOpen(false);
-          loadTeams();
-        }}
-      />
-    </div>
-  );
+  const [teams,setTeams]=useState<Team[]>([]); const[isLoading,setIsLoading]=useState(true); const[error,setError]=useState('');
+  const[createdTeam,setCreatedTeam]=useState<Team|null>(null); const[isCreateModalOpen,setIsCreateModalOpen]=useState(false);
+  const loadTeams=useCallback(async()=>{if(!session)return;setIsLoading(true);setError('');try{const response=await fetch('/api/admin/teams',{headers:{Authorization:`Bearer ${session.access_token}`}});const body=await response.json().catch(()=>({}));if(!response.ok)throw new Error(userFacingApiError(body,response.status,'Não foi possível carregar as equipes. Tente novamente.'));setTeams(body);}catch(caught){setError(caught instanceof Error?caught.message:'Não foi possível carregar as equipes.');}finally{setIsLoading(false);}},[session]);
+  useEffect(()=>{void loadTeams();},[loadTeams]);
+  const activeTeams=useMemo(()=>teams.filter(team=>team.status==='active'),[teams]); const firstTeam=activeTeams[0]; const setupStep=!firstTeam?1:!firstTeam.member_count?2:!firstTeam.manager_count?3:5;
+  if(isLoading)return <div className="mx-auto max-w-7xl"><ListSkeleton rows={6}/></div>;
+  return <div className="mx-auto max-w-7xl space-y-6">
+    <header className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between"><div><p className="text-xs font-bold uppercase tracking-[.18em] text-[#B66E45]">Administração</p><h1 className="mt-1 text-3xl font-black text-[#202322]">Equipes comerciais</h1><p className="mt-1 text-sm text-[#626866]">Organize responsáveis e carteiras sem depender de configuração técnica.</p></div><button type="button" onClick={()=>setIsCreateModalOpen(true)} className="inline-flex items-center justify-center gap-2 rounded-xl bg-[#202322] px-4 py-2.5 text-sm font-bold text-white"><Plus className="h-4 w-4"/>Nova equipe</button></header>
+    {error?<div role="alert" className="rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-800">{error}<button type="button" onClick={()=>void loadTeams()} className="ml-3 font-bold underline">Tentar novamente</button></div>:null}
+    {activeTeams.length===0?<FirstRun onStart={()=>setIsCreateModalOpen(true)}/>:setupStep<5?<SetupProgress team={firstTeam} step={setupStep}/>:createdTeam?<div role="status" className="rounded-2xl border border-emerald-200 bg-emerald-50 p-5 text-emerald-950"><div className="flex items-start gap-3"><span className="rounded-full bg-emerald-600 p-1 text-white"><Check className="h-4 w-4"/></span><div><h2 className="font-black">Sua operação comercial está pronta para receber responsáveis.</h2><p className="mt-1 text-sm">A equipe {createdTeam.name} foi criada. Adicione as pessoas que irão atender os leads.</p><div className="mt-4 flex flex-wrap gap-2"><a href={`#/admin/equipes/${createdTeam.id}`} className="rounded-xl bg-[#202322] px-4 py-2 text-sm font-bold text-white">Adicionar responsáveis</a><a href="#/admin/leads" className="rounded-xl border border-emerald-300 bg-white px-4 py-2 text-sm font-bold">Ir para Leads</a></div></div></div></div>:null}
+    {teams.length?<section className="space-y-3"><div><h2 className="text-lg font-black">Suas equipes</h2><p className="text-sm text-[#626866]">Abra uma equipe para gerenciar pessoas, gerente e regras de distribuição.</p></div><div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">{teams.map(team=><a key={team.id} href={`#/admin/equipes/${team.id}`} className="group rounded-2xl bg-white p-5 shadow-sm ring-1 ring-[#DDD8CF]/70 transition hover:-translate-y-0.5 hover:ring-[#B66E45]/50"><div className="flex items-start justify-between gap-3"><div className="flex min-w-0 items-center gap-3"><div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-[#F1E5DD] font-black text-[#8B4E2F]">{team.name.slice(0,2).toUpperCase()}</div><div className="min-w-0"><h3 className="truncate font-black text-[#202322]">{team.name}</h3><p className="truncate text-xs text-[#626866]">{team.description||teamTypeLabel(team.team_type)}</p></div></div><ChevronRight className="h-5 w-5 text-[#9B9F9D] transition group-hover:translate-x-1"/></div><div className="mt-5 grid grid-cols-3 gap-2 text-center"><Count value={team.member_count} label="pessoas"/><Count value={team.lead_count} label="leads"/><Count value={team.client_count} label="clientes"/></div><div className="mt-4 flex items-center justify-between text-xs"><span className={`rounded-full px-2.5 py-1 font-bold ${team.status==='active'?'bg-emerald-50 text-emerald-700':'bg-gray-100 text-gray-600'}`}>{team.status==='active'?'Ativa':'Inativa'}</span><span className="text-[#626866]">{team.manager_count?`${team.manager_count} gerente${team.manager_count===1?'':'s'}`:'Gerente não definido'}</span></div></a>)}</div></section>:null}
+    <CreateTeamModal isOpen={isCreateModalOpen} onClose={()=>setIsCreateModalOpen(false)} onSuccess={(team)=>{setIsCreateModalOpen(false);setCreatedTeam(team);void loadTeams();}}/>
+  </div>;
 }
+
+function FirstRun({onStart}:{onStart:()=>void}){const steps=['Criar a primeira equipe','Adicionar responsáveis','Definir um gerente','Revisar as regras de acesso','Começar a trabalhar'];return <section className="overflow-hidden rounded-3xl bg-[#202322] text-white shadow-xl"><div className="grid gap-8 p-6 sm:p-8 lg:grid-cols-[1.1fr_.9fr] lg:p-10"><div><div className="inline-flex rounded-xl bg-white/10 p-3"><ShieldCheck className="h-6 w-6 text-[#D2926D]"/></div><h2 className="mt-5 text-2xl font-black">Prepare sua operação comercial</h2><p className="mt-2 max-w-xl text-sm leading-6 text-white/65">Comece criando uma equipe real. Depois você poderá distribuir leads, acompanhar resultados e ativar clientes pela própria interface.</p><button type="button" onClick={onStart} className="mt-6 inline-flex items-center gap-2 rounded-xl bg-[#B66E45] px-5 py-3 text-sm font-black text-white">Configurar equipe comercial <ArrowRight className="h-4 w-4"/></button></div><ol className="space-y-2 rounded-2xl bg-white/[.06] p-4">{steps.map((label,index)=><li key={label} className="flex items-center gap-3 rounded-xl px-3 py-2.5"><span className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-xs font-black ${index===0?'bg-[#D2926D] text-[#202322]':'bg-white/10 text-white/55'}`}>{index+1}</span><span className={index===0?'font-bold':'text-white/60'}>{label}</span></li>)}</ol></div></section>}
+function SetupProgress({team,step}:{team:Team;step:number}){return <section className="rounded-2xl border border-amber-200 bg-amber-50 p-5"><div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between"><div className="flex items-start gap-3"><Users className="mt-0.5 h-5 w-5 text-amber-700"/><div><h2 className="font-black text-amber-950">Continue preparando {team.name}</h2><p className="mt-1 text-sm text-amber-900">{step===2?'Adicione ao menos uma pessoa responsável pela operação comercial.':'Defina quem gerencia a equipe para concluir a configuração inicial.'}</p></div></div><a href={`#/admin/equipes/${team.id}`} className="shrink-0 rounded-xl bg-[#202322] px-4 py-2.5 text-center text-sm font-bold text-white">{step===2?'Adicionar responsáveis':'Definir gerente'}</a></div></section>}
+function Count({value=0,label}:{value?:number;label:string}){return <div className="rounded-xl bg-[#F6F5F2] p-2"><div className="text-lg font-black">{value}</div><div className="text-[11px] text-[#626866]">{label}</div></div>}
+function teamTypeLabel(value:string){return ({sales:'Vendas',customer_success:'Customer Success',implementation:'Implantação',support:'Suporte',marketing:'Marketing',operations:'Operações'} as Record<string,string>)[value]||'Equipe Ordum'}

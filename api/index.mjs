@@ -2098,6 +2098,17 @@ function createAdminLeadsRouter(getSupabaseAdmin2, _old_requirePlatformAuth) {
       }
       let query = getSupabaseAdmin2().from("marketing_leads").select("*, platform_lead_assignments(*, platform_teams(name,allow_self_claim), platform_members(user_id, platform_roles(key, name))), commercial_activities(id,activity_type,subject,status,scheduled_at,result,next_action,next_action_at,created_at), commercial_demos(id,status,starts_at,expires_at,result,next_action,next_action_at)", { count: "exact" }).order("created_at", { ascending: false });
       if (visibleLeadIds) query = query.in("id", visibleLeadIds);
+      if (req.query.assignment === "unassigned" || req.query.assignment === "assigned") {
+        const owned = await getSupabaseAdmin2().from("platform_lead_assignments").select("lead_id").not("owner_platform_member_id", "is", null);
+        if (owned.error) throw owned.error;
+        const ownedIds = (owned.data || []).map((row) => row.lead_id);
+        if (req.query.assignment === "assigned") {
+          if (!ownedIds.length) return res.json(paginated ? pageResult([], 0, page, pageSize) : []);
+          query = query.in("id", ownedIds);
+        } else if (ownedIds.length) {
+          query = query.not("id", "in", `(${ownedIds.join(",")})`);
+        }
+      }
       if (typeof req.query.status === "string" && req.query.status) query = query.eq("status", req.query.status);
       if (typeof req.query.priority === "string" && req.query.priority) query = query.eq("priority", req.query.priority);
       if (typeof req.query.search === "string" && req.query.search.trim()) {
@@ -2126,6 +2137,63 @@ function createAdminLeadsRouter(getSupabaseAdmin2, _old_requirePlatformAuth) {
     team_id: z.string().uuid(),
     owner_platform_member_id: z.string().uuid().optional().nullable(),
     reason: z.string().min(1)
+  });
+  router.post("/bulk-assign", authenticateRequest, resolvePlatformContext, requirePlatformPermission(["platform.leads.assign"]), async (req, res) => {
+    const parsed = z.object({
+      lead_ids: z.array(z.string().uuid()).min(1).max(100),
+      team_id: z.string().uuid(),
+      owner_platform_member_id: z.string().uuid().optional().nullable(),
+      reason: z.string().trim().min(3).max(500)
+    }).safeParse(req.body);
+    if (!parsed.success) return res.status(400).json({ error: "Selecione os leads, a equipe e informe o motivo da distribui\xE7\xE3o." });
+    const input = parsed.data;
+    const db = getSupabaseAdmin2();
+    try {
+      const team = await db.from("platform_teams").select("id,status").eq("id", input.team_id).maybeSingle();
+      if (team.error || team.data?.status !== "active") return res.status(400).json({ error: "Selecione uma equipe ativa." });
+      if (req.platformContext.role?.key !== "admin" && !req.platformContext.managedTeams.some((item) => item.id === input.team_id)) {
+        return res.status(403).json({ error: "Voc\xEA n\xE3o pode distribuir leads para esta equipe." });
+      }
+      if (input.owner_platform_member_id) {
+        const owner = await db.from("platform_team_members").select("platform_member_id").eq("team_id", input.team_id).eq("platform_member_id", input.owner_platform_member_id).eq("status", "active").maybeSingle();
+        if (!owner.data) return res.status(400).json({ error: "O respons\xE1vel precisa fazer parte da equipe escolhida." });
+      }
+      const existing = await db.from("marketing_leads").select("id").in("id", input.lead_ids);
+      if (existing.error) throw existing.error;
+      if ((existing.data || []).length !== input.lead_ids.length) return res.status(404).json({ error: "Um ou mais leads n\xE3o foram encontrados." });
+      const current = await db.from("platform_lead_assignments").select("*").in("lead_id", input.lead_ids);
+      if (current.error) throw current.error;
+      const beforeByLead = new Map((current.data || []).map((row) => [row.lead_id, row]));
+      const assignedAt = (/* @__PURE__ */ new Date()).toISOString();
+      const rows = input.lead_ids.map((leadId) => ({
+        lead_id: leadId,
+        team_id: input.team_id,
+        owner_platform_member_id: input.owner_platform_member_id || null,
+        assigned_by_user_id: req.user.id,
+        assigned_at: assignedAt,
+        updated_at: assignedAt
+      }));
+      const saved = await db.from("platform_lead_assignments").upsert(rows, { onConflict: "lead_id" }).select("lead_id");
+      if (saved.error) throw saved.error;
+      const history = input.lead_ids.map((leadId) => {
+        const before = beforeByLead.get(leadId);
+        return { lead_id: leadId, from_team_id: before?.team_id || null, to_team_id: input.team_id, from_owner_platform_member_id: before?.owner_platform_member_id || null, to_owner_platform_member_id: input.owner_platform_member_id || null, reason: input.reason, actor_user_id: req.user.id };
+      });
+      const historyResult = await db.from("commercial_lead_assignment_history").insert(history);
+      if (historyResult.error) throw historyResult.error;
+      const audit = await db.from("platform_audit_logs").insert({
+        actor_user_id: req.user.id,
+        action: "lead.bulk_assigned",
+        entity_type: "platform_lead_assignments",
+        severity: "info",
+        team_id: input.team_id,
+        ...auditContext(req, { result: "success", after: { lead_count: input.lead_ids.length, team_id: input.team_id, owner_platform_member_id: input.owner_platform_member_id || null, reason: input.reason } })
+      });
+      if (audit.error) throw audit.error;
+      return res.json({ assigned: input.lead_ids.length });
+    } catch (error) {
+      return res.status(500).json({ error: "N\xE3o foi poss\xEDvel distribuir os leads. Nenhum dado real foi removido." });
+    }
   });
   router.post("/:id/assign", authenticateRequest, resolvePlatformContext, requirePlatformPermission(["platform.leads.assign"]), async (req, res) => {
     try {
@@ -3462,6 +3530,38 @@ function csvCell(value) {
 }
 function createAdminControlPlaneRouter(getSupabaseAdmin2) {
   const router = Router4();
+  router.get("/control-plane/attention", authenticateRequest, resolvePlatformContext, requirePlatformPermission(["platform.commercial.read", "platform.clients.read", "platform.onboarding.read"]), async (req, res) => {
+    try {
+      const db = getSupabaseAdmin2();
+      const startOfDay = /* @__PURE__ */ new Date();
+      startOfDay.setHours(0, 0, 0, 0);
+      const endOfDay = new Date(startOfDay.valueOf() + 864e5);
+      const [teams, leads, ownedLeads, demosToday, proposals, contracts, overdueOnboarding] = await Promise.all([
+        db.from("platform_teams").select("id", { count: "exact", head: true }).eq("status", "active"),
+        db.from("marketing_leads").select("id").not("status", "in", "(converted,rejected,lost)"),
+        db.from("platform_lead_assignments").select("lead_id").not("owner_platform_member_id", "is", null),
+        db.from("commercial_demos").select("id", { count: "exact", head: true }).gte("starts_at", startOfDay.toISOString()).lt("starts_at", endOfDay.toISOString()).in("status", ["scheduled", "approved"]),
+        db.from("commercial_proposals").select("id,created_by_user_id").eq("status", "pending_approval"),
+        db.from("commercial_contracts").select("id,status,external_signature_status,tenant_id").in("status", ["pending_approval", "approved"]),
+        db.from("onboarding_runs").select("id", { count: "exact", head: true }).lt("due_at", (/* @__PURE__ */ new Date()).toISOString()).neq("status", "completed")
+      ]);
+      for (const result of [teams, leads, ownedLeads, demosToday, proposals, contracts, overdueOnboarding]) if (result.error) throw result.error;
+      const proposalRows = proposals.data || [];
+      const contractRows = contracts.data || [];
+      return res.json({
+        commercial_setup_required: Number(teams.count || 0) === 0,
+        unassigned_leads: (leads.data || []).filter((lead) => !(ownedLeads.data || []).some((assignment) => assignment.lead_id === lead.id)).length,
+        demos_today: Number(demosToday.count || 0),
+        pending_proposals: proposalRows.length,
+        my_pending_proposals: proposalRows.filter((item) => item.created_by_user_id !== req.user.id).length,
+        pending_contracts: contractRows.filter((item) => item.status === "pending_approval").length,
+        contracts_ready_to_activate: contractRows.filter((item) => item.status === "approved" && item.external_signature_status === "signed" && !item.tenant_id).length,
+        overdue_onboarding: Number(overdueOnboarding.count || 0)
+      });
+    } catch (error) {
+      return res.status(500).json({ error: "N\xE3o foi poss\xEDvel carregar as pend\xEAncias operacionais." });
+    }
+  });
   router.get("/control-plane/metrics", authenticateRequest, resolvePlatformContext, requirePlatformPermission(["platform.commercial.read", "platform.clients.read", "platform.billing.read", "platform.support.read"]), async (req, res) => {
     try {
       const db = getSupabaseAdmin2();
@@ -3748,13 +3848,29 @@ function createAdminTeamsRouter(getSupabaseAdmin2, _old_requirePlatformAuth) {
       const { platformContext } = req;
       let query = getSupabaseAdmin2().from("platform_teams").select("*").order("name");
       if (platformContext.role?.key !== "admin") {
-        const teamIds = platformContext.teams.map((t) => t.id);
-        if (teamIds.length === 0) return res.json([]);
-        query = query.in("id", teamIds);
+        const teamIds2 = platformContext.teams.map((t) => t.id);
+        if (teamIds2.length === 0) return res.json([]);
+        query = query.in("id", teamIds2);
       }
       const { data, error } = await query;
       if (error) throw error;
-      res.json(data);
+      const teamIds = (data || []).map((team) => team.id);
+      if (!teamIds.length) return res.json([]);
+      const db = getSupabaseAdmin2();
+      const [members, leads, clients] = await Promise.all([
+        db.from("platform_team_members").select("team_id,team_role,status").in("team_id", teamIds).eq("status", "active"),
+        db.from("platform_lead_assignments").select("team_id").in("team_id", teamIds),
+        db.from("platform_client_assignments").select("team_id,status").in("team_id", teamIds).eq("status", "active")
+      ]);
+      for (const result of [members, leads, clients]) if (result.error) throw result.error;
+      const count = (rows, teamId, predicate) => rows.filter((row) => row.team_id === teamId && (!predicate || predicate(row))).length;
+      return res.json((data || []).map((team) => ({
+        ...team,
+        member_count: count(members.data || [], team.id),
+        manager_count: count(members.data || [], team.id, (row) => row.team_role === "manager"),
+        lead_count: count(leads.data || [], team.id),
+        client_count: count(clients.data || [], team.id)
+      })));
     } catch (e) {
       res.status(500).json({ error: e.message });
     }
@@ -3824,7 +3940,8 @@ function createAdminTeamsRouter(getSupabaseAdmin2, _old_requirePlatformAuth) {
     member_lead_visibility: z5.string().optional(),
     member_client_visibility: z5.string().optional(),
     allow_self_claim: z5.boolean().optional(),
-    settings: z5.any().optional()
+    settings: z5.any().optional(),
+    transfer_team_id: z5.string().uuid().optional()
   });
   router.patch("/:id", authenticateRequest, resolvePlatformContext, requirePlatformPermission("platform.teams.manage"), async (req, res) => {
     try {
@@ -3849,7 +3966,23 @@ function createAdminTeamsRouter(getSupabaseAdmin2, _old_requirePlatformAuth) {
       }
       if (Object.keys(updates).length === 0) return res.status(400).json({ error: "No valid fields to update" });
       const before = await getSupabaseAdmin2().from("platform_teams").select("*").eq("id", teamId).single();
-      const { data, error } = await getSupabaseAdmin2().from("platform_teams").update(updates).eq("id", teamId).select().single();
+      let data;
+      let error;
+      if (updates.status === "inactive" && before.data?.status === "active") {
+        const deactivated = await getSupabaseAdmin2().rpc("admin_deactivate_commercial_team", { p_team_id: teamId, p_destination_team_id: input.data.transfer_team_id || null });
+        if (deactivated.error) {
+          if (deactivated.error.message?.startsWith("team_transfer_required:")) return res.status(409).json({ error: "team_transfer_required", active_records: Number(deactivated.error.message.split(":")[1] || 0) });
+          if (deactivated.error.message === "destination_team_invalid") return res.status(400).json({ error: "A equipe de destino precisa estar ativa." });
+          throw deactivated.error;
+        }
+        const refreshed = await getSupabaseAdmin2().from("platform_teams").select("*").eq("id", teamId).single();
+        data = refreshed.data;
+        error = refreshed.error;
+      } else {
+        const updated = await getSupabaseAdmin2().from("platform_teams").update(updates).eq("id", teamId).select().single();
+        data = updated.data;
+        error = updated.error;
+      }
       if (error) throw error;
       await getSupabaseAdmin2().from("platform_audit_logs").insert({
         actor_user_id: req.user.id,

@@ -81,6 +81,17 @@ export function createAdminLeadsRouter(getSupabaseAdmin: any, _old_requirePlatfo
         .select('*, platform_lead_assignments(*, platform_teams(name,allow_self_claim), platform_members(user_id, platform_roles(key, name))), commercial_activities(id,activity_type,subject,status,scheduled_at,result,next_action,next_action_at,created_at), commercial_demos(id,status,starts_at,expires_at,result,next_action,next_action_at)', { count: 'exact' })
         .order('created_at', { ascending: false });
       if (visibleLeadIds) query = query.in('id', visibleLeadIds);
+      if (req.query.assignment === 'unassigned' || req.query.assignment === 'assigned') {
+        const owned = await getSupabaseAdmin().from('platform_lead_assignments').select('lead_id').not('owner_platform_member_id', 'is', null);
+        if (owned.error) throw owned.error;
+        const ownedIds = (owned.data || []).map((row: any) => row.lead_id);
+        if (req.query.assignment === 'assigned') {
+          if (!ownedIds.length) return res.json(paginated ? pageResult([], 0, page, pageSize) : []);
+          query = query.in('id', ownedIds);
+        } else if (ownedIds.length) {
+          query = query.not('id', 'in', `(${ownedIds.join(',')})`);
+        }
+      }
       if (typeof req.query.status === 'string' && req.query.status) query = query.eq('status', req.query.status);
       if (typeof req.query.priority === 'string' && req.query.priority) query = query.eq('priority', req.query.priority);
       if (typeof req.query.search === 'string' && req.query.search.trim()) {
@@ -115,6 +126,61 @@ export function createAdminLeadsRouter(getSupabaseAdmin: any, _old_requirePlatfo
     team_id: z.string().uuid(),
     owner_platform_member_id: z.string().uuid().optional().nullable(),
     reason: z.string().min(1)
+  });
+
+  router.post('/bulk-assign', authenticateRequest, resolvePlatformContext, requirePlatformPermission(['platform.leads.assign']), async (req: any, res: any) => {
+    const parsed = z.object({
+      lead_ids: z.array(z.string().uuid()).min(1).max(100),
+      team_id: z.string().uuid(),
+      owner_platform_member_id: z.string().uuid().optional().nullable(),
+      reason: z.string().trim().min(3).max(500),
+    }).safeParse(req.body);
+    if (!parsed.success) return res.status(400).json({ error: 'Selecione os leads, a equipe e informe o motivo da distribuição.' });
+    const input = parsed.data;
+    const db = getSupabaseAdmin();
+    try {
+      const team = await db.from('platform_teams').select('id,status').eq('id', input.team_id).maybeSingle();
+      if (team.error || team.data?.status !== 'active') return res.status(400).json({ error: 'Selecione uma equipe ativa.' });
+      if (req.platformContext.role?.key !== 'admin' && !req.platformContext.managedTeams.some((item: any) => item.id === input.team_id)) {
+        return res.status(403).json({ error: 'Você não pode distribuir leads para esta equipe.' });
+      }
+      if (input.owner_platform_member_id) {
+        const owner = await db.from('platform_team_members').select('platform_member_id').eq('team_id', input.team_id)
+          .eq('platform_member_id', input.owner_platform_member_id).eq('status', 'active').maybeSingle();
+        if (!owner.data) return res.status(400).json({ error: 'O responsável precisa fazer parte da equipe escolhida.' });
+      }
+      const existing = await db.from('marketing_leads').select('id').in('id', input.lead_ids);
+      if (existing.error) throw existing.error;
+      if ((existing.data || []).length !== input.lead_ids.length) return res.status(404).json({ error: 'Um ou mais leads não foram encontrados.' });
+      const current = await db.from('platform_lead_assignments').select('*').in('lead_id', input.lead_ids);
+      if (current.error) throw current.error;
+      const beforeByLead = new Map((current.data || []).map((row: any) => [row.lead_id, row]));
+      const assignedAt = new Date().toISOString();
+      const rows = input.lead_ids.map((leadId) => ({
+        lead_id: leadId,
+        team_id: input.team_id,
+        owner_platform_member_id: input.owner_platform_member_id || null,
+        assigned_by_user_id: req.user.id,
+        assigned_at: assignedAt,
+        updated_at: assignedAt,
+      }));
+      const saved = await db.from('platform_lead_assignments').upsert(rows, { onConflict: 'lead_id' }).select('lead_id');
+      if (saved.error) throw saved.error;
+      const history = input.lead_ids.map((leadId) => {
+        const before: any = beforeByLead.get(leadId);
+        return { lead_id: leadId, from_team_id: before?.team_id || null, to_team_id: input.team_id, from_owner_platform_member_id: before?.owner_platform_member_id || null, to_owner_platform_member_id: input.owner_platform_member_id || null, reason: input.reason, actor_user_id: req.user.id };
+      });
+      const historyResult = await db.from('commercial_lead_assignment_history').insert(history);
+      if (historyResult.error) throw historyResult.error;
+      const audit = await db.from('platform_audit_logs').insert({
+        actor_user_id: req.user.id, action: 'lead.bulk_assigned', entity_type: 'platform_lead_assignments', severity: 'info', team_id: input.team_id,
+        ...auditContext(req, { result: 'success', after: { lead_count: input.lead_ids.length, team_id: input.team_id, owner_platform_member_id: input.owner_platform_member_id || null, reason: input.reason } }),
+      });
+      if (audit.error) throw audit.error;
+      return res.json({ assigned: input.lead_ids.length });
+    } catch (error: any) {
+      return res.status(500).json({ error: 'Não foi possível distribuir os leads. Nenhum dado real foi removido.' });
+    }
   });
 
   router.post('/:id/assign', authenticateRequest, resolvePlatformContext, requirePlatformPermission(['platform.leads.assign']), async (req: any, res: any) => {

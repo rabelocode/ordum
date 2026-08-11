@@ -96,3 +96,44 @@ test('catalog editor keeps prices user-defined and hides raw configuration',()=>
   assert.match(plans,/Limites por produto/);
   assert.doesNotMatch(plans,/Limites globais \(JSON\)|JSON por ID/);
 });
+
+test('admin first-run is actionable without a pre-existing commercial team',()=>{
+  const teams=read('src/pages/admin/TeamsPage.tsx');
+  const createTeam=read('src/components/admin/CreateTeamModal.tsx');
+  assert.match(teams,/Prepare sua operação comercial/);
+  assert.match(teams,/Configurar equipe comercial/);
+  assert.match(teams,/Adicionar responsáveis/);
+  assert.match(teams,/Definir gerente/);
+  assert.match(teams,/Ir para Leads/);
+  assert.doesNotMatch(createTeam,/Self Claim/);
+});
+
+test('legacy unassigned leads can be distributed in a bounded audited batch',()=>{
+  const leads=read('src/pages/admin/LeadsPage.tsx');
+  const modal=read('src/components/admin/BulkAssignLeadsModal.tsx');
+  const api=read('src/server/adminLeadsRouter.ts');
+  assert.match(leads,/Sem responsável/);
+  assert.match(leads,/Distribuir leads/);
+  assert.match(modal,/leadIds\.length/);
+  assert.match(api,/lead_ids: z\.array\(z\.string\(\)\.uuid\(\)\)\.min\(1\)\.max\(100\)/);
+  assert.match(api,/lead\.bulk_assigned/);
+});
+
+test('team deactivation transfers active work atomically and stays service-only',()=>{
+  const migration=read('supabase/migrations/20260811195021_safe_commercial_team_deactivation.sql');
+  assert.match(migration,/create or replace function public\.admin_deactivate_commercial_team/);
+  assert.match(migration,/team_transfer_required/);
+  assert.match(migration,/update public\.platform_lead_assignments set team_id = p_destination_team_id/);
+  assert.match(migration,/revoke all on function public\.admin_deactivate_commercial_team\(uuid, uuid\) from public, anon, authenticated/);
+  assert.match(migration,/grant execute on function public\.admin_deactivate_commercial_team\(uuid, uuid\) to service_role/);
+});
+
+test('admin dashboard provides direct queues for setup, unassigned leads and approvals',()=>{
+  const dashboard=read('src/pages/admin/AdminDashboard.tsx');
+  const api=read('src/server/adminControlPlaneRouter.ts');
+  assert.match(dashboard,/Operação comercial ainda não configurada/);
+  assert.match(dashboard,/Aguardando minha aprovação|para sua aprovação/);
+  assert.match(api,/control-plane\/attention/);
+  assert.match(api,/commercial_setup_required/);
+  assert.match(api,/my_pending_proposals/);
+});

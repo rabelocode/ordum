@@ -1,8 +1,9 @@
 import React, { useState } from 'react';
 import { X, Loader2 } from 'lucide-react';
 import { useAuth } from '../../core/auth/AuthProvider';
+import { userFacingApiError } from '../../lib/userFacingError';
 
-export function CreateTeamModal({ isOpen, onClose, onSuccess }: { isOpen: boolean, onClose: () => void, onSuccess: () => void }) {
+export function CreateTeamModal({ isOpen, onClose, onSuccess }: { isOpen: boolean, onClose: () => void, onSuccess: (team: any) => void }) {
   const { session } = useAuth();
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState("");
@@ -35,11 +36,11 @@ export function CreateTeamModal({ isOpen, onClose, onSuccess }: { isOpen: boolea
       });
 
       if (!response.ok) {
-        const data = await response.json();
-        throw new Error(data.error || "Erro ao criar equipe");
+        const data = await response.json().catch(() => ({}));
+        throw new Error(userFacingApiError(data, response.status, 'Não foi possível criar a equipe. Revise os dados e tente novamente.'));
       }
-
-      onSuccess();
+      const team = await response.json();
+      onSuccess(team);
     } catch (err: any) {
       setError(err.message);
     } finally {
@@ -155,7 +156,7 @@ export function CreateTeamModal({ isOpen, onClose, onSuccess }: { isOpen: boolea
                     onChange={e => setFormData({...formData, allow_self_claim: e.target.checked})}
                   />
                   <div>
-                    <div className="font-medium text-[#202322]">Permitir "Self Claim"</div>
+                    <div className="font-medium text-[#202322]">Permitir que vendedores assumam leads disponíveis</div>
                     <div className="text-xs text-[#626866]">Membros podem assumir voluntariamente leads não atribuídos que chegam para esta equipe.</div>
                   </div>
                 </label>

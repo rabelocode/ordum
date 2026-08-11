@@ -10,6 +10,7 @@ export function TeamDetailPage({ teamId }: { teamId: string }) {
   const { session, platformRole } = useAccess();
   const [team, setTeam] = useState<PlatformTeam | null>(null);
   const [members, setMembers] = useState<any[]>([]);
+  const [availableTeams, setAvailableTeams] = useState<any[]>([]);
   const [activeTab, setActiveTab] = useState("VisoGeral");
   const [isLoading, setIsLoading] = useState(true);
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
@@ -39,6 +40,8 @@ export function TeamDetailPage({ teamId }: { teamId: string }) {
         const mData = await mResp.json();
         setMembers(mData);
       }
+      const teamsResponse = await fetch('/api/admin/teams', { headers: { 'Authorization': `Bearer ${session.access_token}` } });
+      if (teamsResponse.ok) setAvailableTeams((await teamsResponse.json()).filter((item: any) => item.id !== teamId && item.status === 'active'));
     } catch (e) {
       console.error("Error loading team:", e);
     } finally {
@@ -66,7 +69,8 @@ export function TeamDetailPage({ teamId }: { teamId: string }) {
         setFeedback({type:'success',message:'Configurações da equipe salvas.'});
         loadTeam();
       } else {
-        setFeedback({type:'error',message:'Não foi possível salvar as configurações da equipe.'});
+        const body=await response.json().catch(()=>({}));
+        setFeedback({type:'error',message:body.error==='team_transfer_required'?`Esta equipe ainda possui ${body.active_records||'alguns'} registros ativos. Escolha uma equipe de destino antes de desativar.`:'Não foi possível salvar as configurações da equipe.'});
       }
     } catch (e) {
       setFeedback({type:'error',message:'Não foi possível salvar as configurações da equipe.'});
@@ -140,11 +144,11 @@ export function TeamDetailPage({ teamId }: { teamId: string }) {
           {activeTab === 'VisoGeral' && (
             <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
               <div className="bg-gray-50 p-6 rounded-2xl border border-[#DDD8CF]/40">
-                <div className="text-sm font-medium text-gray-500 mb-2">Membros</div>
+                <div className="text-sm font-medium text-gray-500 mb-2">Pessoas</div>
                 <div className="text-3xl font-black text-[#202322]">{members.length}</div>
               </div>
               <div className="bg-gray-50 p-6 rounded-2xl border border-[#DDD8CF]/40">
-                <div className="text-sm font-medium text-gray-500 mb-2">Self Claim</div>
+                <div className="text-sm font-medium text-gray-500 mb-2">Leads disponíveis</div>
                 <div className="text-xl font-bold text-[#202322]">{team.allow_self_claim ? 'Ativado' : 'Desativado'}</div>
               </div>
               <div className="bg-gray-50 p-6 rounded-2xl border border-[#DDD8CF]/40">
@@ -312,10 +316,11 @@ export function TeamDetailPage({ teamId }: { teamId: string }) {
                       onChange={e => setFormData({...formData, allow_self_claim: e.target.checked})}
                     />
                     <div>
-                      <div className="font-medium text-[#202322]">Permitir "Self Claim"</div>
+                      <div className="font-medium text-[#202322]">Permitir que vendedores assumam leads disponíveis</div>
                       <div className="text-xs text-[#626866]">Membros podem assumir voluntariamente leads não atribuídos que chegam para esta equipe.</div>
                     </div>
                   </label>
+                  {platformRole?.key==='admin'?<div className="grid gap-4 rounded-xl border border-[#DDD8CF] bg-[#F6F5F2] p-4 sm:grid-cols-2"><label className="text-sm font-medium text-[#202322]">Situação da equipe<select value={formData.status||'active'} onChange={e=>setFormData({...formData,status:e.target.value,transfer_team_id:''})} className="mt-1 w-full rounded-xl border bg-white px-4 py-2"><option value="active">Ativa</option><option value="inactive">Inativa</option></select></label>{formData.status==='inactive'&&team.status==='active'?<label className="text-sm font-medium text-[#202322]">Transferir carteira para<select value={formData.transfer_team_id||''} onChange={e=>setFormData({...formData,transfer_team_id:e.target.value})} className="mt-1 w-full rounded-xl border bg-white px-4 py-2"><option value="">Sem equipe de destino</option>{availableTeams.map(item=><option key={item.id} value={item.id}>{item.name}</option>)}</select><span className="mt-1 block text-xs text-[#626866]">Obrigatório quando houver leads ou clientes ativos.</span></label>:null}</div>:null}
                   <div className="grid sm:grid-cols-2 gap-4"><label className="text-sm font-medium text-[#202322]">Alçada de proposta (centavos)<input disabled={platformRole?.key!=='admin'} type="number" min="0" value={formData.settings?.proposal_approval_limit_cents??''} onChange={e=>setFormData({...formData,settings:{...(formData.settings||{}),proposal_approval_limit_cents:e.target.value===''?null:Number(e.target.value)}})} className="mt-1 w-full px-4 py-2 border rounded-xl disabled:bg-gray-100"/><span className="block text-xs text-gray-500 mt-1">Vazio exige aprovação de admin.</span></label><label className="text-sm font-medium text-[#202322]">Alçada de contrato (centavos)<input disabled={platformRole?.key!=='admin'} type="number" min="0" value={formData.settings?.contract_approval_limit_cents??''} onChange={e=>setFormData({...formData,settings:{...(formData.settings||{}),contract_approval_limit_cents:e.target.value===''?null:Number(e.target.value)}})} className="mt-1 w-full px-4 py-2 border rounded-xl disabled:bg-gray-100"/><span className="block text-xs text-gray-500 mt-1">Vazio exige aprovação de admin.</span></label></div>
                 </div>
               </div>
