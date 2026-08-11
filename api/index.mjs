@@ -644,7 +644,7 @@ __export(router_exports, {
 import { createHash, timingSafeEqual } from "node:crypto";
 import { Router as Router6 } from "express";
 import { waitUntil } from "@vercel/functions";
-import { z as z5 } from "zod";
+import { z as z6 } from "zod";
 function webhookTokenMatches(actual, expected) {
   if (!actual || !expected) return false;
   const left = Buffer.from(actual);
@@ -1563,7 +1563,7 @@ function createBillingRouters(getSupabaseAdmin2) {
     return res.json(saved.data);
   });
   adminRouter.post("/commercial/contracts/:id/external-signature", authenticateRequest, resolvePlatformContext, requirePlatformPermission("platform.commercial.manage"), async (req, res) => {
-    const parsed = z5.object({ status: z5.enum(["sent", "signed"]), occurred_at: z5.string().datetime().optional(), notes: z5.string().trim().max(1e3).optional() }).safeParse(req.body);
+    const parsed = z6.object({ status: z6.enum(["sent", "signed"]), occurred_at: z6.string().datetime().optional(), notes: z6.string().trim().max(1e3).optional() }).safeParse(req.body);
     if (!parsed.success) return res.status(400).json({ error: "Informe o andamento da assinatura e uma data v\xE1lida." });
     const db = getSupabaseAdmin2();
     const existing = await db.from("commercial_contracts").select("*").eq("id", req.params.id).maybeSingle();
@@ -1651,11 +1651,11 @@ function createBillingRouters(getSupabaseAdmin2) {
     if (existingCustomer || existingSub) {
       return res.status(409).json({ error: "N\xE3o \xE9 poss\xEDvel alterar dados fiscais ap\xF3s integra\xE7\xE3o financeira iniciada." });
     }
-    const schema = z5.object({
-      customer_tax_id: z5.string().transform((v) => v.replace(/\D/g, "")),
-      customer_phone: z5.string().optional().nullable(),
-      customer_name: z5.string().optional().nullable(),
-      customer_email: z5.string().email("E-mail financeiro inv\xE1lido").optional().nullable()
+    const schema = z6.object({
+      customer_tax_id: z6.string().transform((v) => v.replace(/\D/g, "")),
+      customer_phone: z6.string().optional().nullable(),
+      customer_name: z6.string().optional().nullable(),
+      customer_email: z6.string().email("E-mail financeiro inv\xE1lido").optional().nullable()
     });
     const parsed = schema.safeParse(req.body);
     if (!parsed.success) {
@@ -2346,6 +2346,24 @@ import { Router as Router2 } from "express";
 import { z as z2 } from "zod";
 function createAdminClientsRouter(getSupabaseAdmin2) {
   const router = Router2();
+  async function findUserByEmail(db, email) {
+    for (let page = 1; page <= 20; page += 1) {
+      const result = await db.auth.admin.listUsers({ page, perPage: 1e3 });
+      if (result.error) throw result.error;
+      const found = result.data.users.find(
+        (user) => user.email?.toLowerCase() === email.toLowerCase()
+      );
+      if (found) return found;
+      if (result.data.users.length < 1e3) break;
+    }
+    return null;
+  }
+  function inviteRedirectUrl() {
+    const configured = process.env.APP_URL?.replace(/\/$/, "");
+    if (configured) return `${configured}/#/auth/accept-invite`;
+    const deployment = process.env.VERCEL_URL;
+    return `${deployment ? `https://${deployment}` : "https://ordum-ordum.vercel.app"}/#/auth/accept-invite`;
+  }
   router.get(
     "/",
     authenticateRequest,
@@ -2578,6 +2596,89 @@ function createAdminClientsRouter(getSupabaseAdmin2) {
         res.json({ ...data, memberships, assignment, owner, audit: auditRows });
       } catch (e) {
         res.status(500).json({ error: e.message });
+      }
+    }
+  );
+  router.post(
+    "/:id/invite-owner",
+    authenticateRequest,
+    resolvePlatformContext,
+    requirePlatformPermission([
+      "platform.clients.manage",
+      "platform.onboarding.manage"
+    ]),
+    async (req, res) => {
+      const parsed = z2.object({
+        email: z2.string().trim().email(),
+        name: z2.string().trim().min(2).max(120)
+      }).safeParse(req.body);
+      if (!parsed.success)
+        return res.status(400).json({
+          error: "Informe o nome e um e-mail v\xE1lido para o respons\xE1vel."
+        });
+      const db = getSupabaseAdmin2();
+      const tenant = await db.from("tenants").select("id,name,platform_client_assignments(*)").eq("id", req.params.id).maybeSingle();
+      if (tenant.error || !tenant.data)
+        return res.status(404).json({ error: "Cliente n\xE3o encontrado." });
+      if (req.platformContext.role?.key !== "admin" && !canReadAssignedResource(
+        req.platformContext,
+        tenant.data.platform_client_assignments?.[0],
+        "member_client_visibility"
+      ))
+        return res.status(403).json({ error: "Cliente fora do seu escopo." });
+      let createdAuthUser = false;
+      let authUser = null;
+      try {
+        authUser = await findUserByEmail(db, parsed.data.email);
+        if (!authUser) {
+          const invited = await db.auth.admin.inviteUserByEmail(
+            parsed.data.email,
+            {
+              redirectTo: inviteRedirectUrl(),
+              data: { full_name: parsed.data.name }
+            }
+          );
+          if (invited.error) throw invited.error;
+          authUser = invited.data.user;
+          createdAuthUser = true;
+        }
+        const accessAlreadyVerified = Boolean(
+          !createdAuthUser && (authUser.email_confirmed_at || authUser.last_sign_in_at)
+        );
+        const prepared = await db.rpc("admin_prepare_tenant_owner_invitation", {
+          p_tenant_id: tenant.data.id,
+          p_user_id: authUser.id,
+          p_email: parsed.data.email,
+          p_membership_status: accessAlreadyVerified ? "active" : "invited",
+          p_expires_at: accessAlreadyVerified ? null : new Date(Date.now() + 7 * 864e5).toISOString()
+        });
+        if (prepared.error) throw prepared.error;
+        await db.from("platform_audit_logs").insert({
+          actor_user_id: req.user.id,
+          action: accessAlreadyVerified ? "tenant.owner.access_granted" : createdAuthUser ? "tenant.owner.invited" : "tenant.owner.invitation_preserved",
+          entity_type: "tenants",
+          entity_id: tenant.data.id,
+          severity: "info",
+          ...auditContext(req, {
+            result: "success",
+            after: {
+              membership_status: accessAlreadyVerified ? "active" : "invited",
+              role: "tenant_admin"
+            }
+          })
+        });
+        return res.status(createdAuthUser ? 201 : 200).json({
+          invited: createdAuthUser,
+          invitationPending: !accessAlreadyVerified,
+          accessActive: accessAlreadyVerified,
+          membershipStatus: accessAlreadyVerified ? "active" : "invited"
+        });
+      } catch (error) {
+        if (createdAuthUser && authUser?.id)
+          await db.auth.admin.deleteUser(authUser.id).catch(() => void 0);
+        return res.status(400).json({
+          error: error?.message || "N\xE3o foi poss\xEDvel preparar o acesso do respons\xE1vel."
+        });
       }
     }
   );
@@ -3226,6 +3327,7 @@ init_authorization();
 init_operational();
 init_tenantAuth();
 import { Router as Router4 } from "express";
+import { z as z4 } from "zod";
 var MODULES = {
   onboarding: { table: "onboarding_runs", select: "*, tenants(id,name,lifecycle_status), onboarding_items(*)", permission: "platform.onboarding.read", tenantField: "tenant_id", ownerField: "owner_platform_member_id", orderField: "created_at" },
   success: { table: "customer_success_accounts", select: "*, tenants(id,name,lifecycle_status,risk_level)", permission: "platform.success.read", tenantField: "tenant_id", ownerField: "manager_platform_member_id", orderField: "updated_at" },
@@ -3368,6 +3470,57 @@ function createAdminControlPlaneRouter(getSupabaseAdmin2) {
       return res.status(500).json({ error: error.message });
     }
   });
+  router.get("/control-plane/support/:id", authenticateRequest, resolvePlatformContext, requirePlatformPermission("platform.support.read"), async (req, res) => {
+    try {
+      const db = getSupabaseAdmin2();
+      const ticket = await db.from("support_tickets").select("*,tenants(id,name),solutions(id,key,name),platform_members(id,user_id),platform_teams(id,name)").eq("id", req.params.id).maybeSingle();
+      if (ticket.error || !ticket.data) return res.status(404).json({ error: "Chamado n\xE3o encontrado." });
+      const allowedTenants = await visibleTenantIds(db, req.platformContext);
+      if (allowedTenants !== null && !allowedTenants.includes(ticket.data.tenant_id)) return res.status(403).json({ error: "Chamado fora da sua carteira." });
+      const events = await db.from("support_ticket_events").select("id,event_type,body,private,actor_user_id,created_at").eq("ticket_id", ticket.data.id).order("created_at", { ascending: true });
+      if (events.error) throw events.error;
+      const userIds = [...new Set((events.data || []).map((item) => item.actor_user_id).filter(Boolean))];
+      if (ticket.data.platform_members?.user_id) userIds.push(ticket.data.platform_members.user_id);
+      const users = await db.auth.admin.listUsers({ page: 1, perPage: 1e3 });
+      if (users.error) throw users.error;
+      const names = new Map(users.data.users.filter((user) => userIds.includes(user.id)).map((user) => [user.id, user.user_metadata?.full_name || user.email || "Equipe Ordum"]));
+      return res.json({
+        ticket: {
+          ...ticket.data,
+          owner_name: ticket.data.platform_members?.user_id ? names.get(ticket.data.platform_members.user_id) || "Equipe Ordum" : null,
+          platform_members: void 0
+        },
+        events: (events.data || []).map((item) => ({ ...item, actor_name: names.get(item.actor_user_id) || "Equipe Ordum", actor_user_id: void 0 }))
+      });
+    } catch (error) {
+      return res.status(500).json({ error: "N\xE3o foi poss\xEDvel abrir este chamado." });
+    }
+  });
+  router.post("/control-plane/support/:id/messages", authenticateRequest, resolvePlatformContext, requirePlatformPermission("platform.support.manage"), async (req, res) => {
+    const parsed = z4.object({ kind: z4.enum(["external_reply", "internal_note"]), body: z4.string().trim().min(2).max(4e3) }).safeParse(req.body);
+    if (!parsed.success) return res.status(400).json({ error: "Escreva uma mensagem antes de enviar." });
+    try {
+      const db = getSupabaseAdmin2();
+      const ticket = await db.from("support_tickets").select("*").eq("id", req.params.id).maybeSingle();
+      if (ticket.error || !ticket.data) return res.status(404).json({ error: "Chamado n\xE3o encontrado." });
+      const allowedTenants = await visibleTenantIds(db, req.platformContext);
+      if (allowedTenants !== null && !allowedTenants.includes(ticket.data.tenant_id)) return res.status(403).json({ error: "Chamado fora da sua carteira." });
+      const isPrivate = parsed.data.kind === "internal_note";
+      const inserted = await db.from("support_ticket_events").insert({
+        ticket_id: ticket.data.id,
+        event_type: isPrivate ? "internal_comment" : "external_communication",
+        body: parsed.data.body,
+        private: isPrivate,
+        actor_user_id: req.user.id
+      }).select("id,event_type,body,private,created_at").single();
+      if (inserted.error) throw inserted.error;
+      await db.from("support_tickets").update({ updated_at: (/* @__PURE__ */ new Date()).toISOString(), lock_version: Number(ticket.data.lock_version || 1) + 1 }).eq("id", ticket.data.id).eq("lock_version", ticket.data.lock_version);
+      await db.from("platform_audit_logs").insert({ actor_user_id: req.user.id, action: isPrivate ? "support.internal_note.created" : "support.customer_reply.sent", entity_type: "support_tickets", entity_id: ticket.data.id, team_id: ticket.data.team_id, severity: "info", ...auditContext(req, { result: "success", after: { event_type: inserted.data.event_type, tenant_id: ticket.data.tenant_id } }) });
+      return res.status(201).json({ ...inserted.data, actor_name: req.user.user_metadata?.full_name || req.user.email || "Equipe Ordum" });
+    } catch (error) {
+      return res.status(500).json({ error: "N\xE3o foi poss\xEDvel registrar a mensagem." });
+    }
+  });
   router.post("/control-plane/transition", authenticateRequest, resolvePlatformContext, requirePlatformPermission(["platform.commercial.manage", "platform.onboarding.manage", "platform.support.manage", "platform.privacy.manage", "platform.clients.manage"]), async (req, res) => {
     try {
       const { entityType, entityId, toStatus, reason, teamId, tenantId, requestId, metadata } = req.body || {};
@@ -3496,7 +3649,7 @@ function createAdminControlPlaneRouter(getSupabaseAdmin2) {
 init_operational();
 init_tenantAuth();
 import { Router as Router5 } from "express";
-import { z as z4 } from "zod";
+import { z as z5 } from "zod";
 function createAdminTeamsRouter(getSupabaseAdmin2, _old_requirePlatformAuth) {
   const router = Router5();
   router.get("/", authenticateRequest, resolvePlatformContext, requirePlatformPermission("platform.teams.read"), async (req, res) => {
@@ -3515,14 +3668,14 @@ function createAdminTeamsRouter(getSupabaseAdmin2, _old_requirePlatformAuth) {
       res.status(500).json({ error: e.message });
     }
   });
-  const createTeamSchema = z4.object({
-    name: z4.string().min(1),
-    team_type: z4.string(),
-    channel: z4.string(),
-    description: z4.string().optional(),
-    member_lead_visibility: z4.string(),
-    member_client_visibility: z4.string(),
-    allow_self_claim: z4.boolean()
+  const createTeamSchema = z5.object({
+    name: z5.string().min(1),
+    team_type: z5.string(),
+    channel: z5.string(),
+    description: z5.string().optional(),
+    member_lead_visibility: z5.string(),
+    member_client_visibility: z5.string(),
+    allow_self_claim: z5.boolean()
   });
   router.post("/", authenticateRequest, resolvePlatformContext, requirePlatformPermission("platform.teams.create"), async (req, res) => {
     try {
@@ -3571,16 +3724,16 @@ function createAdminTeamsRouter(getSupabaseAdmin2, _old_requirePlatformAuth) {
       res.status(500).json({ error: e.message });
     }
   });
-  const updateTeamSchema = z4.object({
-    name: z4.string().optional(),
-    description: z4.string().optional(),
-    team_type: z4.string().optional(),
-    channel: z4.string().optional(),
-    status: z4.string().optional(),
-    member_lead_visibility: z4.string().optional(),
-    member_client_visibility: z4.string().optional(),
-    allow_self_claim: z4.boolean().optional(),
-    settings: z4.any().optional()
+  const updateTeamSchema = z5.object({
+    name: z5.string().optional(),
+    description: z5.string().optional(),
+    team_type: z5.string().optional(),
+    channel: z5.string().optional(),
+    status: z5.string().optional(),
+    member_lead_visibility: z5.string().optional(),
+    member_client_visibility: z5.string().optional(),
+    allow_self_claim: z5.boolean().optional(),
+    settings: z5.any().optional()
   });
   router.patch("/:id", authenticateRequest, resolvePlatformContext, requirePlatformPermission("platform.teams.manage"), async (req, res) => {
     try {
@@ -3663,9 +3816,9 @@ function createAdminTeamsRouter(getSupabaseAdmin2, _old_requirePlatformAuth) {
       res.status(500).json({ error: e.message });
     }
   });
-  const teamMemberSchema = z4.object({
-    platform_member_id: z4.string().uuid(),
-    team_role: z4.string()
+  const teamMemberSchema = z5.object({
+    platform_member_id: z5.string().uuid(),
+    team_role: z5.string()
   });
   router.post("/:id/members", authenticateRequest, resolvePlatformContext, requirePlatformPermission("platform.teams.members.manage"), async (req, res) => {
     try {
@@ -3746,7 +3899,7 @@ init_router();
 init_tenantAuth();
 import express from "express";
 import { createHash as createHash2, randomUUID as randomUUID2 } from "node:crypto";
-import { z as z6 } from "zod";
+import { z as z7 } from "zod";
 
 // src/domain/integrity.ts
 var INTEGRITY_TRANSITIONS = {
@@ -4161,197 +4314,197 @@ function routingExplanation(rule, labels = {}) {
 }
 
 // src/server/integrityRouter.ts
-var listSchema = z6.object({
-  search: z6.string().trim().max(120).optional(),
-  status: z6.string().max(40).optional(),
-  severity: z6.string().max(20).optional(),
-  category_id: z6.string().uuid().optional(),
-  unit_id: z6.string().uuid().optional(),
-  department_id: z6.string().uuid().optional(),
-  owner_id: z6.string().uuid().optional(),
-  committee_id: z6.string().uuid().optional(),
-  from: z6.string().datetime().optional(),
-  to: z6.string().datetime().optional(),
-  sla: z6.enum(["due_soon", "overdue"]).optional(),
-  view: z6.enum(["all", "unassigned", "mine", "awaiting_reply", "closed"]).default("all"),
-  page: z6.coerce.number().int().min(1).default(1),
-  limit: z6.coerce.number().int().min(1).max(100).default(25),
-  order: z6.enum([
+var listSchema = z7.object({
+  search: z7.string().trim().max(120).optional(),
+  status: z7.string().max(40).optional(),
+  severity: z7.string().max(20).optional(),
+  category_id: z7.string().uuid().optional(),
+  unit_id: z7.string().uuid().optional(),
+  department_id: z7.string().uuid().optional(),
+  owner_id: z7.string().uuid().optional(),
+  committee_id: z7.string().uuid().optional(),
+  from: z7.string().datetime().optional(),
+  to: z7.string().datetime().optional(),
+  sla: z7.enum(["due_soon", "overdue"]).optional(),
+  view: z7.enum(["all", "unassigned", "mine", "awaiting_reply", "closed"]).default("all"),
+  page: z7.coerce.number().int().min(1).default(1),
+  limit: z7.coerce.number().int().min(1).max(100).default(25),
+  order: z7.enum([
     "created_at",
     "first_response_due_at",
     "treatment_due_at",
     "updated_at",
     "severity"
   ]).default("created_at"),
-  direction: z6.enum(["asc", "desc"]).default("desc")
+  direction: z7.enum(["asc", "desc"]).default("desc")
 });
-var dashboardSchema = z6.object({
-  status: z6.string().max(40).optional(),
-  severity: z6.string().max(20).optional(),
-  category_id: z6.string().uuid().optional(),
-  unit_id: z6.string().uuid().optional(),
-  department_id: z6.string().uuid().optional(),
-  owner_id: z6.string().uuid().optional(),
-  committee_id: z6.string().uuid().optional(),
-  from: z6.string().datetime().optional(),
-  to: z6.string().datetime().optional()
+var dashboardSchema = z7.object({
+  status: z7.string().max(40).optional(),
+  severity: z7.string().max(20).optional(),
+  category_id: z7.string().uuid().optional(),
+  unit_id: z7.string().uuid().optional(),
+  department_id: z7.string().uuid().optional(),
+  owner_id: z7.string().uuid().optional(),
+  committee_id: z7.string().uuid().optional(),
+  from: z7.string().datetime().optional(),
+  to: z7.string().datetime().optional()
 });
-var transitionSchema = z6.object({
-  to_status: z6.string(),
-  reason: z6.string().trim().max(1e3).optional(),
-  lock_version: z6.number().int().positive()
+var transitionSchema = z7.object({
+  to_status: z7.string(),
+  reason: z7.string().trim().max(1e3).optional(),
+  lock_version: z7.number().int().positive()
 });
-var assignmentSchema = z6.object({
-  membership_id: z6.string().uuid(),
-  reason: z6.string().trim().min(3).max(500)
+var assignmentSchema = z7.object({
+  membership_id: z7.string().uuid(),
+  reason: z7.string().trim().min(3).max(500)
 });
-var messageSchema = z6.object({
-  body: z6.string().trim().min(2).max(5e3),
-  visible_to_reporter: z6.boolean().default(false)
+var messageSchema = z7.object({
+  body: z7.string().trim().min(2).max(5e3),
+  visible_to_reporter: z7.boolean().default(false)
 });
-var settingsSchema = z6.object({
-  introduction: z6.string().trim().min(10).max(2e3),
-  instructions: z6.string().trim().max(4e3).nullable().optional(),
-  allows_anonymous: z6.boolean(),
-  allows_identified: z6.boolean(),
-  default_sla_hours: z6.number().int().min(1).max(8760),
-  automatic_acknowledgement: z6.string().trim().min(5).max(2e3),
-  branding: z6.record(z6.string(), z6.unknown()).default({}),
-  attachment_policy: z6.record(z6.string(), z6.unknown()).default({}),
-  communication_policy: z6.record(z6.string(), z6.unknown()).default({
+var settingsSchema = z7.object({
+  introduction: z7.string().trim().min(10).max(2e3),
+  instructions: z7.string().trim().max(4e3).nullable().optional(),
+  allows_anonymous: z7.boolean(),
+  allows_identified: z7.boolean(),
+  default_sla_hours: z7.number().int().min(1).max(8760),
+  automatic_acknowledgement: z7.string().trim().min(5).max(2e3),
+  branding: z7.record(z7.string(), z7.unknown()).default({}),
+  attachment_policy: z7.record(z7.string(), z7.unknown()).default({}),
+  communication_policy: z7.record(z7.string(), z7.unknown()).default({
     allow_reporter_messages: true,
     allow_case_messages: true
   }),
-  routing_rules: z6.array(z6.unknown()).default([]),
-  treatment_sla_hours: z6.number().int().min(1).max(17520).default(720),
-  default_assignee_membership_id: z6.string().uuid().nullable().optional(),
-  default_committee_id: z6.string().uuid().nullable().optional(),
-  retention_days: z6.number().int().min(30).max(7300).default(1825),
-  evidence_retention_days: z6.number().int().min(30).max(7300).default(1825),
-  message_retention_days: z6.number().int().min(30).max(7300).default(1825),
-  post_closure_action: z6.enum(["archive", "anonymize"]).default("archive"),
-  anonymization_enabled: z6.boolean().default(false),
-  alert_lead_hours: z6.number().int().min(1).max(720).default(24),
-  stale_case_hours: z6.number().int().min(24).max(8760).default(168)
+  routing_rules: z7.array(z7.unknown()).default([]),
+  treatment_sla_hours: z7.number().int().min(1).max(17520).default(720),
+  default_assignee_membership_id: z7.string().uuid().nullable().optional(),
+  default_committee_id: z7.string().uuid().nullable().optional(),
+  retention_days: z7.number().int().min(30).max(7300).default(1825),
+  evidence_retention_days: z7.number().int().min(30).max(7300).default(1825),
+  message_retention_days: z7.number().int().min(30).max(7300).default(1825),
+  post_closure_action: z7.enum(["archive", "anonymize"]).default("archive"),
+  anonymization_enabled: z7.boolean().default(false),
+  alert_lead_hours: z7.number().int().min(1).max(720).default(24),
+  stale_case_hours: z7.number().int().min(24).max(8760).default(168)
 });
-var conflictSchema = z6.object({
-  membership_id: z6.string().uuid(),
-  reason: z6.string().trim().min(3).max(500)
+var conflictSchema = z7.object({
+  membership_id: z7.string().uuid(),
+  reason: z7.string().trim().min(3).max(500)
 });
-var channelSchema = z6.object({
-  id: z6.string().uuid().optional(),
-  name: z6.string().trim().min(2).max(160),
-  public_title: z6.string().trim().min(2).max(160),
-  public_slug: z6.string().trim().regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/).max(80),
-  active: z6.boolean().default(true),
-  allows_anonymous: z6.boolean(),
-  allows_identified: z6.boolean(),
-  privacy_notice: z6.string().trim().max(4e3).nullable().optional(),
-  confirmation_message: z6.string().trim().max(2e3).nullable().optional()
+var channelSchema = z7.object({
+  id: z7.string().uuid().optional(),
+  name: z7.string().trim().min(2).max(160),
+  public_title: z7.string().trim().min(2).max(160),
+  public_slug: z7.string().trim().regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/).max(80),
+  active: z7.boolean().default(true),
+  allows_anonymous: z7.boolean(),
+  allows_identified: z7.boolean(),
+  privacy_notice: z7.string().trim().max(4e3).nullable().optional(),
+  confirmation_message: z7.string().trim().max(2e3).nullable().optional()
 });
-var categorySchema = z6.object({
-  id: z6.string().uuid().optional(),
-  name: z6.string().trim().min(2).max(120),
-  slug: z6.string().trim().regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/).max(80),
-  description: z6.string().trim().max(1e3).nullable().optional(),
-  default_risk_level: z6.enum(["low", "medium", "high", "critical"]),
-  sla_hours: z6.number().int().min(1).max(8760).nullable().optional(),
-  active: z6.boolean().default(true)
+var categorySchema = z7.object({
+  id: z7.string().uuid().optional(),
+  name: z7.string().trim().min(2).max(120),
+  slug: z7.string().trim().regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/).max(80),
+  description: z7.string().trim().max(1e3).nullable().optional(),
+  default_risk_level: z7.enum(["low", "medium", "high", "critical"]),
+  sla_hours: z7.number().int().min(1).max(8760).nullable().optional(),
+  active: z7.boolean().default(true)
 });
-var unitSchema = z6.object({
-  id: z6.string().uuid().optional(),
-  name: z6.string().trim().min(2).max(120),
-  code: z6.string().trim().max(40).nullable().optional(),
-  active: z6.boolean().default(true),
-  is_headquarters: z6.boolean().default(false),
-  responsible_membership_id: z6.string().uuid().nullable().optional()
+var unitSchema = z7.object({
+  id: z7.string().uuid().optional(),
+  name: z7.string().trim().min(2).max(120),
+  code: z7.string().trim().max(40).nullable().optional(),
+  active: z7.boolean().default(true),
+  is_headquarters: z7.boolean().default(false),
+  responsible_membership_id: z7.string().uuid().nullable().optional()
 });
-var departmentSchema = z6.object({ id: z6.string().uuid().optional(), unit_id: z6.string().uuid(), name: z6.string().trim().min(2).max(120), code: z6.string().trim().max(40).nullable().optional(), responsible_membership_id: z6.string().uuid().nullable().optional(), active: z6.boolean().default(true) });
-var customFieldSchema = z6.object({ id: z6.string().uuid().optional(), channel_id: z6.string().uuid().nullable().optional(), field_key: z6.string().regex(/^[a-z][a-z0-9_]{1,63}$/), label: z6.string().trim().min(2).max(120), help_text: z6.string().trim().max(500).nullable().optional(), field_type: z6.enum(["short_text", "long_text", "single_select", "multi_select", "date", "boolean"]), required: z6.boolean().default(false), options: z6.array(z6.string().trim().min(1).max(120)).max(50).default([]), active: z6.boolean().default(true), sort_order: z6.number().int().min(0).max(1e3).default(0) }).refine((value) => !["single_select", "multi_select"].includes(value.field_type) || value.options.length > 0, { message: "Campos de sele\xE7\xE3o exigem op\xE7\xF5es." });
-var taskSchema = z6.object({
-  title: z6.string().trim().min(2).max(200),
-  description: z6.string().trim().max(2e3).nullable().optional(),
-  assignee_membership_id: z6.string().uuid().nullable().optional(),
-  due_at: z6.string().datetime().nullable().optional(),
-  priority: z6.enum(["low", "normal", "high", "urgent"]).default("normal"),
-  parent_task_id: z6.string().uuid().nullable().optional()
+var departmentSchema = z7.object({ id: z7.string().uuid().optional(), unit_id: z7.string().uuid(), name: z7.string().trim().min(2).max(120), code: z7.string().trim().max(40).nullable().optional(), responsible_membership_id: z7.string().uuid().nullable().optional(), active: z7.boolean().default(true) });
+var customFieldSchema = z7.object({ id: z7.string().uuid().optional(), channel_id: z7.string().uuid().nullable().optional(), field_key: z7.string().regex(/^[a-z][a-z0-9_]{1,63}$/), label: z7.string().trim().min(2).max(120), help_text: z7.string().trim().max(500).nullable().optional(), field_type: z7.enum(["short_text", "long_text", "single_select", "multi_select", "date", "boolean"]), required: z7.boolean().default(false), options: z7.array(z7.string().trim().min(1).max(120)).max(50).default([]), active: z7.boolean().default(true), sort_order: z7.number().int().min(0).max(1e3).default(0) }).refine((value) => !["single_select", "multi_select"].includes(value.field_type) || value.options.length > 0, { message: "Campos de sele\xE7\xE3o exigem op\xE7\xF5es." });
+var taskSchema = z7.object({
+  title: z7.string().trim().min(2).max(200),
+  description: z7.string().trim().max(2e3).nullable().optional(),
+  assignee_membership_id: z7.string().uuid().nullable().optional(),
+  due_at: z7.string().datetime().nullable().optional(),
+  priority: z7.enum(["low", "normal", "high", "urgent"]).default("normal"),
+  parent_task_id: z7.string().uuid().nullable().optional()
 });
-var taskUpdateSchema = z6.object({
-  title: z6.string().trim().min(2).max(200).optional(),
-  description: z6.string().trim().max(2e3).nullable().optional(),
-  assignee_membership_id: z6.string().uuid().nullable().optional(),
-  due_at: z6.string().datetime().nullable().optional(),
-  priority: z6.enum(["low", "normal", "high", "urgent"]).optional(),
-  status: z6.enum(["open", "in_progress", "done", "cancelled"]).optional(),
-  reason: z6.string().trim().min(3).max(500)
+var taskUpdateSchema = z7.object({
+  title: z7.string().trim().min(2).max(200).optional(),
+  description: z7.string().trim().max(2e3).nullable().optional(),
+  assignee_membership_id: z7.string().uuid().nullable().optional(),
+  due_at: z7.string().datetime().nullable().optional(),
+  priority: z7.enum(["low", "normal", "high", "urgent"]).optional(),
+  status: z7.enum(["open", "in_progress", "done", "cancelled"]).optional(),
+  reason: z7.string().trim().min(3).max(500)
 }).refine((value) => Object.keys(value).some((key) => key !== "reason"), { message: "Informe uma altera\xE7\xE3o." });
-var decisionSchema = z6.object({
-  final_classification: z6.string().trim().min(3).max(200),
-  conclusion: z6.string().trim().min(3).max(1e4),
-  measures_taken: z6.string().trim().min(3).max(1e4),
-  internal_justification: z6.string().trim().min(3).max(5e3),
-  reporter_outcome: z6.string().trim().max(3e3).nullable().optional(),
-  lock_version: z6.number().int().positive()
+var decisionSchema = z7.object({
+  final_classification: z7.string().trim().min(3).max(200),
+  conclusion: z7.string().trim().min(3).max(1e4),
+  measures_taken: z7.string().trim().min(3).max(1e4),
+  internal_justification: z7.string().trim().min(3).max(5e3),
+  reporter_outcome: z7.string().trim().max(3e3).nullable().optional(),
+  lock_version: z7.number().int().positive()
 });
-var recommendationSchema = z6.object({
-  recommendation: z6.string().trim().min(10).max(1e4),
-  justification: z6.string().trim().min(10).max(5e3)
+var recommendationSchema = z7.object({
+  recommendation: z7.string().trim().min(10).max(1e4),
+  justification: z7.string().trim().min(10).max(5e3)
 });
-var committeeSchema = z6.object({
-  name: z6.string().trim().min(2).max(120),
-  description: z6.string().trim().max(1e3).nullable().optional(),
-  member_ids: z6.array(z6.string().uuid()).max(50).default([]),
-  active: z6.boolean().default(true)
+var committeeSchema = z7.object({
+  name: z7.string().trim().min(2).max(120),
+  description: z7.string().trim().max(1e3).nullable().optional(),
+  member_ids: z7.array(z7.string().uuid()).max(50).default([]),
+  active: z7.boolean().default(true)
 });
 var committeeUpdateSchema = committeeSchema.extend({
-  status: z6.enum(["active", "inactive", "archived"])
+  status: z7.enum(["active", "inactive", "archived"])
 });
-var routingSchema = z6.object({
-  name: z6.string().trim().min(2).max(120),
-  category_id: z6.string().uuid().nullable().optional(),
-  unit_id: z6.string().uuid().nullable().optional(),
-  department_id: z6.string().uuid().nullable().optional(),
-  severity: z6.enum(["low", "medium", "high", "critical"]).nullable().optional(),
-  reporter_mode: z6.enum(["anonymous", "identified"]).nullable().optional(),
-  requires_conflict: z6.boolean().nullable().optional(),
-  assignee_membership_id: z6.string().uuid().nullable().optional(),
-  committee_id: z6.string().uuid().nullable().optional(),
-  priority: z6.number().int().min(0).max(1e4).default(100),
-  active: z6.boolean().default(true),
-  is_fallback: z6.boolean().default(false),
-  target_sla_hours: z6.number().int().min(1).max(17520).nullable().optional(),
-  target_priority: z6.enum(["low", "normal", "high", "urgent"]).nullable().optional(),
-  escalation_committee_id: z6.string().uuid().nullable().optional(),
-  escalation_membership_id: z6.string().uuid().nullable().optional(),
-  collaborator_ids: z6.array(z6.string().uuid()).max(50).default([])
+var routingSchema = z7.object({
+  name: z7.string().trim().min(2).max(120),
+  category_id: z7.string().uuid().nullable().optional(),
+  unit_id: z7.string().uuid().nullable().optional(),
+  department_id: z7.string().uuid().nullable().optional(),
+  severity: z7.enum(["low", "medium", "high", "critical"]).nullable().optional(),
+  reporter_mode: z7.enum(["anonymous", "identified"]).nullable().optional(),
+  requires_conflict: z7.boolean().nullable().optional(),
+  assignee_membership_id: z7.string().uuid().nullable().optional(),
+  committee_id: z7.string().uuid().nullable().optional(),
+  priority: z7.number().int().min(0).max(1e4).default(100),
+  active: z7.boolean().default(true),
+  is_fallback: z7.boolean().default(false),
+  target_sla_hours: z7.number().int().min(1).max(17520).nullable().optional(),
+  target_priority: z7.enum(["low", "normal", "high", "urgent"]).nullable().optional(),
+  escalation_committee_id: z7.string().uuid().nullable().optional(),
+  escalation_membership_id: z7.string().uuid().nullable().optional(),
+  collaborator_ids: z7.array(z7.string().uuid()).max(50).default([])
 }).refine((value) => value.assignee_membership_id || value.committee_id, {
   message: "Defina um respons\xE1vel ou comit\xEA."
 }).refine((value) => !value.is_fallback || !value.category_id && !value.unit_id && !value.department_id && !value.severity && !value.reporter_mode && value.requires_conflict == null, {
   message: "A regra fallback n\xE3o pode restringir categoria ou unidade."
 });
 var routingUpdateSchema = routingSchema.extend({
-  status: z6.enum(["active", "inactive", "archived"])
+  status: z7.enum(["active", "inactive", "archived"])
 });
-var routingPreviewSchema = z6.object({
-  category_id: z6.string().uuid().nullable().optional(),
-  unit_id: z6.string().uuid().nullable().optional(),
-  department_id: z6.string().uuid().nullable().optional(),
-  severity: z6.enum(["low", "medium", "high", "critical"]).nullable().optional(),
-  reporter_mode: z6.enum(["anonymous", "identified"]).nullable().optional(),
-  has_conflict: z6.boolean().default(false)
+var routingPreviewSchema = z7.object({
+  category_id: z7.string().uuid().nullable().optional(),
+  unit_id: z7.string().uuid().nullable().optional(),
+  department_id: z7.string().uuid().nullable().optional(),
+  severity: z7.enum(["low", "medium", "high", "critical"]).nullable().optional(),
+  reporter_mode: z7.enum(["anonymous", "identified"]).nullable().optional(),
+  has_conflict: z7.boolean().default(false)
 });
-var collaboratorSchema = z6.object({
-  membership_id: z6.string().uuid(),
-  role: z6.enum(["investigator", "participant"]).default("investigator"),
-  reason: z6.string().trim().min(3).max(500)
+var collaboratorSchema = z7.object({
+  membership_id: z7.string().uuid(),
+  role: z7.enum(["investigator", "participant"]).default("investigator"),
+  reason: z7.string().trim().min(3).max(500)
 });
-var templateSchema = z6.object({
-  id: z6.string().uuid().optional(),
-  template_type: z6.enum(["task", "reporter_message", "information_request", "recommendation", "decision"]),
-  name: z6.string().trim().min(2).max(120),
-  title: z6.string().trim().max(200).nullable().optional(),
-  body: z6.string().trim().min(2).max(1e4),
-  active: z6.boolean().default(true)
+var templateSchema = z7.object({
+  id: z7.string().uuid().optional(),
+  template_type: z7.enum(["task", "reporter_message", "information_request", "recommendation", "decision"]),
+  name: z7.string().trim().min(2).max(120),
+  title: z7.string().trim().max(200).nullable().optional(),
+  body: z7.string().trim().min(2).max(1e4),
+  active: z7.boolean().default(true)
 });
 function createIntegrityRouter(getSupabaseAdmin2, authOverrides) {
   const router = express.Router();
@@ -6285,7 +6438,7 @@ function createIntegrityRouter(getSupabaseAdmin2, authOverrides) {
     return res.send(pdf);
   }));
   router.post("/retention/:id/review", requireAny("integrity.retention.manage"), asyncHandler(async (req, res) => {
-    const parsed = z6.object({ decision: z6.enum(["archive", "keep_active", "defer"]), reason: z6.string().trim().min(3).max(1e3), defer_until: z6.string().datetime().nullable().optional() }).safeParse(req.body);
+    const parsed = z7.object({ decision: z7.enum(["archive", "keep_active", "defer"]), reason: z7.string().trim().min(3).max(1e3), defer_until: z7.string().datetime().nullable().optional() }).safeParse(req.body);
     if (!parsed.success) return res.status(400).json({ error: "Revis\xE3o de reten\xE7\xE3o inv\xE1lida." });
     const db = getSupabaseAdmin2();
     const found = await findCase(db, req, req.params.id, "id,tenant_id,report_id,retention_state");
@@ -6305,29 +6458,29 @@ function createIntegrityRouter(getSupabaseAdmin2, authOverrides) {
 // src/server/integrityPublicRouter.ts
 import express2 from "express";
 import { createHash as createHash3, randomUUID as randomUUID3 } from "node:crypto";
-import { z as z7 } from "zod";
-var reportSchema = z7.object({
-  channel_slug: z7.string().trim().min(2).max(80),
-  category_slug: z7.string().trim().min(1).max(80),
-  reporter_mode: z7.enum(["anonymous", "identified"]),
-  subject: z7.string().trim().min(3).max(160),
-  description: z7.string().trim().min(20).max(2e4),
-  occurred_at: z7.string().date().nullable().optional(),
-  unit_id: z7.string().uuid().nullable().optional(),
-  department_id: z7.string().uuid().nullable().optional(),
-  custom_fields: z7.record(z7.string(), z7.unknown()).default({}),
-  identity: z7.object({
-    name: z7.string().trim().min(2).max(160),
-    email: z7.string().email().max(254).optional().or(z7.literal("")),
-    phone: z7.string().trim().max(30).optional()
+import { z as z8 } from "zod";
+var reportSchema = z8.object({
+  channel_slug: z8.string().trim().min(2).max(80),
+  category_slug: z8.string().trim().min(1).max(80),
+  reporter_mode: z8.enum(["anonymous", "identified"]),
+  subject: z8.string().trim().min(3).max(160),
+  description: z8.string().trim().min(20).max(2e4),
+  occurred_at: z8.string().date().nullable().optional(),
+  unit_id: z8.string().uuid().nullable().optional(),
+  department_id: z8.string().uuid().nullable().optional(),
+  custom_fields: z8.record(z8.string(), z8.unknown()).default({}),
+  identity: z8.object({
+    name: z8.string().trim().min(2).max(160),
+    email: z8.string().email().max(254).optional().or(z8.literal("")),
+    phone: z8.string().trim().max(30).optional()
   }).nullable().optional()
 });
-var credentialsSchema = z7.object({
-  protocol: z7.string().trim().min(8).max(64),
-  secret: z7.string().min(24).max(256)
+var credentialsSchema = z8.object({
+  protocol: z8.string().trim().min(8).max(64),
+  secret: z8.string().min(24).max(256)
 });
 var messageSchema2 = credentialsSchema.extend({
-  body: z7.string().trim().min(2).max(5e3)
+  body: z8.string().trim().min(2).max(5e3)
 });
 function createIntegrityPublicRouter(getSupabaseAdmin2) {
   const router = express2.Router();
@@ -6898,6 +7051,42 @@ async function createApp() {
     } catch (e) {
       reportServerError(e, req, "admin_session_resolve");
       return res.status(500).json({ error: "N\xE3o foi poss\xEDvel resolver a sess\xE3o administrativa." });
+    }
+  });
+  app.post("/api/auth/accept-invite", authenticateRequest, async (req, res) => {
+    const db = getSupabaseAdmin2();
+    const email = req.user?.email?.toLowerCase();
+    if (!email)
+      return res.status(400).json({ error: "O convite n\xE3o possui um e-mail v\xE1lido." });
+    try {
+      const invitations = await db.from("invitations").select("id,tenant_id,expires_at").eq("email", email).eq("status", "pending");
+      if (invitations.error) throw invitations.error;
+      const valid = (invitations.data || []).filter(
+        (item) => !item.expires_at || new Date(item.expires_at).getTime() > Date.now()
+      );
+      if (!valid.length)
+        return res.status(404).json({ error: "Este convite n\xE3o est\xE1 mais dispon\xEDvel. Solicite um novo envio." });
+      const tenantIds = valid.map((item) => item.tenant_id);
+      const membership = await db.from("memberships").update({ status: "active", updated_at: (/* @__PURE__ */ new Date()).toISOString() }).eq("user_id", req.user.id).eq("status", "invited").in("tenant_id", tenantIds).select("id,tenant_id");
+      if (membership.error) throw membership.error;
+      if (!membership.data?.length)
+        return res.status(409).json({ error: "O acesso deste convite n\xE3o foi encontrado. Solicite ajuda \xE0 equipe Ordum." });
+      const accepted = await db.from("invitations").update({ status: "accepted" }).in("id", valid.map((item) => item.id));
+      if (accepted.error) throw accepted.error;
+      await db.from("platform_audit_logs").insert(
+        membership.data.map((item) => ({
+          actor_user_id: req.user.id,
+          action: "tenant.invitation.accepted",
+          entity_type: "tenants",
+          entity_id: item.tenant_id,
+          severity: "info",
+          metadata: { result: "success" }
+        }))
+      );
+      return res.json({ activated: membership.data.length });
+    } catch (error) {
+      reportServerError(error, req, "tenant_invitation_acceptance");
+      return res.status(500).json({ error: "N\xE3o foi poss\xEDvel ativar o acesso. Tente novamente." });
     }
   });
   app.get(

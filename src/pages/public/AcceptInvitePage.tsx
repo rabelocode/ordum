@@ -75,6 +75,14 @@ export function AcceptInvitePage() {
       await authService.updatePassword(password, { full_name: fullName.trim() });
       const session = await authService.getSession();
       if (session) {
+        const activation = await fetch("/api/auth/accept-invite", {
+          method: "POST",
+          headers: { Authorization: `Bearer ${session.access_token}` },
+        });
+        if (!activation.ok) {
+          const body = await activation.json().catch(() => ({}));
+          throw new Error(body.error || "Não foi possível ativar o acesso deste convite.");
+        }
         await resolveAndRedirect(session.access_token);
       } else {
         window.location.hash = "#/login";

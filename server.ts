@@ -273,6 +273,56 @@ export async function createApp() {
     }
   });
 
+  app.post("/api/auth/accept-invite", authenticateRequest, async (req: any, res) => {
+    const db = getSupabaseAdmin();
+    const email = req.user?.email?.toLowerCase();
+    if (!email)
+      return res.status(400).json({ error: "O convite não possui um e-mail válido." });
+    try {
+      const invitations = await db
+        .from("invitations")
+        .select("id,tenant_id,expires_at")
+        .eq("email", email)
+        .eq("status", "pending");
+      if (invitations.error) throw invitations.error;
+      const valid = (invitations.data || []).filter(
+        (item: any) => !item.expires_at || new Date(item.expires_at).getTime() > Date.now(),
+      );
+      if (!valid.length)
+        return res.status(404).json({ error: "Este convite não está mais disponível. Solicite um novo envio." });
+      const tenantIds = valid.map((item: any) => item.tenant_id);
+      const membership = await db
+        .from("memberships")
+        .update({ status: "active", updated_at: new Date().toISOString() })
+        .eq("user_id", req.user.id)
+        .eq("status", "invited")
+        .in("tenant_id", tenantIds)
+        .select("id,tenant_id");
+      if (membership.error) throw membership.error;
+      if (!membership.data?.length)
+        return res.status(409).json({ error: "O acesso deste convite não foi encontrado. Solicite ajuda à equipe Ordum." });
+      const accepted = await db
+        .from("invitations")
+        .update({ status: "accepted" })
+        .in("id", valid.map((item: any) => item.id));
+      if (accepted.error) throw accepted.error;
+      await db.from("platform_audit_logs").insert(
+        membership.data.map((item: any) => ({
+          actor_user_id: req.user.id,
+          action: "tenant.invitation.accepted",
+          entity_type: "tenants",
+          entity_id: item.tenant_id,
+          severity: "info",
+          metadata: { result: "success" },
+        })),
+      );
+      return res.json({ activated: membership.data.length });
+    } catch (error: any) {
+      reportServerError(error, req, "tenant_invitation_acceptance");
+      return res.status(500).json({ error: "Não foi possível ativar o acesso. Tente novamente." });
+    }
+  });
+
   app.get(
     "/api/workspace/me",
     authenticateRequest,

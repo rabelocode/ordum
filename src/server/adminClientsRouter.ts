@@ -11,6 +11,26 @@ import {
 export function createAdminClientsRouter(getSupabaseAdmin: any) {
   const router = Router();
 
+  async function findUserByEmail(db: any, email: string) {
+    for (let page = 1; page <= 20; page += 1) {
+      const result = await db.auth.admin.listUsers({ page, perPage: 1000 });
+      if (result.error) throw result.error;
+      const found = result.data.users.find(
+        (user: any) => user.email?.toLowerCase() === email.toLowerCase(),
+      );
+      if (found) return found;
+      if (result.data.users.length < 1000) break;
+    }
+    return null;
+  }
+
+  function inviteRedirectUrl() {
+    const configured = process.env.APP_URL?.replace(/\/$/, "");
+    if (configured) return `${configured}/#/auth/accept-invite`;
+    const deployment = process.env.VERCEL_URL;
+    return `${deployment ? `https://${deployment}` : "https://ordum-ordum.vercel.app"}/#/auth/accept-invite`;
+  }
+
   // GET /api/admin/clients
   router.get(
     "/",
@@ -347,6 +367,113 @@ export function createAdminClientsRouter(getSupabaseAdmin: any) {
         res.json({ ...data, memberships, assignment, owner, audit: auditRows });
       } catch (e: any) {
         res.status(500).json({ error: e.message });
+      }
+    },
+  );
+
+  // POST /api/admin/clients/:id/assign
+  router.post(
+    "/:id/invite-owner",
+    authenticateRequest,
+    resolvePlatformContext,
+    requirePlatformPermission([
+      "platform.clients.manage",
+      "platform.onboarding.manage",
+    ]),
+    async (req: any, res: any) => {
+      const parsed = z
+        .object({
+          email: z.string().trim().email(),
+          name: z.string().trim().min(2).max(120),
+        })
+        .safeParse(req.body);
+      if (!parsed.success)
+        return res.status(400).json({
+          error: "Informe o nome e um e-mail válido para o responsável.",
+        });
+
+      const db = getSupabaseAdmin();
+      const tenant = await db
+        .from("tenants")
+        .select("id,name,platform_client_assignments(*)")
+        .eq("id", req.params.id)
+        .maybeSingle();
+      if (tenant.error || !tenant.data)
+        return res.status(404).json({ error: "Cliente não encontrado." });
+      if (
+        req.platformContext.role?.key !== "admin" &&
+        !canReadAssignedResource(
+          req.platformContext,
+          tenant.data.platform_client_assignments?.[0],
+          "member_client_visibility",
+        )
+      )
+        return res.status(403).json({ error: "Cliente fora do seu escopo." });
+
+      let createdAuthUser = false;
+      let authUser: any = null;
+      try {
+        authUser = await findUserByEmail(db, parsed.data.email);
+        if (!authUser) {
+          const invited = await db.auth.admin.inviteUserByEmail(
+            parsed.data.email,
+            {
+              redirectTo: inviteRedirectUrl(),
+              data: { full_name: parsed.data.name },
+            },
+          );
+          if (invited.error) throw invited.error;
+          authUser = invited.data.user;
+          createdAuthUser = true;
+        }
+        const accessAlreadyVerified = Boolean(
+          !createdAuthUser && (authUser.email_confirmed_at || authUser.last_sign_in_at),
+        );
+
+        const prepared = await db.rpc("admin_prepare_tenant_owner_invitation", {
+          p_tenant_id: tenant.data.id,
+          p_user_id: authUser.id,
+          p_email: parsed.data.email,
+          p_membership_status: accessAlreadyVerified ? "active" : "invited",
+          p_expires_at: accessAlreadyVerified
+            ? null
+            : new Date(Date.now() + 7 * 86400000).toISOString(),
+        });
+        if (prepared.error) throw prepared.error;
+
+        await db.from("platform_audit_logs").insert({
+          actor_user_id: req.user.id,
+          action: accessAlreadyVerified
+            ? "tenant.owner.access_granted"
+            : createdAuthUser
+            ? "tenant.owner.invited"
+            : "tenant.owner.invitation_preserved",
+          entity_type: "tenants",
+          entity_id: tenant.data.id,
+          severity: "info",
+          ...auditContext(req, {
+            result: "success",
+            after: {
+              membership_status: accessAlreadyVerified ? "active" : "invited",
+              role: "tenant_admin",
+            },
+          }),
+        });
+
+        return res.status(createdAuthUser ? 201 : 200).json({
+          invited: createdAuthUser,
+          invitationPending: !accessAlreadyVerified,
+          accessActive: accessAlreadyVerified,
+          membershipStatus: accessAlreadyVerified ? "active" : "invited",
+        });
+      } catch (error: any) {
+        if (createdAuthUser && authUser?.id)
+          await db.auth.admin.deleteUser(authUser.id).catch(() => undefined);
+        return res.status(400).json({
+          error:
+            error?.message ||
+            "Não foi possível preparar o acesso do responsável.",
+        });
       }
     },
   );

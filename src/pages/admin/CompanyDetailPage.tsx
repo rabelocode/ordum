@@ -12,6 +12,7 @@ import { useAccess } from "../../core/auth/AccessContext";
 import { AssignLeadModal } from "../../components/admin/AssignLeadModal";
 import { DetailSkeleton } from "../../components/ui/LoadingSkeletons";
 import { userFacingApiError, userFacingException } from "../../lib/userFacingError";
+import { TenantAccessPanel } from "../../components/admin/TenantAccessPanel";
 
 const TABS = [
   { id: "overview", label: "Resumo" },
@@ -25,7 +26,10 @@ const TABS = [
 export function CompanyDetailPage({ tenantId }: { tenantId: string }) {
   const { session, hasPlatformPermission } = useAccess();
   const [tenant, setTenant] = useState<any>(null);
-  const [activeTab, setActiveTab] = useState("overview");
+  const [activeTab, setActiveTab] = useState(() => {
+    const requested = new URLSearchParams(window.location.hash.split("?")[1] || "").get("tab");
+    return TABS.some((tab) => tab.id === requested) ? requested! : "overview";
+  });
   const [isActioning, setIsActioning] = useState(false);
   const [solutionKeys, setSolutionKeys] = useState<string[]>([]);
   const [integritySummary, setIntegritySummary] = useState<any>(null);
@@ -289,7 +293,7 @@ export function CompanyDetailPage({ tenantId }: { tenantId: string }) {
           )}
 
           {activeTab === "people" && (
-            <div className="space-y-7"><div><h2 className="text-xl font-black">Pessoas e acessos</h2><p className="mt-1 text-sm text-[#626866]">Usuários, unidades e domínios vinculados à empresa.</p></div><section><h3 className="font-black">Usuários</h3><div className="mt-3 grid gap-3 md:grid-cols-2">{tenant.memberships?.length?tenant.memberships.map((item:any)=><div key={item.id} className="rounded-xl bg-[#F6F5F2] p-4"><strong>{item.display_name||"Usuário"}</strong><p className="text-sm text-[#626866]">{accessStatusLabel(item.status)}{item.employment_level?` · ${employmentLabel(item.employment_level)}`:""}</p></div>):<p className="text-sm text-[#626866]">Nenhum usuário vinculado.</p>}</div></section><div className="grid gap-6 lg:grid-cols-2"><section><h3 className="font-black">Unidades</h3><div className="mt-3 space-y-2">{tenant.departments?.length?tenant.departments.map((item:any)=><div key={item.id} className="rounded-xl border border-[#DDD8CF] p-4"><strong>{item.name}</strong><p className="text-xs text-[#626866]">{item.active?"Ativa":"Inativa"}</p></div>):<p className="text-sm text-[#626866]">Nenhuma unidade cadastrada.</p>}</div></section><section><h3 className="font-black">Domínios</h3><div className="mt-3 space-y-2">{tenant.tenant_domains?.length?tenant.tenant_domains.map((item:any)=><div key={item.id} className="rounded-xl border border-[#DDD8CF] p-4"><strong>{item.hostname}</strong><p className="text-xs text-[#626866]">{item.is_primary?"Principal":"Alternativo"} · {item.verified_at?"Verificado":"Aguardando verificação"}</p></div>):<p className="text-sm text-[#626866]">Nenhum domínio cadastrado.</p>}</div></section></div></div>
+            <div className="space-y-7"><div><h2 className="text-xl font-black">Pessoas e acessos</h2><p className="mt-1 text-sm text-[#626866]">Convites, unidades e domínios vinculados à empresa.</p></div><TenantAccessPanel tenantId={tenant.id} tenantName={tenant.name} contacts={tenant.contacts || []} memberships={tenant.memberships || []} onChanged={loadTenant}/><div className="grid gap-6 lg:grid-cols-2"><section><h3 className="font-black">Unidades</h3><div className="mt-3 space-y-2">{tenant.departments?.length?tenant.departments.map((item:any)=><div key={item.id} className="rounded-xl border border-[#DDD8CF] p-4"><strong>{item.name}</strong><p className="text-xs text-[#626866]">{item.active?"Ativa":"Inativa"}</p></div>):<p className="text-sm text-[#626866]">Nenhuma unidade cadastrada.</p>}</div></section><section><h3 className="font-black">Domínios</h3><div className="mt-3 space-y-2">{tenant.tenant_domains?.length?tenant.tenant_domains.map((item:any)=><div key={item.id} className="rounded-xl border border-[#DDD8CF] p-4"><strong>{item.hostname}</strong><p className="text-xs text-[#626866]">{item.is_primary?"Principal":"Alternativo"} · {item.verified_at?"Verificado":"Aguardando verificação"}</p></div>):<p className="text-sm text-[#626866]">Nenhum domínio cadastrado.</p>}</div></section></div></div>
           )}
 
           {activeTab === "history" && (

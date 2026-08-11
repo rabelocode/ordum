@@ -41,3 +41,38 @@ test('commercial approval conflicts use a human message and proposals have a def
   assert.match(read('src/lib/userFacingError.ts'),/self_approval_forbidden[\s\S]*outra pessoa autorizada/);
   assert.match(read('src/pages/admin/ProposalsPage.tsx'),/valid_until:defaultValidity\(\)/);
 });
+
+test('client onboarding exposes a tenant owner invitation without granting access before acceptance',()=>{
+  const server=read('src/server/adminClientsRouter.ts');
+  const acceptance=read('server.ts');
+  const company=read('src/components/admin/TenantAccessPanel.tsx');
+  const migration=read('supabase/migrations/20260811170241_tenant_owner_invitation.sql');
+  assert.match(server,/invite-owner/);
+  assert.match(server,/accessAlreadyVerified \? "active" : "invited"/);
+  assert.match(server,/admin_prepare_tenant_owner_invitation/);
+  assert.match(migration,/on conflict \(tenant_id,user_id\) do update/);
+  assert.match(migration,/on conflict \(membership_id,role_id\) do nothing/);
+  assert.match(migration,/grant execute on function public\.admin_prepare_tenant_owner_invitation[\s\S]*to service_role/);
+  assert.match(acceptance,/\/api\/auth\/accept-invite/);
+  assert.match(acceptance,/\.eq\("status", "invited"\)/);
+  assert.match(company,/Convidar responsável/);
+});
+
+test('support separates customer communication from internal notes',()=>{
+  const api=read('src/server/adminControlPlaneRouter.ts');
+  const ui=read('src/components/admin/SupportWorkspace.tsx');
+  assert.match(api,/z\.enum\(\['external_reply','internal_note'\]\)/);
+  assert.match(api,/isPrivate \? 'internal_comment' : 'external_communication'/);
+  assert.match(ui,/Mensagem ao cliente/);
+  assert.match(ui,/Nota interna/);
+  assert.match(ui,/Esta mensagem será visível ao cliente/);
+});
+
+test('catalog editor keeps prices user-defined and hides raw configuration',()=>{
+  const plans=read('src/pages/admin/PlansPage.tsx');
+  assert.match(plans,/Planos e preços/);
+  assert.match(plans,/Criar nova versão/);
+  assert.match(plans,/Definir na contratação/);
+  assert.match(plans,/Limites por produto/);
+  assert.doesNotMatch(plans,/Limites globais \(JSON\)|JSON por ID/);
+});

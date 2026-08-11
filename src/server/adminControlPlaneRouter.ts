@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import { z } from 'zod';
 import { canReadAssignedResource, isGlobalAdmin } from './authorization';
 import { auditContext, pageResult, parsePagination } from './operational';
 import { authenticateRequest, resolvePlatformContext, requirePlatformPermission } from './tenantAuth';
@@ -162,6 +163,59 @@ export function createAdminControlPlaneRouter(getSupabaseAdmin: any) {
       return res.json(pageResult(result.data || [], result.count, page, pageSize));
     } catch (error: any) {
       return res.status(500).json({ error: error.message });
+    }
+  });
+
+  router.get('/control-plane/support/:id', authenticateRequest, resolvePlatformContext, requirePlatformPermission('platform.support.read'), async (req: any, res: any) => {
+    try {
+      const db = getSupabaseAdmin();
+      const ticket = await db.from('support_tickets').select('*,tenants(id,name),solutions(id,key,name),platform_members(id,user_id),platform_teams(id,name)').eq('id', req.params.id).maybeSingle();
+      if (ticket.error || !ticket.data) return res.status(404).json({ error: 'Chamado não encontrado.' });
+      const allowedTenants = await visibleTenantIds(db, req.platformContext);
+      if (allowedTenants !== null && !allowedTenants.includes(ticket.data.tenant_id)) return res.status(403).json({ error: 'Chamado fora da sua carteira.' });
+      const events = await db.from('support_ticket_events').select('id,event_type,body,private,actor_user_id,created_at').eq('ticket_id', ticket.data.id).order('created_at', { ascending: true });
+      if (events.error) throw events.error;
+      const userIds = [...new Set((events.data || []).map((item: any) => item.actor_user_id).filter(Boolean))];
+      if (ticket.data.platform_members?.user_id) userIds.push(ticket.data.platform_members.user_id);
+      const users = await db.auth.admin.listUsers({ page: 1, perPage: 1000 });
+      if (users.error) throw users.error;
+      const names = new Map(users.data.users.filter((user: any) => userIds.includes(user.id)).map((user: any) => [user.id, user.user_metadata?.full_name || user.email || 'Equipe Ordum']));
+      return res.json({
+        ticket: {
+          ...ticket.data,
+          owner_name: ticket.data.platform_members?.user_id ? names.get(ticket.data.platform_members.user_id) || 'Equipe Ordum' : null,
+          platform_members: undefined,
+        },
+        events: (events.data || []).map((item: any) => ({ ...item, actor_name: names.get(item.actor_user_id) || 'Equipe Ordum', actor_user_id: undefined })),
+      });
+    } catch (error: any) {
+      return res.status(500).json({ error: 'Não foi possível abrir este chamado.' });
+    }
+  });
+
+  router.post('/control-plane/support/:id/messages', authenticateRequest, resolvePlatformContext, requirePlatformPermission('platform.support.manage'), async (req: any, res: any) => {
+    const parsed = z.object({ kind: z.enum(['external_reply','internal_note']), body: z.string().trim().min(2).max(4000) }).safeParse(req.body);
+    if (!parsed.success) return res.status(400).json({ error: 'Escreva uma mensagem antes de enviar.' });
+    try {
+      const db = getSupabaseAdmin();
+      const ticket = await db.from('support_tickets').select('*').eq('id', req.params.id).maybeSingle();
+      if (ticket.error || !ticket.data) return res.status(404).json({ error: 'Chamado não encontrado.' });
+      const allowedTenants = await visibleTenantIds(db, req.platformContext);
+      if (allowedTenants !== null && !allowedTenants.includes(ticket.data.tenant_id)) return res.status(403).json({ error: 'Chamado fora da sua carteira.' });
+      const isPrivate = parsed.data.kind === 'internal_note';
+      const inserted = await db.from('support_ticket_events').insert({
+        ticket_id: ticket.data.id,
+        event_type: isPrivate ? 'internal_comment' : 'external_communication',
+        body: parsed.data.body,
+        private: isPrivate,
+        actor_user_id: req.user.id,
+      }).select('id,event_type,body,private,created_at').single();
+      if (inserted.error) throw inserted.error;
+      await db.from('support_tickets').update({ updated_at: new Date().toISOString(), lock_version: Number(ticket.data.lock_version || 1) + 1 }).eq('id', ticket.data.id).eq('lock_version', ticket.data.lock_version);
+      await db.from('platform_audit_logs').insert({ actor_user_id: req.user.id, action: isPrivate ? 'support.internal_note.created' : 'support.customer_reply.sent', entity_type: 'support_tickets', entity_id: ticket.data.id, team_id: ticket.data.team_id, severity: 'info', ...auditContext(req, { result: 'success', after: { event_type: inserted.data.event_type, tenant_id: ticket.data.tenant_id } }) });
+      return res.status(201).json({ ...inserted.data, actor_name: req.user.user_metadata?.full_name || req.user.email || 'Equipe Ordum' });
+    } catch (error: any) {
+      return res.status(500).json({ error: 'Não foi possível registrar a mensagem.' });
     }
   });
 
