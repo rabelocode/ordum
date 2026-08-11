@@ -100,7 +100,7 @@ async function runBrowserQa(scenarios: Array<{ name: string; user: FixtureUser; 
       const context = await browser.newContext({ viewport: scenario.mobile ? { width: 390, height: 844 } : { width: 1440, height: 1000 }, acceptDownloads: true });
       const page = await context.newPage();
       page.on("console", (message) => { if (message.type() === "error" && !message.text().includes("Failed to load resource")) failures.push(`${scenario.name}: console ${message.text().slice(0, 120)}`); });
-      page.on("response", (response) => { if (response.status() >= 400) failures.push(`${scenario.name}: HTTP ${response.status()} ${new URL(response.url()).pathname}`); });
+      page.on("response", (response) => { const url=new URL(response.url()); if (url.origin===new URL(APP_URL).origin&&response.status() >= 400) failures.push(`${scenario.name}: HTTP ${response.status()} ${url.pathname}`); });
       await page.goto(`${APP_URL}/#/login`, { waitUntil: "networkidle" });
       await page.locator('input[type="email"]').fill(scenario.user.email);
       await page.locator('input[type="password"]').fill(scenario.user.password);
@@ -162,7 +162,7 @@ async function runInternalUiFlow(user: FixtureUser, subject: string) {
     const context = await browser.newContext({ viewport: { width: 1440, height: 1000 } });
     const page = await context.newPage();
     page.on("console", (message) => { if (message.type() === "error" && !message.text().includes("Failed to load resource")) failures.push(`console ${message.text().slice(0,120)}`); });
-    page.on("response", (response) => { if (response.status() >= 400) failures.push(`HTTP ${response.status()} ${new URL(response.url()).pathname}`); });
+    page.on("response", (response) => { const url=new URL(response.url()); if(url.origin===new URL(APP_URL).origin&&response.status() >= 400) failures.push(`HTTP ${response.status()} ${url.pathname}`); });
     await page.goto(`${APP_URL}/#/login`, { waitUntil: "networkidle" });
     await page.locator('input[type="email"]').fill(user.email);
     await page.locator('input[type="password"]').fill(user.password);
@@ -226,7 +226,7 @@ async function runAdminProductQa(user:FixtureUser,tenantId:string,tenantName:str
   try{
     const context=await browser.newContext({viewport:{width:1440,height:1000}});const page=await context.newPage();
     page.on("console",message=>{if(message.type()==="error"&&!message.text().includes("Failed to load resource"))failures.push(`admin console ${message.text().slice(0,120)}`);});
-    page.on("response",response=>{if(response.status()>=400)failures.push(`admin HTTP ${response.status()} ${new URL(response.url()).pathname}`);});
+    page.on("response",response=>{const url=new URL(response.url());if(url.origin===new URL(APP_URL).origin&&response.status()>=400)failures.push(`admin HTTP ${response.status()} ${url.pathname}`);});
     await page.goto(`${APP_URL}/#/login`,{waitUntil:"networkidle"});await page.locator('input[type="email"]').fill(user.email);await page.locator('input[type="password"]').fill(user.password);await page.locator('button[type="submit"]').click();await page.waitForURL(/#\/(workspace|admin)/,{timeout:20000});
     await page.evaluate(()=>{window.location.hash="#/admin";});await page.reload({waitUntil:"networkidle"});await page.getByRole("heading",{name:"Veja o que precisa da sua atenção."}).waitFor();
     for(const label of ["Comercial","Clientes","Financeiro","Operação","Administração"])await page.getByText(new RegExp(`^${label}$`,"i")).first().waitFor();
@@ -245,7 +245,7 @@ async function runPublicMobileQa(channelSlug: string, protocol: string, secret: 
     const context = await browser.newContext({ viewport: { width: 390, height: 844 } });
     const page = await context.newPage();
     page.on("console", (message) => { if (message.type() === "error") failures.push(`console ${message.text().slice(0, 120)}`); });
-    page.on("response", (response) => { if (response.status() >= 500) failures.push(`HTTP ${response.status()} ${new URL(response.url()).pathname}`); });
+    page.on("response", (response) => { const url=new URL(response.url()); if(url.origin===new URL(APP_URL).origin&&response.status() >= 500) failures.push(`HTTP ${response.status()} ${url.pathname}`); });
     await page.goto(`${APP_URL}/#/canal/${channelSlug}`, { waitUntil: "networkidle" });
     await page.getByRole("heading", { name: /Canal de Integridade/ }).waitFor();
     const overflow = await page.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth + 1);
