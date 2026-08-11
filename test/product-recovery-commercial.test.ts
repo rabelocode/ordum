@@ -51,6 +51,10 @@ test('commercial actions prevent predictable approval and demo errors before the
   assert.match(leads,/Equipe responsável \*/);
   assert.match(leads,/team_id: demoForm\.team_id/);
   assert.match(leads,/Atribuir antes da proposta/);
+  assert.match(leads,/Nenhuma equipe comercial ativa/);
+  const assignmentModal=read('src/components/admin/AssignLeadModal.tsx');
+  assert.match(assignmentModal,/Crie uma equipe comercial para continuar/);
+  assert.doesNotMatch(assignmentModal,/console\.error/);
   const proposals=read('src/pages/admin/ProposalsPage.tsx');
   assert.match(proposals,/Aguardando outra pessoa aprovadora/);
   assert.match(proposals,/approval_action==='requires_another_approver'/);

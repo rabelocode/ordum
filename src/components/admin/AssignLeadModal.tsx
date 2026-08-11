@@ -2,10 +2,12 @@ import React, { useState, useEffect } from 'react';
 import { X, Loader2 } from 'lucide-react';
 import { useAuth } from '../../core/auth/AuthProvider';
 import { PlatformTeam } from '../../types/platform';
+import { userFacingApiError } from '../../lib/userFacingError';
 
 export function AssignLeadModal({ isOpen, onClose, onSuccess, leadId, currentAssignment, isClient }: any) {
   const { session } = useAuth();
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isLoadingTeams, setIsLoadingTeams] = useState(false);
   const [error, setError] = useState("");
   
   const [teams, setTeams] = useState<PlatformTeam[]>([]);
@@ -19,19 +21,33 @@ export function AssignLeadModal({ isOpen, onClose, onSuccess, leadId, currentAss
 
   useEffect(() => {
     if (isOpen) {
+      setFormData({
+        team_id: currentAssignment?.team_id || "",
+        owner_platform_member_id: currentAssignment?.owner_platform_member_id || "",
+        reason: "",
+      });
+      setError("");
+      setIsLoadingTeams(true);
       fetch('/api/admin/teams', { headers: { 'Authorization': `Bearer ${session?.access_token}` } })
-        .then(res => res.json())
-        .then(data => setTeams(Array.isArray(data) ? data : []))
-        .catch(err => console.error(err));
+        .then(async res => {
+          const data = await res.json().catch(() => ({}));
+          if (!res.ok) throw new Error(userFacingApiError(data, res.status, 'Não foi possível carregar as equipes.'));
+          setTeams(Array.isArray(data) ? data.filter((team) => team.status === 'active') : []);
+        })
+        .catch(err => setError(err instanceof Error ? err.message : 'Não foi possível carregar as equipes.'))
+        .finally(() => setIsLoadingTeams(false));
     }
-  }, [isOpen, session]);
+  }, [currentAssignment?.owner_platform_member_id, currentAssignment?.team_id, isOpen, session]);
 
   useEffect(() => {
     if (formData.team_id) {
       fetch(`/api/admin/teams/${formData.team_id}/members`, { headers: { 'Authorization': `Bearer ${session?.access_token}` } })
-        .then(res => res.json())
-        .then(data => setMembers(Array.isArray(data) ? data : []))
-        .catch(err => console.error(err));
+        .then(async res => {
+          const data = await res.json().catch(() => ({}));
+          if (!res.ok) throw new Error(userFacingApiError(data, res.status, 'Não foi possível carregar os responsáveis.'));
+          setMembers(Array.isArray(data) ? data : []);
+        })
+        .catch(err => setError(err instanceof Error ? err.message : 'Não foi possível carregar os responsáveis.'));
     } else {
       setMembers([]);
     }
@@ -68,11 +84,11 @@ export function AssignLeadModal({ isOpen, onClose, onSuccess, leadId, currentAss
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm">
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm" role="dialog" aria-modal="true" aria-labelledby="assign-lead-title">
       <div className="bg-white rounded-2xl shadow-xl w-full max-w-lg overflow-hidden flex flex-col">
         <div className="flex items-center justify-between p-6 border-b border-[#DDD8CF]/40">
-          <h2 className="text-xl font-bold text-[#202322]">{isClient ? 'Transferir cliente' : 'Atribuir lead'}</h2>
-          <button onClick={onClose} className="text-gray-400 hover:text-gray-900 transition-colors">
+          <h2 id="assign-lead-title" className="text-xl font-bold text-[#202322]">{isClient ? 'Transferir cliente' : 'Atribuir lead'}</h2>
+          <button type="button" onClick={onClose} aria-label="Fechar" className="text-gray-400 hover:text-gray-900 transition-colors">
             <X className="w-5 h-5" />
           </button>
         </div>
@@ -84,7 +100,13 @@ export function AssignLeadModal({ isOpen, onClose, onSuccess, leadId, currentAss
             </div>
           )}
           
-          <form id="assign-lead-form" onSubmit={handleSubmit} className="space-y-4">
+          {!isLoadingTeams && teams.length === 0 ? (
+            <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-950">
+              <strong>Crie uma equipe comercial para continuar.</strong>
+              <p className="mt-1">Leads, demonstrações e propostas precisam de uma equipe responsável.</p>
+              <a href="#/admin/equipes" onClick={onClose} className="mt-3 inline-flex rounded-lg bg-[#202322] px-3 py-2 font-bold text-white">Criar equipe</a>
+            </div>
+          ) : <form id="assign-lead-form" onSubmit={handleSubmit} className="space-y-4">
             <div>
               <label className="block text-sm font-medium text-[#202322] mb-1">Equipe</label>
               <select 
@@ -120,17 +142,17 @@ export function AssignLeadModal({ isOpen, onClose, onSuccess, leadId, currentAss
                 ))}
               </select>
             </div>
-          </form>
+          </form>}
         </div>
         
         <div className="p-6 border-t border-[#DDD8CF]/40 bg-gray-50 flex justify-end gap-3">
-          <button 
+          {teams.length > 0 ? <button 
             type="button"
             onClick={onClose}
             className="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-xl hover:bg-gray-50"
           >
             Cancelar
-          </button>
+          </button> : null}
           <button 
             type="submit"
             form="assign-lead-form"
