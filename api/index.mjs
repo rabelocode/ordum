@@ -3107,7 +3107,7 @@ function createAdminOtherRouter(getSupabaseAdmin2, _old_requirePlatformAuth) {
           platform_team_members(*, platform_teams(*))
         `);
       if (memberErr) throw memberErr;
-      const { data: usersData, error: userErr } = await getSupabaseAdmin2().auth.admin.listUsers();
+      const { data: usersData, error: userErr } = await getSupabaseAdmin2().auth.admin.listUsers({ page: 1, perPage: 1e3 });
       if (userErr) throw userErr;
       let result = members.map((m) => {
         const user = usersData.users.find((u) => u.id === m.user_id);

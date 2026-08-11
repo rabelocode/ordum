@@ -295,9 +295,10 @@ try {
     [approverEmail, "member"],
   ] as const) {
     await page.getByRole("button", { name: "Adicionar Membro" }).click();
-    await page
-      .getByLabel("Selecione o Membro")
-      .selectOption({ label: new RegExp(email) });
+    const memberSelect = page.getByLabel("Selecione a pessoa");
+    const memberValue = await memberSelect.locator("option").filter({ hasText: email }).getAttribute("value");
+    if (!memberValue) throw new Error(`Member option not found for ${email}`);
+    await memberSelect.selectOption(memberValue);
     await page.getByLabel(/Função na Equipe/).selectOption(role);
     await page.getByRole("button", { name: "Adicionar", exact: true }).click();
     await page.getByText(email).waitFor();

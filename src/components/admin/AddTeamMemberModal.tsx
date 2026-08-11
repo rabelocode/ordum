@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { X, Loader2, Search } from 'lucide-react';
 import { useAuth } from '../../core/auth/AuthProvider';
+import { userFacingApiError } from '../../lib/userFacingError';
 
 export function AddTeamMemberModal({ isOpen, onClose, onSuccess, teamId }: { isOpen: boolean, onClose: () => void, onSuccess: () => void, teamId: string }) {
   const { session } = useAuth();
@@ -16,9 +17,9 @@ export function AddTeamMemberModal({ isOpen, onClose, onSuccess, teamId }: { isO
   useEffect(() => {
     if (isOpen) {
       fetch('/api/admin/staff', { headers: { 'Authorization': `Bearer ${session?.access_token}` } })
-        .then(res => res.json())
+        .then(async res => { const data=await res.json().catch(()=>({})); if(!res.ok)throw new Error(userFacingApiError(data,res.status,'Não foi possível carregar as pessoas.')); return data; })
         .then(data => setStaff(Array.isArray(data) ? data : []))
-        .catch(err => console.error(err));
+        .catch(err => setError(err instanceof Error?err.message:'Não foi possível carregar as pessoas.'));
     }
   }, [isOpen, session]);
 
@@ -40,8 +41,8 @@ export function AddTeamMemberModal({ isOpen, onClose, onSuccess, teamId }: { isO
       });
 
       if (!response.ok) {
-        const data = await response.json();
-        throw new Error(data.error || "Erro ao adicionar membro");
+        const data = await response.json().catch(() => ({}));
+        throw new Error(userFacingApiError(data,response.status,'Não foi possível adicionar esta pessoa à equipe.'));
       }
 
       onSuccess();
@@ -71,8 +72,9 @@ export function AddTeamMemberModal({ isOpen, onClose, onSuccess, teamId }: { isO
           
           <form id="add-member-form" onSubmit={handleSubmit} className="space-y-4">
             <div>
-              <label className="block text-sm font-medium text-[#202322] mb-1">Selecione o Membro</label>
+              <label htmlFor="team-member" className="block text-sm font-medium text-[#202322] mb-1">Selecione a pessoa</label>
               <select 
+                id="team-member"
                 required
                 className="w-full px-4 py-2 bg-white border border-[#DDD8CF] rounded-xl focus:outline-none focus:ring-2 focus:ring-[#B66E45]/20 focus:border-[#B66E45]"
                 value={formData.platform_member_id}
@@ -88,14 +90,15 @@ export function AddTeamMemberModal({ isOpen, onClose, onSuccess, teamId }: { isO
             </div>
             
             <div>
-              <label className="block text-sm font-medium text-[#202322] mb-1">Função na Equipe</label>
+              <label htmlFor="team-member-role" className="block text-sm font-medium text-[#202322] mb-1">Função na equipe</label>
               <select 
+                id="team-member-role"
                 className="w-full px-4 py-2 bg-white border border-[#DDD8CF] rounded-xl focus:outline-none focus:ring-2 focus:ring-[#B66E45]/20 focus:border-[#B66E45]"
                 value={formData.team_role}
                 onChange={e => setFormData({...formData, team_role: e.target.value})}
               >
-                <option value="member">Membro (Sales/Rep)</option>
-                <option value="manager">Gerente da Equipe</option>
+                <option value="member">Vendedor</option>
+                <option value="manager">Gerente da equipe</option>
               </select>
             </div>
           </form>

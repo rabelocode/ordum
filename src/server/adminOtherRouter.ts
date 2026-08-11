@@ -23,7 +23,7 @@ export function createAdminOtherRouter(getSupabaseAdmin: any, _old_requirePlatfo
         
       if (memberErr) throw memberErr;
       
-      const { data: usersData, error: userErr } = await getSupabaseAdmin().auth.admin.listUsers();
+      const { data: usersData, error: userErr } = await getSupabaseAdmin().auth.admin.listUsers({ page: 1, perPage: 1000 });
       if (userErr) throw userErr;
       
       let result = members.map((m: any) => {
