@@ -198,6 +198,8 @@ async function cleanup() {
       );
     }
     if (ids.team) {
+      await remove(db.from("platform_state_transitions").delete().eq("team_id", ids.team), "team_transitions");
+      await remove(db.from("platform_audit_logs").delete().eq("team_id", ids.team), "team_audit");
       await remove(
         db.from("platform_team_members").delete().eq("team_id", ids.team),
         "team_members",
@@ -399,7 +401,7 @@ try {
   await approvalPage.goto(`${base}/#/admin/propostas?view=my-approvals`, {
     waitUntil: "networkidle",
   });
-  await approvalPage.getByText(company).first().click();
+  await approvalPage.getByRole("button").filter({ hasText: company }).click();
   await approvalPage.getByRole("button", { name: "Aprovar proposta" }).click();
   await approvalPage
     .getByLabel(/Justificativa/)
@@ -408,24 +410,27 @@ try {
   await approvalPage.getByText("Proposta aprovada.").waitFor();
   await shot(approvalPage, "05-proposal-approved");
   await page.goto(`${base}/#/admin/propostas`, { waitUntil: "networkidle" });
+  await page.reload({ waitUntil: "networkidle" });
   await page.getByRole("button", { name: "Prontas para enviar" }).click();
-  await page.getByText(company).first().click();
+  await page.getByRole("button").filter({ hasText: company }).click();
   await page.getByRole("button", { name: "Registrar envio" }).click();
   await page
     .getByLabel(/Como a proposta foi enviada/)
     .fill("Enviada por e-mail ao contato principal");
   await page.getByRole("button", { name: "Confirmar" }).click();
   await page.getByText(/Envio registrado/).waitFor();
+  await page.getByRole("button", { name: /Voltar.*propostas/ }).click();
   await page.getByRole("button", { name: "Enviadas" }).click();
-  await page.getByText(company).first().click();
+  await page.getByRole("button").filter({ hasText: company }).click();
   await page.getByRole("button", { name: "Registrar aceite" }).click();
   await page
     .getByLabel(/Justificativa/)
     .fill("Aceite externo registrado para homologação");
   await page.getByRole("button", { name: "Confirmar" }).click();
   await page.getByText(/Aceite registrado/).waitFor();
+  await page.getByRole("button", { name: /Voltar.*propostas/ }).click();
   await page.getByRole("button", { name: "Aceitas" }).click();
-  await page.getByText(company).first().click();
+  await page.getByRole("button").filter({ hasText: company }).click();
   await page.getByRole("button", { name: "Gerar contrato" }).click();
   await page.getByLabel(/CPF\/CNPJ/).fill("11222333000181");
   await page.getByRole("button", { name: "Confirmar" }).click();
@@ -440,7 +445,7 @@ try {
   await approvalPage.goto(`${base}/#/admin/contratos`, {
     waitUntil: "networkidle",
   });
-  await approvalPage.getByText(company).first().click();
+  await approvalPage.getByRole("button").filter({ hasText: company }).click();
   await approvalPage.getByRole("button", { name: "Aprovar contrato" }).click();
   await approvalPage
     .getByLabel(/Motivo da aprovação/)
@@ -448,8 +453,9 @@ try {
   await approvalPage.getByRole("button", { name: "Confirmar" }).click();
   await approvalPage.getByText(/Contrato aprovado/).waitFor();
   await page.goto(`${base}/#/admin/contratos`, { waitUntil: "networkidle" });
+  await page.reload({ waitUntil: "networkidle" });
   await page.getByRole("button", { name: "Aguardando" }).click();
-  await page.getByText(company).first().click();
+  await page.getByRole("button").filter({ hasText: company }).click();
   await page.getByRole("button", { name: "Registrar envio" }).click();
   await page.getByLabel("Observação").fill("Enviado para assinatura externa");
   await page.getByRole("button", { name: "Confirmar" }).click();
@@ -464,7 +470,7 @@ try {
     .click();
   await page.waitForURL(/#\/admin\/empresas\//, { timeout: 30000 });
   ids.tenant = page.url().split("/").pop();
-  await page.getByText(company).first().waitFor();
+  await page.getByText(planName).first().waitFor({ timeout: 30000 });
   await shot(page, "06-client-activated");
   await page.setViewportSize({ width: 390, height: 844 });
   await page.reload({ waitUntil: "networkidle" });
@@ -472,6 +478,7 @@ try {
   await page.goto(`${base}/#/admin/onboarding?tenant=${ids.tenant}`, {
     waitUntil: "networkidle",
   });
+  await page.getByText(company).first().waitFor({ timeout: 30000 });
   await shot(page, "08-onboarding-mobile");
   console.log(
     JSON.stringify({
