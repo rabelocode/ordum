@@ -94,6 +94,7 @@ async function cleanup(db: SupabaseClient, runId: string, tenantIds: string[], u
 async function runBrowserQa(scenarios: Array<{ name: string; user: FixtureUser; expectedCase: boolean; mobile?: boolean; settings?: boolean }>, subject: string) {
   const browser = await chromium.launch({ headless: true });
   const failures: string[] = [];
+  await mkdir("tmp/product-recovery", { recursive: true });
   try {
     for (const scenario of scenarios) {
       const context = await browser.newContext({ viewport: scenario.mobile ? { width: 390, height: 844 } : { width: 1440, height: 1000 }, acceptDownloads: true });
@@ -118,23 +119,31 @@ async function runBrowserQa(scenarios: Array<{ name: string; user: FixtureUser; 
           throw new Error(`${scenario.name}: caso esperado ausente na interface (${visible})`);
         }
         if (!scenario.mobile && scenario.settings) {
-          const download = page.waitForEvent("download");
-          await page.getByRole("button", { name: "Exportar CSV" }).click();
-          await download;
+          const exportButton = page.getByRole("button", { name: "Exportar", exact: true });
+          await exportButton.click();
+          await exportButton.waitFor({ state: "visible" });
         }
+        await page.screenshot({ path: `tmp/product-recovery/${scenario.name}-cases.png`, fullPage: true });
+        await page.getByText(subject, { exact: true }).first().click();
+        await page.getByRole("heading", { name: subject, exact: true }).waitFor();
+        for (const tabName of ["Visão geral", "Investigação", "Comunicação", "Evidências", "Histórico"]) {
+          await page.getByRole("button", { name: tabName, exact: true }).waitFor();
+        }
+        await page.screenshot({ path: `tmp/product-recovery/${scenario.name}-case-detail.png`, fullPage: true });
       } else {
-        await page.getByRole("heading", { name: "Nenhum caso encontrado" }).waitFor();
+        await page.getByText(/Nenhum caso nesta visão/).waitFor();
       }
       if (scenario.settings) {
+        await page.evaluate(() => { window.location.hash = "#/workspace/integridade"; });
+        await page.reload({ waitUntil: "networkidle" });
         await page.getByRole("button", { name: "Configurações" }).click();
         await page.getByRole("heading", { name: "Configurações do Integridade" }).waitFor();
         await page.getByRole("button", { name: "Testar configuração" }).click();
         await page.getByText(/Teste operacional do canal aprovado/).waitFor();
-        await page.getByRole("button", { name: "Implantação" }).click();
+        await page.getByRole("button", { name: "Primeiros passos" }).click();
         await page.getByRole("heading", { name: "Coloque o canal em operação" }).waitFor();
         await page.getByText(/etapas · 100%/).waitFor();
-        await page.getByRole("button", { name: "Pendências", exact: true }).click();
-        await page.getByRole("heading", { name: "Central de pendências" }).waitFor();
+        await page.screenshot({ path: `tmp/product-recovery/${scenario.name}-settings.png`, fullPage: true });
       } else if (await page.getByRole("button", { name: "Configurações" }).count()) {
         failures.push(`${scenario.name}: configurações expostas sem permissão`);
       }
