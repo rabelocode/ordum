@@ -146,6 +146,32 @@ async function runBrowserQa(scenarios: Array<{ name: string; user: FixtureUser; 
   if (failures.length) throw new Error(`browser QA: ${failures.join("; ")}`);
 }
 
+async function runPublicMobileQa(channelSlug: string, protocol: string, secret: string) {
+  const browser = await chromium.launch({ headless: true });
+  const failures: string[] = [];
+  try {
+    const context = await browser.newContext({ viewport: { width: 390, height: 844 } });
+    const page = await context.newPage();
+    page.on("console", (message) => { if (message.type() === "error") failures.push(`console ${message.text().slice(0, 120)}`); });
+    page.on("response", (response) => { if (response.status() >= 500) failures.push(`HTTP ${response.status()} ${new URL(response.url()).pathname}`); });
+    await page.goto(`${APP_URL}/#/canal/${channelSlug}`, { waitUntil: "networkidle" });
+    await page.getByRole("heading", { name: "Canal de Integridade" }).waitFor();
+    await page.getByText("Local detalhado", { exact: true }).waitFor();
+    const overflow = await page.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth + 1);
+    if (overflow) failures.push("overflow horizontal no canal mobile");
+    await page.getByRole("button", { name: "Acompanhar relato", exact: true }).click();
+    await page.getByLabel("Protocolo").fill(protocol);
+    await page.getByLabel("Chave de acompanhamento").fill(secret);
+    await page.getByRole("button", { name: "Consultar", exact: true }).click();
+    await page.getByText(protocol, { exact: true }).waitFor();
+    await page.getByText("Recebido", { exact: true }).waitFor();
+    await context.close();
+  } finally {
+    await browser.close();
+  }
+  if (failures.length) throw new Error(`public mobile QA: ${failures.join("; ")}`);
+}
+
 export async function runIntegrityE2E(): Promise<Evidence> {
   must(SUPABASE_URL, "SUPABASE_URL"); must(SECRET, "SUPABASE_SECRET_KEY"); must(PUBLISHABLE, "VITE_SUPABASE_PUBLISHABLE_KEY"); must(CRON_SECRET,"CRON_SECRET");
   const db = createClient(SUPABASE_URL, SECRET, { auth: { autoRefreshToken: false, persistSession: false } });
@@ -232,6 +258,8 @@ export async function runIntegrityE2E(): Promise<Evidence> {
     expect(await publicApi("/track", { method: "POST", body: JSON.stringify({ protocol: submitted.protocol, secret: "x".repeat(24) }) }), 404, "wrong secret");
     const tracked = expect(await publicApi("/track", { method: "POST", body: JSON.stringify({ protocol: submitted.protocol, secret: submitted.access_secret }) }), 200, "valid tracking").tracking;
     if (!tracked) throw new Error("tracking vazio");
+    await runPublicMobileQa(channelSlug, submitted.protocol, submitted.access_secret);
+    evidence.publicMobileQa = true;
     const caseRow = value(await db.from("integrity_cases").select("id,status,lock_version,owner_membership_id,committee_id,first_response_due_at,treatment_due_at").eq("report_id", report.id).single(), "case created");
     if (caseRow.owner_membership_id !== assignedInvestigator.membershipId || caseRow.committee_id !== committee.id) throw new Error("roteamento automático não aplicado");
     evidence.routing = true;
