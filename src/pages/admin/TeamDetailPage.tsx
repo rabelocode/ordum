@@ -4,6 +4,7 @@ import { PlatformTeam } from '../../types/platform';
 import { ArrowLeft, Plus, Trash2, Save, Loader2 } from 'lucide-react';
 import { AddTeamMemberModal } from '../../components/admin/AddTeamMemberModal';
 import { DetailSkeleton } from '../../components/ui/LoadingSkeletons';
+import { ActionDialog } from '../../components/ui/ActionDialog';
 
 export function TeamDetailPage({ teamId }: { teamId: string }) {
   const { session, platformRole } = useAccess();
@@ -15,6 +16,8 @@ export function TeamDetailPage({ teamId }: { teamId: string }) {
   
   const [isSaving, setIsSaving] = useState(false);
   const [formData, setFormData] = useState<any>({});
+  const [feedback,setFeedback]=useState<{type:'error'|'success';message:string}|null>(null);
+  const [removeMemberId,setRemoveMemberId]=useState<string|null>(null);
 
   async function loadTeam() {
     if (!session) return;
@@ -60,27 +63,27 @@ export function TeamDetailPage({ teamId }: { teamId: string }) {
         body: JSON.stringify(formData)
       });
       if (response.ok) {
+        setFeedback({type:'success',message:'Configurações da equipe salvas.'});
         loadTeam();
       } else {
-        alert("Erro ao salvar");
+        setFeedback({type:'error',message:'Não foi possível salvar as configurações da equipe.'});
       }
     } catch (e) {
-      alert("Erro ao salvar");
+      setFeedback({type:'error',message:'Não foi possível salvar as configurações da equipe.'});
     } finally {
       setIsSaving(false);
     }
   };
 
   const handleRemoveMember = async (memberId: string) => {
-    if (!confirm("Remover este membro da equipe?")) return;
     try {
       const response = await fetch(`/api/admin/teams/${teamId}/members/${memberId}`, {
         method: 'DELETE',
         headers: { 'Authorization': `Bearer ${session?.access_token}` }
       });
-      if (response.ok) loadTeam();
+      if (response.ok){setFeedback({type:'success',message:'Pessoa removida da equipe.'});loadTeam();}else setFeedback({type:'error',message:'Não foi possível remover esta pessoa da equipe.'});
     } catch (e) {
-      console.error(e);
+      setFeedback({type:'error',message:'Não foi possível remover esta pessoa da equipe.'});
     }
   };
 
@@ -200,7 +203,7 @@ export function TeamDetailPage({ teamId }: { teamId: string }) {
                           </td>
                           <td className="p-4 pr-6 text-right">
                             <button 
-                              onClick={() => handleRemoveMember(m.platform_member_id)}
+                              onClick={() => setRemoveMemberId(m.platform_member_id)}
                               className="p-2 text-red-400 hover:text-red-600 rounded-lg hover:bg-red-50 transition-colors"
                             >
                               <Trash2 className="w-5 h-5" />
@@ -333,6 +336,8 @@ export function TeamDetailPage({ teamId }: { teamId: string }) {
         </div>
       </div>
       <AddTeamMemberModal isOpen={isAddModalOpen} onClose={() => setIsAddModalOpen(false)} onSuccess={() => { setIsAddModalOpen(false); loadTeam(); }} teamId={teamId} />
+      {feedback?<div role={feedback.type==='error'?'alert':'status'} className={`fixed bottom-4 right-4 z-50 max-w-sm rounded-xl border p-4 text-sm shadow-xl ${feedback.type==='error'?'border-red-200 bg-red-50 text-red-700':'border-emerald-200 bg-emerald-50 text-emerald-700'}`}>{feedback.message}</div>:null}
+      <ActionDialog open={Boolean(removeMemberId)} title="Remover da equipe" description="A pessoa deixará de acessar os registros desta equipe." danger confirmLabel="Remover" onClose={()=>setRemoveMemberId(null)} onConfirm={async()=>{if(!removeMemberId)return;const id=removeMemberId;setRemoveMemberId(null);await handleRemoveMember(id)}}/>
     </div>
   );
 }

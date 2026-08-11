@@ -7,7 +7,7 @@ import { getLeadNextStatuses, LEAD_STATUS_LABELS } from '../../domain/transition
 import { userFacingApiError } from '../../lib/userFacingError';
 
 export function LeadsPage() {
-  const { session } = useAccess();
+  const { session, hasPlatformPermission } = useAccess();
   const [leads, setLeads] = useState<any[]>([]);
   const [pagination, setPagination] = useState({ page: 1, totalPages: 1, total: 0 });
   const [search, setSearch] = useState('');
@@ -17,6 +17,9 @@ export function LeadsPage() {
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
   const [isActioning, setIsActioning] = useState(false);
+  const [teams, setTeams] = useState<any[]>([]);
+  const [createOpen, setCreateOpen] = useState(false);
+  const [createForm, setCreateForm] = useState({ name: '', email: '', phone: '', company: '', team_id: '', source: 'indicação' });
 
   // Modals
   const [assignModalLead, setAssignModalLead] = useState<any>(null);
@@ -62,6 +65,24 @@ export function LeadsPage() {
     const timer = setTimeout(() => load(1), 250);
     return () => clearTimeout(timer);
   }, [load]);
+
+  useEffect(() => {
+    if (!session) return;
+    api('/api/admin/commercial/catalog').then((data) => setTeams(data.teams || [])).catch(() => setTeams([]));
+  }, [api, session]);
+
+  async function createLead(event: React.FormEvent) {
+    event.preventDefault();
+    setError(null); setSuccess(null); setIsActioning(true);
+    try {
+      await api('/api/admin/leads', { method: 'POST', body: JSON.stringify(createForm) });
+      setSuccess('Lead criado. Registre o primeiro contato para avançar.');
+      setCreateOpen(false);
+      setCreateForm({ name: '', email: '', phone: '', company: '', team_id: teams[0]?.id || '', source: 'indicação' });
+      await load(1);
+    } catch (caught) { setError(caught instanceof Error ? caught.message : 'Não foi possível criar o lead.'); }
+    finally { setIsActioning(false); }
+  }
 
   async function updatePriority(id: string, newPriority: string) {
     setError(null);
@@ -161,9 +182,10 @@ export function LeadsPage() {
 
   return (
     <div className="max-w-7xl mx-auto space-y-5">
-      <div>
-        <p className="text-xs font-bold uppercase tracking-[.18em] text-[#B66E45]">Comercial</p><h1 className="mt-1 text-3xl font-black text-[#202322]">Leads</h1>
-        <p className="text-sm text-[#626866] mt-1">Do primeiro contato à proposta, com a próxima ação sempre visível.</p>
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
+        <div><p className="text-xs font-bold uppercase tracking-[.18em] text-[#B66E45]">Comercial</p><h1 className="mt-1 text-3xl font-black text-[#202322]">Leads</h1>
+        <p className="text-sm text-[#626866] mt-1">Do primeiro contato à proposta, com a próxima ação sempre visível.</p></div>
+        {hasPlatformPermission('platform.commercial.manage') ? <button onClick={() => { setCreateOpen(true); setCreateForm((value) => ({ ...value, team_id: value.team_id || teams[0]?.id || '' })); }} className="inline-flex items-center justify-center gap-2 rounded-xl bg-[#B66E45] px-4 py-2.5 text-sm font-bold text-white"><Plus className="h-4 w-4"/>Novo lead</button> : null}
       </div>
 
       <div className="flex items-center gap-2 overflow-x-auto rounded-2xl bg-white p-4 text-xs font-bold text-[#626866] ring-1 ring-[#DDD8CF]/70">{["Lead","Contato","Demonstração","Qualificado","Proposta","Ganho ou perdido"].map((item,index)=><React.Fragment key={item}><span className="shrink-0 rounded-full bg-[#F6F5F2] px-3 py-1.5">{item}</span>{index<5?<ArrowRight className="h-3.5 w-3.5 shrink-0 text-[#B66E45]"/>:null}</React.Fragment>)}</div>
@@ -200,7 +222,7 @@ export function LeadsPage() {
         {loading ? (
           <ListSkeleton rows={7} />
         ) : !leads.length ? (
-          <div className="p-10 text-center text-sm text-gray-500">Nenhum lead encontrado.</div>
+          <div className="p-10 text-center"><p className="font-bold text-[#202322]">Nenhum lead por aqui</p><p className="mt-1 text-sm text-[#626866]">Cadastre uma oportunidade para iniciar o acompanhamento comercial.</p>{hasPlatformPermission('platform.commercial.manage')?<button onClick={()=>setCreateOpen(true)} className="mt-4 rounded-xl bg-[#B66E45] px-4 py-2 text-sm font-bold text-white">Criar primeiro lead</button>:null}</div>
         ) : (
           <><div className="space-y-3 p-3 md:hidden">{leads.map(lead=>{const assignment=lead.assignment;const canClaim=assignment&&!assignment.owner_platform_member_id&&assignment.platform_teams?.allow_self_claim;const allowedNext=getLeadNextStatuses(lead.status);return <article key={lead.id} className="rounded-2xl border border-[#DDD8CF] p-4"><div className="flex items-start justify-between gap-3"><div><h2 className="font-black">{lead.name}</h2><p className="text-sm text-[#626866]">{lead.company||"Empresa não informada"}</p></div><span className="rounded-full bg-[#F6F5F2] px-2.5 py-1 text-xs font-bold">{LEAD_STATUS_LABELS[lead.status]||"Em andamento"}</span></div><p className="mt-3 text-xs text-[#626866]">Responsável: {lead.owner?.name||lead.owner?.email||"Não atribuído"}</p><div className="mt-4 flex flex-wrap gap-2">{canClaim?<button disabled={isActioning} onClick={()=>claimLead(lead.id)} className="rounded-lg bg-[#B66E45] px-3 py-2 text-xs font-bold text-white">Assumir</button>:null}<button disabled={isActioning} onClick={()=>setActivityModalLead(lead)} className="rounded-lg bg-gray-100 px-3 py-2 text-xs font-bold">Registrar contato</button><button disabled={isActioning} onClick={()=>setDemoModalLead(lead)} className="rounded-lg bg-gray-100 px-3 py-2 text-xs font-bold">Agendar demo</button><a href={`#/admin/propostas?lead=${lead.id}`} className="rounded-lg bg-orange-100 px-3 py-2 text-xs font-bold text-[#B66E45]">Criar proposta</a>{allowedNext[0]?<button disabled={isActioning} onClick={()=>{setTransitionModal({lead,targetStatus:allowedNext[0]});setTransitionReason("");}} className="rounded-lg border border-[#B66E45]/30 px-3 py-2 text-xs font-bold text-[#B66E45]">Avançar etapa</button>:null}</div></article>;})}</div><div className="hidden overflow-x-auto md:block">
             <table className="w-full text-sm">
@@ -320,6 +342,8 @@ export function LeadsPage() {
           currentAssignment={assignModalLead.assignment}
         />
       )}
+
+      {createOpen && <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/55 p-4" role="dialog" aria-modal="true" aria-labelledby="new-lead-title"><form onSubmit={createLead} className="max-h-[90vh] w-full max-w-lg space-y-4 overflow-y-auto rounded-2xl bg-white p-6 shadow-2xl"><div className="flex items-start justify-between gap-4"><div><h2 id="new-lead-title" className="text-xl font-black">Novo lead</h2><p className="mt-1 text-sm text-[#626866]">Registre somente os dados necessários para começar.</p></div><button type="button" aria-label="Fechar" onClick={()=>setCreateOpen(false)} className="rounded-lg p-2 hover:bg-gray-100"><X className="h-5 w-5"/></button></div><div className="grid gap-4 sm:grid-cols-2"><label className="text-sm font-bold">Contato<input required minLength={2} value={createForm.name} onChange={e=>setCreateForm({...createForm,name:e.target.value})} className="mt-1 w-full rounded-xl border p-2.5 font-normal" placeholder="Nome da pessoa"/></label><label className="text-sm font-bold">Empresa<input required minLength={2} value={createForm.company} onChange={e=>setCreateForm({...createForm,company:e.target.value})} className="mt-1 w-full rounded-xl border p-2.5 font-normal" placeholder="Nome da empresa"/></label><label className="text-sm font-bold">E-mail<input required type="email" value={createForm.email} onChange={e=>setCreateForm({...createForm,email:e.target.value})} className="mt-1 w-full rounded-xl border p-2.5 font-normal" placeholder="contato@empresa.com.br"/></label><label className="text-sm font-bold">Telefone<input value={createForm.phone} onChange={e=>setCreateForm({...createForm,phone:e.target.value})} className="mt-1 w-full rounded-xl border p-2.5 font-normal" placeholder="(11) 99999-9999"/></label><label className="text-sm font-bold sm:col-span-2">Equipe responsável<select required value={createForm.team_id} onChange={e=>setCreateForm({...createForm,team_id:e.target.value})} className="mt-1 w-full rounded-xl border p-2.5 font-normal"><option value="">Selecione</option>{teams.map(team=><option key={team.id} value={team.id}>{team.name}</option>)}</select></label><label className="text-sm font-bold sm:col-span-2">Origem<select value={createForm.source} onChange={e=>setCreateForm({...createForm,source:e.target.value})} className="mt-1 w-full rounded-xl border p-2.5 font-normal"><option>indicação</option><option>site</option><option>evento</option><option>prospecção</option><option>parceria</option></select></label></div><div className="flex justify-end gap-3"><button type="button" onClick={()=>setCreateOpen(false)} className="rounded-xl border px-4 py-2 text-sm font-bold">Cancelar</button><button disabled={isActioning||!createForm.team_id} className="rounded-xl bg-[#B66E45] px-4 py-2 text-sm font-bold text-white disabled:opacity-50">{isActioning?<Loader2 className="h-4 w-4 animate-spin"/>:'Criar lead'}</button></div></form></div>}
 
       {/* Modal Transição de Status do Lead */}
       {transitionModal && (

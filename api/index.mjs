@@ -1348,7 +1348,7 @@ function createBillingRouters(getSupabaseAdmin2) {
     return res.status(201).json(data);
   });
   adminRouter.get("/commercial/proposals", authenticateRequest, resolvePlatformContext, requirePlatformPermission("platform.commercial.read"), async (req, res) => {
-    let query = getSupabaseAdmin2().from("commercial_proposals").select("*, marketing_leads(id,name,email,company), billing_plans(id,name,code,version)").order("created_at", { ascending: false });
+    let query = getSupabaseAdmin2().from("commercial_proposals").select("*, marketing_leads(id,name,email,company), billing_plans(id,name,code,version), commercial_proposal_items(*,solutions(id,key,name))").order("created_at", { ascending: false });
     if (req.platformContext.role.key !== "admin") {
       const teamIds = req.platformContext.teams.map((team) => team.id);
       if (!teamIds.length) return res.json([]);
@@ -1373,7 +1373,7 @@ function createBillingRouters(getSupabaseAdmin2) {
     if (req.platformContext.role.key !== "admin" && input.team_id && input.team_id !== assignment.team_id) {
       return res.status(403).json({ error: "A proposta deve permanecer na equipe atribu\xEDda ao lead." });
     }
-    const ownerId = req.platformContext.role.key === "sales" ? req.platformContext.platformMember.id : input.owner_platform_member_id || assignment?.owner_platform_member_id || req.platformContext.platformMember.id;
+    const ownerId = req.platformContext.role.key === "sales" ? req.platformContext.platformMember.id : input.owner_platform_member_id || assignment?.owner_platform_member_id || (req.platformContext.role.key === "manager" ? req.platformContext.platformMember.id : null);
     if (input.team_id && ownerId) {
       const target = await db.from("platform_team_members").select("platform_member_id").eq("team_id", input.team_id).eq("platform_member_id", ownerId).eq("status", "active").maybeSingle();
       if (!target.data) return res.status(400).json({ error: "O respons\xE1vel precisa ser membro ativo da equipe." });
@@ -1467,6 +1467,19 @@ function createBillingRouters(getSupabaseAdmin2) {
     const saved = await db.from("commercial_proposals").select("*").eq("id", proposal.id).single();
     return res.json(saved.data);
   });
+  adminRouter.post("/commercial/proposals/:id/mark-sent", authenticateRequest, resolvePlatformContext, requirePlatformPermission("platform.commercial.manage"), async (req, res) => {
+    const db = getSupabaseAdmin2();
+    const existing = await db.from("commercial_proposals").select("*").eq("id", req.params.id).maybeSingle();
+    if (existing.error || !existing.data) return res.status(404).json({ error: "Proposta n\xE3o encontrada." });
+    if (!canReadAssignedResource(req.platformContext, existing.data, "member_lead_visibility")) return res.status(403).json({ error: "Proposta fora do seu escopo." });
+    if (existing.data.status !== "approved") return res.status(409).json({ error: "A proposta precisa estar aprovada antes de registrar o envio." });
+    const notes = typeof req.body?.notes === "string" ? req.body.notes.trim().slice(0, 1e3) : "";
+    const sentAt = req.body?.sent_at && !Number.isNaN(new Date(req.body.sent_at).getTime()) ? new Date(req.body.sent_at).toISOString() : (/* @__PURE__ */ new Date()).toISOString();
+    const saved = await db.from("commercial_proposals").update({ sent_at: sentAt, sent_by_user_id: req.user.id, delivery_notes: notes || null }).eq("id", existing.data.id).select().single();
+    if (saved.error) return res.status(400).json({ error: saved.error.message });
+    await db.from("platform_audit_logs").insert({ actor_user_id: req.user.id, action: "commercial.proposal.sent", entity_type: "commercial_proposals", entity_id: existing.data.id, team_id: existing.data.team_id, severity: "info", ...auditContext(req, { result: "success", after: { sent_at: sentAt, notes_recorded: Boolean(notes) } }) });
+    return res.json(saved.data);
+  });
   adminRouter.post("/commercial/proposals/:id/versions", authenticateRequest, resolvePlatformContext, requirePlatformPermission("platform.commercial.manage"), async (req, res) => {
     const reason = typeof req.body?.reason === "string" ? req.body.reason.trim() : "";
     if (!reason) return res.status(400).json({ error: "O motivo da nova vers\xE3o \xE9 obrigat\xF3rio." });
@@ -1548,6 +1561,65 @@ function createBillingRouters(getSupabaseAdmin2) {
     if (transitioned.error) return res.status(409).json({ error: transitioned.error.message });
     const saved = await db.from("commercial_contracts").select("*").eq("id", contract.id).single();
     return res.json(saved.data);
+  });
+  adminRouter.post("/commercial/contracts/:id/external-signature", authenticateRequest, resolvePlatformContext, requirePlatformPermission("platform.commercial.manage"), async (req, res) => {
+    const parsed = z5.object({ status: z5.enum(["sent", "signed"]), occurred_at: z5.string().datetime().optional(), notes: z5.string().trim().max(1e3).optional() }).safeParse(req.body);
+    if (!parsed.success) return res.status(400).json({ error: "Informe o andamento da assinatura e uma data v\xE1lida." });
+    const db = getSupabaseAdmin2();
+    const existing = await db.from("commercial_contracts").select("*").eq("id", req.params.id).maybeSingle();
+    if (existing.error || !existing.data) return res.status(404).json({ error: "Contrato n\xE3o encontrado." });
+    if (!canReadAssignedResource(req.platformContext, existing.data, "member_client_visibility")) return res.status(403).json({ error: "Contrato fora do seu escopo." });
+    if (existing.data.status !== "approved") return res.status(409).json({ error: "O contrato precisa estar aprovado antes da formaliza\xE7\xE3o." });
+    if (parsed.data.status === "signed" && existing.data.external_signature_status !== "sent") return res.status(409).json({ error: "Registre primeiro o envio para assinatura." });
+    const occurredAt = parsed.data.occurred_at || (/* @__PURE__ */ new Date()).toISOString();
+    const updates = { external_signature_status: parsed.data.status, external_signature_notes: parsed.data.notes || null, external_signature_actor_user_id: req.user.id };
+    if (parsed.data.status === "sent") updates.external_signature_sent_at = occurredAt;
+    if (parsed.data.status === "signed") updates.externally_signed_at = occurredAt;
+    const saved = await db.from("commercial_contracts").update(updates).eq("id", existing.data.id).select().single();
+    if (saved.error) return res.status(400).json({ error: saved.error.message });
+    await db.from("platform_audit_logs").insert({ actor_user_id: req.user.id, action: `commercial.contract.external_signature_${parsed.data.status}`, entity_type: "commercial_contracts", entity_id: existing.data.id, team_id: existing.data.team_id, severity: "info", ...auditContext(req, { result: "success", before: { external_signature_status: existing.data.external_signature_status }, after: { external_signature_status: parsed.data.status, occurred_at: occurredAt } }) });
+    return res.json(saved.data);
+  });
+  adminRouter.post("/commercial/contracts/:id/prepare-client", authenticateRequest, resolvePlatformContext, requirePlatformPermission(["platform.clients.provision", "platform.onboarding.manage"]), async (req, res) => {
+    const db = getSupabaseAdmin2();
+    const result = await db.from("commercial_contracts").select("*,billing_plans(trial_days),commercial_contract_items(solution_id,limits)").eq("id", req.params.id).maybeSingle();
+    const contract = result.data;
+    if (result.error || !contract) return res.status(404).json({ error: "Contrato n\xE3o encontrado." });
+    if (req.platformContext.role.key !== "admin" && !canReadAssignedResource(req.platformContext, contract, "member_client_visibility")) return res.status(403).json({ error: "Contrato fora do seu escopo." });
+    if (contract.status !== "approved" || contract.external_signature_status !== "signed") return res.status(409).json({ error: "O contrato precisa estar aprovado e assinado externamente antes de iniciar a implanta\xE7\xE3o." });
+    if (contract.tenant_id) return res.status(200).json({ tenant_id: contract.tenant_id, already_prepared: true });
+    const trialDays = Number(contract.billing_plans?.trial_days || 0);
+    if (trialDays <= 0) return res.status(409).json({ error: "Este plano n\xE3o possui per\xEDodo de implanta\xE7\xE3o sem cobran\xE7a. Conclua a etapa financeira antes de ativar o cliente." });
+    if (!contract.commercial_contract_items?.length) return res.status(409).json({ error: "O contrato n\xE3o possui produtos para implantar." });
+    const baseSlug = String(contract.customer_name || "cliente").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 42) || "cliente";
+    const slug = `${baseSlug}-${String(contract.id).replaceAll("-", "").slice(0, 8)}`;
+    const trialEndsAt = new Date(Date.now() + trialDays * 864e5).toISOString();
+    const tenant = await db.from("tenants").insert({ name: contract.customer_name, slug, status: "trial", lifecycle_status: "onboarding", trial_ends_at: trialEndsAt, onboarding_status: "not_started", created_by: req.user.id, contacts: [{ name: contract.owner_name || contract.customer_name, email: contract.owner_email }], settings: { commercial_contract_id: contract.id } }).select().single();
+    if (tenant.error) return res.status(400).json({ error: tenant.error.message });
+    const tenantId = tenant.data.id;
+    try {
+      const solutions = contract.commercial_contract_items.map((item) => ({ tenant_id: tenantId, solution_id: item.solution_id, status: "active", config: { source: "commercial_trial", contract_id: contract.id, trial_ends_at: trialEndsAt, limits: item.limits || {} } }));
+      const insertedSolutions = await db.from("tenant_solutions").insert(solutions);
+      if (insertedSolutions.error) throw insertedSolutions.error;
+      if (contract.team_id) {
+        const assignment = await db.from("platform_client_assignments").upsert({ tenant_id: tenantId, team_id: contract.team_id, owner_platform_member_id: contract.owner_platform_member_id || null, assignment_type: "commercial", status: "active", assigned_by_user_id: req.user.id }, { onConflict: "tenant_id,team_id,assignment_type" });
+        if (assignment.error) throw assignment.error;
+      }
+      const linked = await db.from("commercial_contracts").update({ tenant_id: tenantId, starts_on: contract.starts_on || (/* @__PURE__ */ new Date()).toISOString().slice(0, 10) }).eq("id", contract.id).is("tenant_id", null);
+      if (linked.error) throw linked.error;
+      const template = await db.rpc("ensure_integrity_onboarding_template", { p_actor_user_id: req.user.id });
+      if (template.error) throw template.error;
+      const onboarding = await db.rpc("admin_start_onboarding", { p_tenant_id: tenantId, p_template_id: template.data, p_actor_user_id: req.user.id, p_owner_platform_member_id: contract.owner_platform_member_id || null });
+      if (onboarding.error) throw onboarding.error;
+      const lead = await db.from("marketing_leads").select("status").eq("id", contract.lead_id).maybeSingle();
+      if (lead.data?.status === "approved") await db.rpc("admin_transition_control_plane", { p_entity_type: "lead", p_entity_id: contract.lead_id, p_to_status: "converted", p_actor_user_id: req.user.id, p_reason: "Cliente preparado para implanta\xE7\xE3o", p_team_id: contract.team_id || null, p_tenant_id: tenantId, p_request_id: req.requestId || null, p_metadata: { contract_id: contract.id } });
+      await db.from("platform_audit_logs").insert({ actor_user_id: req.user.id, action: "commercial.client.prepared", entity_type: "tenants", entity_id: tenantId, team_id: contract.team_id, severity: "info", ...auditContext(req, { result: "success", after: { contract_id: contract.id, onboarding_run_id: onboarding.data, trial_ends_at: trialEndsAt, solution_count: solutions.length } }) });
+      return res.status(201).json({ tenant_id: tenantId, onboarding_run_id: onboarding.data, trial_ends_at: trialEndsAt });
+    } catch (error) {
+      await db.from("commercial_contracts").update({ tenant_id: null }).eq("id", contract.id).eq("tenant_id", tenantId);
+      await db.from("tenants").delete().eq("id", tenantId);
+      return res.status(400).json({ error: error.message });
+    }
   });
   adminRouter.post("/commercial/contracts/:id/accept", authenticateRequest, resolvePlatformContext, requirePlatformPermission("platform.commercial.manage"), async (req, res) => {
     return res.status(405).json({ error: "Contratos n\xE3o utilizam status accepted. Fluxo v\xE1lido: pending_approval -> approved -> pending_payment -> active." });
@@ -1909,6 +1981,55 @@ init_operational();
 init_tenantAuth();
 function createAdminLeadsRouter(getSupabaseAdmin2, _old_requirePlatformAuth) {
   const router = Router();
+  const createLeadSchema = z.object({
+    name: z.string().trim().min(2).max(160),
+    email: z.string().trim().email().max(255),
+    phone: z.string().trim().max(40).optional().nullable(),
+    company: z.string().trim().min(2).max(200),
+    source: z.string().trim().max(80).default("manual"),
+    team_id: z.string().uuid(),
+    owner_platform_member_id: z.string().uuid().optional().nullable()
+  });
+  router.post("/", authenticateRequest, resolvePlatformContext, requirePlatformPermission("platform.commercial.manage"), async (req, res) => {
+    const parsed = createLeadSchema.safeParse(req.body);
+    if (!parsed.success) return res.status(400).json({ error: "Informe nome, e-mail, empresa e equipe respons\xE1vel." });
+    const input = parsed.data;
+    const db = getSupabaseAdmin2();
+    const team = await db.from("platform_teams").select("id,status").eq("id", input.team_id).maybeSingle();
+    if (team.error || !team.data || team.data.status !== "active") return res.status(400).json({ error: "Selecione uma equipe comercial ativa." });
+    if (req.platformContext.role?.key !== "admin" && !req.platformContext.teams.some((item) => item.id === input.team_id)) {
+      return res.status(403).json({ error: "Voc\xEA n\xE3o pode criar leads para esta equipe." });
+    }
+    if (input.owner_platform_member_id) {
+      const owner = await db.from("platform_team_members").select("platform_member_id").eq("team_id", input.team_id).eq("platform_member_id", input.owner_platform_member_id).eq("status", "active").maybeSingle();
+      if (!owner.data) return res.status(400).json({ error: "O respons\xE1vel precisa fazer parte da equipe escolhida." });
+    }
+    const normalizedEmail = input.email.toLowerCase();
+    const duplicate = await db.from("marketing_leads").select("id,status").eq("email", normalizedEmail).not("status", "in", "(rejected,lost)").limit(1).maybeSingle();
+    if (duplicate.data) return res.status(409).json({ error: "J\xE1 existe um lead ativo com este e-mail." });
+    const created = await db.from("marketing_leads").insert({
+      name: input.name,
+      email: normalizedEmail,
+      phone: input.phone || null,
+      company: input.company,
+      source: input.source || "manual",
+      status: "new",
+      priority: "normal"
+    }).select().single();
+    if (created.error) return res.status(400).json({ error: created.error.message });
+    const assignment = await db.from("platform_lead_assignments").insert({
+      lead_id: created.data.id,
+      team_id: input.team_id,
+      owner_platform_member_id: input.owner_platform_member_id || null,
+      assigned_by_user_id: req.user.id
+    }).select().single();
+    if (assignment.error) {
+      await db.from("marketing_leads").delete().eq("id", created.data.id);
+      return res.status(400).json({ error: assignment.error.message });
+    }
+    await db.from("platform_audit_logs").insert({ actor_user_id: req.user.id, action: "commercial.lead.created", entity_type: "marketing_leads", entity_id: created.data.id, team_id: input.team_id, severity: "info", ...auditContext(req, { result: "success", after: { source: input.source || "manual", assigned: Boolean(input.owner_platform_member_id) } }) });
+    return res.status(201).json({ ...created.data, assignment: assignment.data });
+  });
   router.get("/", authenticateRequest, resolvePlatformContext, requirePlatformPermission("platform.leads.read"), async (req, res) => {
     try {
       const { platformContext } = req;

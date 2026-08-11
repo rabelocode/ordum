@@ -8,6 +8,52 @@ import { authenticateRequest, resolvePlatformContext, requirePlatformPermission 
 export function createAdminLeadsRouter(getSupabaseAdmin: any, _old_requirePlatformAuth: any) {
   const router = Router();
 
+  const createLeadSchema = z.object({
+    name: z.string().trim().min(2).max(160),
+    email: z.string().trim().email().max(255),
+    phone: z.string().trim().max(40).optional().nullable(),
+    company: z.string().trim().min(2).max(200),
+    source: z.string().trim().max(80).default('manual'),
+    team_id: z.string().uuid(),
+    owner_platform_member_id: z.string().uuid().optional().nullable(),
+  });
+
+  router.post('/', authenticateRequest, resolvePlatformContext, requirePlatformPermission('platform.commercial.manage'), async (req: any, res: any) => {
+    const parsed = createLeadSchema.safeParse(req.body);
+    if (!parsed.success) return res.status(400).json({ error: 'Informe nome, e-mail, empresa e equipe responsável.' });
+    const input = parsed.data;
+    const db = getSupabaseAdmin();
+    const team = await db.from('platform_teams').select('id,status').eq('id', input.team_id).maybeSingle();
+    if (team.error || !team.data || team.data.status !== 'active') return res.status(400).json({ error: 'Selecione uma equipe comercial ativa.' });
+    if (req.platformContext.role?.key !== 'admin' && !req.platformContext.teams.some((item: any) => item.id === input.team_id)) {
+      return res.status(403).json({ error: 'Você não pode criar leads para esta equipe.' });
+    }
+    if (input.owner_platform_member_id) {
+      const owner = await db.from('platform_team_members').select('platform_member_id').eq('team_id', input.team_id)
+        .eq('platform_member_id', input.owner_platform_member_id).eq('status', 'active').maybeSingle();
+      if (!owner.data) return res.status(400).json({ error: 'O responsável precisa fazer parte da equipe escolhida.' });
+    }
+    const normalizedEmail = input.email.toLowerCase();
+    const duplicate = await db.from('marketing_leads').select('id,status').eq('email', normalizedEmail).not('status', 'in', '(rejected,lost)').limit(1).maybeSingle();
+    if (duplicate.data) return res.status(409).json({ error: 'Já existe um lead ativo com este e-mail.' });
+    const created = await db.from('marketing_leads').insert({
+      name: input.name, email: normalizedEmail, phone: input.phone || null, company: input.company,
+      source: input.source || 'manual', status: 'new', priority: 'normal',
+    }).select().single();
+    if (created.error) return res.status(400).json({ error: created.error.message });
+    const assignment = await db.from('platform_lead_assignments').insert({
+      lead_id: created.data.id, team_id: input.team_id,
+      owner_platform_member_id: input.owner_platform_member_id || null,
+      assigned_by_user_id: req.user.id,
+    }).select().single();
+    if (assignment.error) {
+      await db.from('marketing_leads').delete().eq('id', created.data.id);
+      return res.status(400).json({ error: assignment.error.message });
+    }
+    await db.from('platform_audit_logs').insert({ actor_user_id: req.user.id, action: 'commercial.lead.created', entity_type: 'marketing_leads', entity_id: created.data.id, team_id: input.team_id, severity: 'info', ...auditContext(req, { result: 'success', after: { source: input.source || 'manual', assigned: Boolean(input.owner_platform_member_id) } }) });
+    return res.status(201).json({ ...created.data, assignment: assignment.data });
+  });
+
 
   // GET /api/admin/leads
   router.get('/', authenticateRequest, resolvePlatformContext, requirePlatformPermission('platform.leads.read'), async (req: any, res: any) => {

@@ -6,6 +6,7 @@ import {
 import { Button } from '../../components/ui/Button';
 import { useAccess } from '../../core/auth/AccessContext';
 import { ListSkeleton } from '../../components/ui/LoadingSkeletons';
+import { ActionDialog } from '../../components/ui/ActionDialog';
 
 interface StaffMember {
   id: string;
@@ -60,6 +61,7 @@ export function ConsultantsPage() {
 
   // Action Loading ID
   const [actionLoadingId, setActionLoadingId] = useState<string | null>(null);
+  const [pendingAction, setPendingAction] = useState<{type:'suspend'|'sessions';id:string}|null>(null);
 
   const loadStaffAndTeams = async () => {
     if (!session) return;
@@ -202,9 +204,6 @@ export function ConsultantsPage() {
 
   const handleSuspendMember = async (memberId: string) => {
     if (!session) return;
-    if (!window.confirm('Tem certeza que deseja suspender este membro? Ele perderá o acesso ao painel.')) {
-      return;
-    }
 
     setActionLoadingId(memberId);
     setActionError('');
@@ -254,7 +253,7 @@ export function ConsultantsPage() {
   };
 
   const handleTerminateSessions = async (memberId: string) => {
-    if (!session || !window.confirm('Encerrar todas as sessões renováveis deste usuário?')) return;
+    if (!session) return;
     setActionLoadingId(memberId); setActionError('');
     try { const res=await fetch(`/api/admin/staff/${memberId}/terminate-sessions`,{method:'POST',headers:{Authorization:`Bearer ${session.access_token}`}});const data=await res.json();if(!res.ok)throw new Error(data.error||'Falha ao encerrar sessões.');setActionSuccess('Sessões encerradas. Tokens de acesso atuais expiram no prazo configurado pelo Supabase.'); }
     catch(err:any){setActionError(err.message||'Falha ao encerrar sessões.');}finally{setActionLoadingId(null);}
@@ -450,7 +449,7 @@ export function ConsultantsPage() {
                         {/* Actions */}
                         <td className="px-6 py-4 text-right">
                           <div className="flex items-center justify-end gap-2">
-                            {platformRole?.key==='admin'&&<button onClick={()=>handleTerminateSessions(member.id)} disabled={actionLoadingId===member.id} className="px-2.5 py-1 text-[11px] font-bold bg-amber-50 text-amber-800 rounded-lg" title="Encerrar sessões">Sessões</button>}
+                            {platformRole?.key==='admin'&&<button onClick={()=>setPendingAction({type:'sessions',id:member.id})} disabled={actionLoadingId===member.id} className="px-2.5 py-1 text-[11px] font-bold bg-amber-50 text-amber-800 rounded-lg" title="Encerrar sessões">Sessões</button>}
                             <button
                               onClick={() => handleOpenEditModal(member)}
                               className="p-1.5 text-gray-500 hover:text-[#202322] hover:bg-gray-100 rounded-lg transition-colors"
@@ -469,7 +468,7 @@ export function ConsultantsPage() {
                               </button>
                             ) : (
                               <button
-                                onClick={() => handleSuspendMember(member.id)}
+                                onClick={() => setPendingAction({type:'suspend',id:member.id})}
                                 disabled={actionLoadingId === member.id}
                                 className="px-2.5 py-1 text-[11px] font-bold bg-red-50 text-red-700 hover:bg-red-100 rounded-lg transition-colors cursor-pointer"
                               >
@@ -713,6 +712,7 @@ export function ConsultantsPage() {
           </div>
         </div>
       )}
+      <ActionDialog open={Boolean(pendingAction)} title={pendingAction?.type==='suspend'?'Suspender acesso':'Encerrar sessões'} description={pendingAction?.type==='suspend'?'A pessoa perderá o acesso ao painel até ser reativada.':'Todas as sessões renováveis desta pessoa serão encerradas.'} danger={pendingAction?.type==='suspend'} confirmLabel={pendingAction?.type==='suspend'?'Suspender':'Encerrar sessões'} busy={Boolean(actionLoadingId)} onClose={()=>setPendingAction(null)} onConfirm={async()=>{if(!pendingAction)return;const current=pendingAction;setPendingAction(null);if(current.type==='suspend')await handleSuspendMember(current.id);else await handleTerminateSessions(current.id)}}/>
     </div>
   );
 }

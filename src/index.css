@@ -47,6 +47,12 @@
   }
 }
 
+@layer components {
+  .input {
+    @apply mt-1 w-full rounded-xl border border-[#DDD8CF] bg-white p-3 font-normal outline-none transition focus:border-[#B66E45] focus:ring-2 focus:ring-[#B66E45]/15;
+  }
+}
+
 /* Custom scrollbars */
 ::-webkit-scrollbar {
   width: 6px;
@@ -65,4 +71,3 @@
 ::-webkit-scrollbar-thumb:hover {
   background: #B66E45;
 }
-
