@@ -1,4 +1,5 @@
 import { supabase } from "../../lib/supabase";
+import { userFacingApiError } from "../../lib/userFacingError";
 
 export type ApiState<T> = { data: T | null; loading: boolean; error: string };
 
@@ -16,7 +17,7 @@ export async function integrityApi<T>(tenantId: string, path: string, options: R
   if (!headers.has("Content-Type")) headers.set("Content-Type", "application/json");
   const response = await fetch(`/api/workspace/integrity${path}`, { ...options, headers });
   const body = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(body.error || "Não foi possível concluir a operação.");
+  if (!response.ok) throw new Error(userFacingApiError(body,response.status,"Não foi possível concluir a operação. Tente novamente."));
   return body;
 }
 
@@ -24,7 +25,7 @@ export async function integrityFileApi<T>(tenantId: string, path: string, file: 
   const headers = await workspaceHeaders(tenantId, { "Content-Type": file.type, "x-file-name": file.name, ...extraHeaders });
   const response = await fetch(`/api/workspace/integrity${path}`, { method: "POST", headers, body: file });
   const body = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(body.error || "Não foi possível enviar o arquivo.");
+  if (!response.ok) throw new Error(userFacingApiError(body,response.status,"Não foi possível enviar o arquivo. Revise o formato e tente novamente."));
   return body;
 }
 
@@ -33,7 +34,7 @@ export async function integrityDownload(tenantId: string, path: string, fallback
   const response = await fetch(`/api/workspace/integrity${path}`, { headers });
   if (!response.ok) {
     const body = await response.json().catch(() => ({}));
-    throw new Error(body.error || "Não foi possível preparar a exportação.");
+    throw new Error(userFacingApiError(body,response.status,"Não foi possível preparar a exportação. Tente novamente."));
   }
   const disposition = response.headers.get("content-disposition") || "";
   const match = disposition.match(/filename="?([^";]+)"?/i);

@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useState } from 'react';
 import { CheckCircle2, FileText, Plus, X, Loader2, Check } from 'lucide-react';
 import { useAccess } from '../../core/auth/AccessContext';
 import { PROPOSAL_STATUS_LABELS } from '../../domain/transitions';
+import { userFacingApiError } from '../../lib/userFacingError';
 
 const money = new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' });
 
@@ -53,7 +54,7 @@ export function ProposalsPage() {
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session?.access_token}`, ...init?.headers }
     });
     const data = await response.json().catch(() => ({}));
-    if (!response.ok) throw new Error(data.error || 'Falha na requisição.');
+    if (!response.ok) throw new Error(userFacingApiError(data,response.status,'Não foi possível concluir esta ação na proposta.'));
     return data;
   }, [session]);
 

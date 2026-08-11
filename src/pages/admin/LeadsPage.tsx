@@ -4,6 +4,7 @@ import { useAccess } from '../../core/auth/AccessContext';
 import { AssignLeadModal } from '../../components/admin/AssignLeadModal';
 import { ListSkeleton } from '../../components/ui/LoadingSkeletons';
 import { getLeadNextStatuses, LEAD_STATUS_LABELS } from '../../domain/transitions';
+import { userFacingApiError } from '../../lib/userFacingError';
 
 export function LeadsPage() {
   const { session } = useAccess();
@@ -34,7 +35,7 @@ export function LeadsPage() {
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session?.access_token}`, ...init?.headers }
     });
     const data = await response.json().catch(() => ({}));
-    if (!response.ok) throw new Error(data.error || 'Falha na requisição.');
+    if (!response.ok) throw new Error(userFacingApiError(data,response.status,'Não foi possível atualizar este lead. Tente novamente.'));
     return data;
   }, [session]);
 
@@ -161,9 +162,11 @@ export function LeadsPage() {
   return (
     <div className="max-w-7xl mx-auto space-y-5">
       <div>
-        <h1 className="text-3xl font-bold text-[#202322]">Leads comerciais</h1>
-        <p className="text-sm text-[#626866] mt-1">Funil, atribuições, histórico e demonstrações no escopo autorizado.</p>
+        <p className="text-xs font-bold uppercase tracking-[.18em] text-[#B66E45]">Comercial</p><h1 className="mt-1 text-3xl font-black text-[#202322]">Leads</h1>
+        <p className="text-sm text-[#626866] mt-1">Do primeiro contato à proposta, com a próxima ação sempre visível.</p>
       </div>
+
+      <div className="flex items-center gap-2 overflow-x-auto rounded-2xl bg-white p-4 text-xs font-bold text-[#626866] ring-1 ring-[#DDD8CF]/70">{["Lead","Contato","Demonstração","Qualificado","Proposta","Ganho ou perdido"].map((item,index)=><React.Fragment key={item}><span className="shrink-0 rounded-full bg-[#F6F5F2] px-3 py-1.5">{item}</span>{index<5?<ArrowRight className="h-3.5 w-3.5 shrink-0 text-[#B66E45]"/>:null}</React.Fragment>)}</div>
 
       {error && <div role="alert" className="rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-700">{error}</div>}
       {success && <div role="status" className="rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-700">{success}</div>}
@@ -188,7 +191,7 @@ export function LeadsPage() {
         <select aria-label="Filtrar prioridade" value={priority} onChange={e => setPriority(e.target.value)} className="rounded-xl border px-3 text-sm">
           <option value="">Todas as prioridades</option>
           {['low', 'normal', 'high', 'urgent'].map(item => (
-            <option key={item} value={item}>{item}</option>
+            <option key={item} value={item}>{priorityLabel(item)}</option>
           ))}
         </select>
       </div>
@@ -199,14 +202,14 @@ export function LeadsPage() {
         ) : !leads.length ? (
           <div className="p-10 text-center text-sm text-gray-500">Nenhum lead encontrado.</div>
         ) : (
-          <div className="overflow-x-auto">
+          <><div className="space-y-3 p-3 md:hidden">{leads.map(lead=>{const assignment=lead.assignment;const canClaim=assignment&&!assignment.owner_platform_member_id&&assignment.platform_teams?.allow_self_claim;const allowedNext=getLeadNextStatuses(lead.status);return <article key={lead.id} className="rounded-2xl border border-[#DDD8CF] p-4"><div className="flex items-start justify-between gap-3"><div><h2 className="font-black">{lead.name}</h2><p className="text-sm text-[#626866]">{lead.company||"Empresa não informada"}</p></div><span className="rounded-full bg-[#F6F5F2] px-2.5 py-1 text-xs font-bold">{LEAD_STATUS_LABELS[lead.status]||"Em andamento"}</span></div><p className="mt-3 text-xs text-[#626866]">Responsável: {lead.owner?.name||lead.owner?.email||"Não atribuído"}</p><div className="mt-4 flex flex-wrap gap-2">{canClaim?<button disabled={isActioning} onClick={()=>claimLead(lead.id)} className="rounded-lg bg-[#B66E45] px-3 py-2 text-xs font-bold text-white">Assumir</button>:null}<button disabled={isActioning} onClick={()=>setActivityModalLead(lead)} className="rounded-lg bg-gray-100 px-3 py-2 text-xs font-bold">Registrar contato</button><button disabled={isActioning} onClick={()=>setDemoModalLead(lead)} className="rounded-lg bg-gray-100 px-3 py-2 text-xs font-bold">Agendar demo</button><a href={`#/admin/propostas?lead=${lead.id}`} className="rounded-lg bg-orange-100 px-3 py-2 text-xs font-bold text-[#B66E45]">Criar proposta</a>{allowedNext[0]?<button disabled={isActioning} onClick={()=>{setTransitionModal({lead,targetStatus:allowedNext[0]});setTransitionReason("");}} className="rounded-lg border border-[#B66E45]/30 px-3 py-2 text-xs font-bold text-[#B66E45]">Avançar etapa</button>:null}</div></article>;})}</div><div className="hidden overflow-x-auto md:block">
             <table className="w-full text-sm">
               <thead className="bg-[#F6F5F2] text-left">
                 <tr>
                   <th className="p-3">Contato</th>
-                  <th className="p-3">Escopo</th>
-                  <th className="p-3">Status Atual</th>
-                  <th className="p-3">Próximos Estados</th>
+                  <th className="p-3">Responsável</th>
+                  <th className="p-3">Etapa atual</th>
+                  <th className="p-3">Próxima etapa</th>
                   <th className="p-3">Prioridade</th>
                   <th className="p-3">Ações</th>
                 </tr>
@@ -261,7 +264,7 @@ export function LeadsPage() {
                           className="rounded-lg border p-1.5 text-xs"
                         >
                           {['low', 'normal', 'high', 'urgent'].map(item => (
-                            <option key={item} value={item}>{item}</option>
+                            <option key={item} value={item}>{priorityLabel(item)}</option>
                           ))}
                         </select>
                       </td>
@@ -276,13 +279,13 @@ export function LeadsPage() {
                             Atribuir
                           </button>
                           <button disabled={isActioning} onClick={() => setActivityModalLead(lead)} className="rounded-lg bg-gray-100 px-2 py-1 text-xs hover:bg-gray-200">
-                            Atividade
+                            Registrar contato
                           </button>
                           <button disabled={isActioning} onClick={() => setDemoModalLead(lead)} className="rounded-lg bg-gray-100 px-2 py-1 text-xs hover:bg-gray-200">
-                            Demo
+                            Agendar demo
                           </button>
                           <a href={`#/admin/propostas?lead=${lead.id}`} className="rounded-lg bg-orange-100 px-2 py-1 text-xs font-semibold text-[#B66E45] hover:bg-orange-200">
-                            Proposta
+                            Criar proposta
                           </a>
                         </div>
                       </td>
@@ -291,7 +294,7 @@ export function LeadsPage() {
                 })}
               </tbody>
             </table>
-          </div>
+          </div></>
         )}
       </div>
 
@@ -323,20 +326,20 @@ export function LeadsPage() {
         <div className="fixed inset-0 z-50 bg-black/50 p-4 flex items-center justify-center">
           <form onSubmit={handleTransitionSubmit} className="w-full max-w-md rounded-2xl bg-white p-6 shadow-2xl space-y-4">
             <div className="flex items-center justify-between">
-              <h3 className="text-lg font-bold text-[#202322]">Transicionar Lead</h3>
+              <h3 className="text-lg font-bold text-[#202322]">Alterar etapa do lead</h3>
               <button type="button" onClick={() => setTransitionModal(null)} aria-label="Fechar"><X className="w-5 h-5" /></button>
             </div>
             <p className="text-sm text-gray-600">
               Alterar status de <strong>{LEAD_STATUS_LABELS[transitionModal.lead.status] || transitionModal.lead.status}</strong> para <strong>{LEAD_STATUS_LABELS[transitionModal.targetStatus] || transitionModal.targetStatus}</strong>.
             </p>
             <label className="block text-sm font-medium text-gray-700">
-              Justificativa / Motivo da transição *
+              Motivo da alteração *
               <textarea
                 required
                 rows={3}
                 value={transitionReason}
                 onChange={e => setTransitionReason(e.target.value)}
-                placeholder="Informe o motivo da alteração de status..."
+                placeholder="Ex.: contato realizado e interesse confirmado"
                 className="mt-1 w-full rounded-xl border border-[#DDD8CF] p-2.5 text-sm"
               />
             </label>
@@ -345,7 +348,7 @@ export function LeadsPage() {
                 Cancelar
               </button>
               <button disabled={isActioning || !transitionReason.trim()} className="rounded-xl bg-[#B66E45] px-4 py-2 text-sm font-bold text-white disabled:opacity-50">
-                {isActioning ? <Loader2 className="w-4 h-4 animate-spin" /> : 'Confirmar Transição'}
+                {isActioning ? <Loader2 className="w-4 h-4 animate-spin" /> : 'Confirmar etapa'}
               </button>
             </div>
           </form>
@@ -436,3 +439,5 @@ export function LeadsPage() {
     </div>
   );
 }
+
+function priorityLabel(value:string){return ({low:"Baixa",normal:"Normal",high:"Alta",urgent:"Urgente"} as Record<string,string>)[value]||"Normal";}

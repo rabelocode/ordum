@@ -4,6 +4,7 @@ import { useAccess } from '../../core/auth/AccessContext';
 import { ListSkeleton } from '../../components/ui/LoadingSkeletons';
 import { CONTRACT_STATUS_LABELS } from '../../domain/transitions';
 import { isValidTaxId, maskTaxId } from '../../domain/cpf-cnpj';
+import { userFacingApiError } from '../../lib/userFacingError';
 
 const money = new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' });
 
@@ -36,13 +37,13 @@ export function ContractsPage() {
   });
 
   const api = useCallback(async (path: string, init?: RequestInit) => {
-    if (!session) throw new Error('Sessão ausente.');
+    if (!session) throw new Error('Sua sessão expirou. Entre novamente para continuar.');
     const response = await fetch(path, {
       ...init,
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session.access_token}`, ...init?.headers },
     });
     const body = await response.json().catch(() => ({}));
-    if (!response.ok) throw new Error(body.error || `Erro ${response.status}`);
+    if (!response.ok) throw new Error(userFacingApiError(body,response.status,'Não foi possível concluir esta ação no contrato.'));
     return body;
   }, [session]);
 

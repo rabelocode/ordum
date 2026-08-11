@@ -2443,7 +2443,19 @@ function createAdminClientsRouter(getSupabaseAdmin2) {
         const { data: audit } = await getSupabaseAdmin2().from("platform_audit_logs").select(
           "id,action,severity,metadata,created_at,actor_user_id,request_id"
         ).eq("entity_id", clientId).order("created_at", { ascending: false }).limit(50);
-        res.json({ ...data, assignment, owner, audit: audit || [] });
+        const userNames = new Map((usersData?.users || []).map((user) => [user.id, user.user_metadata?.full_name || user.email || "Usu\xE1rio"]));
+        const memberships = (data.memberships || []).map((membership) => ({
+          ...membership,
+          display_name: userNames.get(membership.user_id) || "Usu\xE1rio",
+          user_id: void 0
+        }));
+        const auditRows = (audit || []).map((event) => ({
+          ...event,
+          actor_name: userNames.get(event.actor_user_id) || "Equipe Ordum",
+          actor_user_id: void 0,
+          request_id: void 0
+        }));
+        res.json({ ...data, memberships, assignment, owner, audit: auditRows });
       } catch (e) {
         res.status(500).json({ error: e.message });
       }
@@ -4041,6 +4053,7 @@ var listSchema = z6.object({
   from: z6.string().datetime().optional(),
   to: z6.string().datetime().optional(),
   sla: z6.enum(["due_soon", "overdue"]).optional(),
+  view: z6.enum(["all", "unassigned", "mine", "awaiting_reply", "closed"]).default("all"),
   page: z6.coerce.number().int().min(1).default(1),
   limit: z6.coerce.number().int().min(1).max(100).default(25),
   order: z6.enum([
@@ -4442,10 +4455,28 @@ function createIntegrityRouter(getSupabaseAdmin2, authOverrides) {
       const from = (q.page - 1) * q.limit;
       const db = getSupabaseAdmin2();
       let query = db.from("integrity_cases").select(
-        "id,protocol,status,severity,priority,sla_due_at,first_response_due_at,treatment_due_at,first_action_at,created_at,updated_at,owner_membership_id,committee_id,department_id,lock_version,integrity_categories(name),integrity_units(name),integrity_departments(name),integrity_committees(name),integrity_reports!inner(subject)",
+        "id,report_id,protocol,status,severity,priority,sla_due_at,first_response_due_at,treatment_due_at,first_action_at,created_at,updated_at,owner_membership_id,committee_id,department_id,lock_version,integrity_categories(name),integrity_units(name),integrity_departments(name),integrity_committees(name),integrity_reports!inner(subject)",
         { count: "exact" }
       ).eq("tenant_id", tenantId(req));
       query = (await scopeCaseQuery(query, db, req)).query;
+      if (q.view === "unassigned") query = query.is("owner_membership_id", null).is("committee_id", null).not("status", "in", "(closed,archived)");
+      if (q.view === "mine") query = query.eq("owner_membership_id", membershipId(req)).not("status", "in", "(closed,archived)");
+      if (q.view === "closed") query = query.in("status", ["closed", "archived"]);
+      if (q.view === "awaiting_reply") {
+        const tenantReports = await db.from("integrity_reports").select("id").eq("tenant_id", tenantId(req)).limit(5e3);
+        if (tenantReports.error) return res.status(500).json({ error: "N\xE3o foi poss\xEDvel carregar as conversas pendentes." });
+        const reportIds = (tenantReports.data || []).map((item) => item.id);
+        const communication = reportIds.length ? await db.from("integrity_report_messages").select("report_id,author_type,created_at").in("report_id", reportIds).order("created_at", { ascending: false }).limit(1e4) : { data: [], error: null };
+        if (communication.error) return res.status(500).json({ error: "N\xE3o foi poss\xEDvel carregar as conversas pendentes." });
+        const seen = /* @__PURE__ */ new Set();
+        const waiting = (communication.data || []).filter((message) => {
+          if (seen.has(message.report_id)) return false;
+          seen.add(message.report_id);
+          return message.author_type === "reporter";
+        }).map((message) => message.report_id);
+        if (!waiting.length) return res.json({ cases: [], page: q.page, limit: q.limit, total: 0, total_pages: 0 });
+        query = query.in("report_id", waiting).not("status", "in", "(closed,archived)");
+      }
       if (q.search) {
         const text = q.search.replace(/[%_,]/g, "");
         const reportIds = await matchingReportIds(db, tenantId(req), q.search);
@@ -4481,10 +4512,17 @@ function createIntegrityRouter(getSupabaseAdmin2, authOverrides) {
       if (profiles.error) return res.status(500).json({ error: "N\xE3o foi poss\xEDvel carregar os respons\xE1veis." });
       const profileNames = new Map((profiles.data || []).map((profile) => [profile.id, profile.full_name]));
       const ownerNames = new Map((owners.data || []).map((owner) => [owner.id, profileNames.get(owner.user_id) || "Membro do tenant"]));
+      const pageReportIds = (result.data || []).map((item) => item.report_id);
+      const messages = pageReportIds.length ? await db.from("integrity_report_messages").select("report_id,author_type,created_at").in("report_id", pageReportIds).order("created_at", { ascending: false }) : { data: [], error: null };
+      if (messages.error) return res.status(500).json({ error: "N\xE3o foi poss\xEDvel carregar a \xFAltima atividade." });
+      const latestByReport = /* @__PURE__ */ new Map();
+      for (const message of messages.data || []) if (!latestByReport.has(message.report_id)) latestByReport.set(message.report_id, message);
       return res.json({
         cases: (result.data || []).map((item) => ({
           ...item,
-          owner_name: item.owner_membership_id ? ownerNames.get(item.owner_membership_id) || "Membro indispon\xEDvel" : null
+          owner_name: item.owner_membership_id ? ownerNames.get(item.owner_membership_id) || "Membro indispon\xEDvel" : null,
+          last_activity_at: latestByReport.get(item.report_id)?.created_at || item.updated_at,
+          has_unanswered_message: latestByReport.get(item.report_id)?.author_type === "reporter"
         })),
         page: q.page,
         limit: q.limit,

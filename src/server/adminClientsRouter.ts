@@ -332,7 +332,19 @@ export function createAdminClientsRouter(getSupabaseAdmin: any) {
           .eq("entity_id", clientId)
           .order("created_at", { ascending: false })
           .limit(50);
-        res.json({ ...data, assignment, owner, audit: audit || [] });
+        const userNames = new Map((usersData?.users || []).map((user: any) => [user.id, user.user_metadata?.full_name || user.email || "Usuário"]));
+        const memberships = (data.memberships || []).map((membership: any) => ({
+          ...membership,
+          display_name: userNames.get(membership.user_id) || "Usuário",
+          user_id: undefined,
+        }));
+        const auditRows = (audit || []).map((event: any) => ({
+          ...event,
+          actor_name: userNames.get(event.actor_user_id) || "Equipe Ordum",
+          actor_user_id: undefined,
+          request_id: undefined,
+        }));
+        res.json({ ...data, memberships, assignment, owner, audit: auditRows });
       } catch (e: any) {
         res.status(500).json({ error: e.message });
       }

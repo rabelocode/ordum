@@ -11,18 +11,15 @@ import {
 import { useAccess } from "../../core/auth/AccessContext";
 import { AssignLeadModal } from "../../components/admin/AssignLeadModal";
 import { DetailSkeleton } from "../../components/ui/LoadingSkeletons";
+import { userFacingApiError, userFacingException } from "../../lib/userFacingError";
 
 const TABS = [
-  { id: "overview", label: "Visão Geral" },
-  { id: "entitlements", label: "Entitlements" },
-  { id: "solutions", label: "Soluções" },
-  { id: "integrity", label: "Integridade" },
-  { id: "owners", label: "Responsáveis" },
-  { id: "domains", label: "Domínios" },
-  { id: "units", label: "Unidades" },
-  { id: "users", label: "Usuários" },
+  { id: "overview", label: "Resumo" },
+  { id: "products", label: "Produtos" },
+  { id: "commercial", label: "Comercial" },
   { id: "financial", label: "Financeiro" },
-  { id: "audit", label: "Auditoria" },
+  { id: "people", label: "Pessoas e acessos" },
+  { id: "history", label: "Histórico" },
 ];
 
 export function CompanyDetailPage({ tenantId }: { tenantId: string }) {
@@ -31,7 +28,6 @@ export function CompanyDetailPage({ tenantId }: { tenantId: string }) {
   const [activeTab, setActiveTab] = useState("overview");
   const [isActioning, setIsActioning] = useState(false);
   const [solutionKeys, setSolutionKeys] = useState<string[]>([]);
-  const [entitlements, setEntitlements] = useState<any>(null);
   const [integritySummary, setIntegritySummary] = useState<any>(null);
   const [isAssignModalOpen, setIsAssignModalOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -59,14 +55,6 @@ export function CompanyDetailPage({ tenantId }: { tenantId: string }) {
               .filter(Boolean),
           );
         }
-        const entitlementResponse = await fetch(
-          `/api/admin/control-plane/tenants/${tenantId}/entitlements`,
-          {
-            headers: { Authorization: `Bearer ${session.access_token}` },
-          },
-        );
-        if (entitlementResponse.ok)
-          setEntitlements(await entitlementResponse.json());
         const integrityResponse = await fetch(
           `/api/admin/clients/${tenantId}/integrity-summary`,
           {
@@ -77,11 +65,11 @@ export function CompanyDetailPage({ tenantId }: { tenantId: string }) {
           setIntegritySummary(await integrityResponse.json());
       } else {
         const errData = await response.json().catch(() => ({}));
-        setError(errData.error || "Falha ao carregar dados do cliente.");
+        setError(userFacingApiError(errData,response.status,"Não foi possível carregar esta empresa. Tente novamente."));
       }
     } catch (e) {
       setError(
-        e instanceof Error ? e.message : "Erro ao carregar informações.",
+        userFacingException(e,"Não foi possível carregar esta empresa. Tente novamente."),
       );
     }
   }
@@ -108,10 +96,10 @@ export function CompanyDetailPage({ tenantId }: { tenantId: string }) {
         await loadTenant();
       } else {
         const errData = await response.json().catch(() => ({}));
-        setError(errData.error || "Erro ao atualizar soluções.");
+        setError(userFacingApiError(errData,response.status,"Não foi possível atualizar os produtos. Revise as escolhas e tente novamente."));
       }
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Erro na requisição.");
+      setError(userFacingException(e,"Não foi possível atualizar os produtos. Tente novamente."));
     } finally {
       setIsActioning(false);
     }
@@ -137,7 +125,7 @@ export function CompanyDetailPage({ tenantId }: { tenantId: string }) {
       );
       const resData = await resp.json().catch(() => ({}));
       if (!resp.ok) {
-        setError(resData.error || "Erro ao processar alteração de status.");
+        setError(userFacingApiError(resData,resp.status,"Não foi possível alterar a situação da empresa. Tente novamente."));
       } else {
         setSuccess(
           `Cliente ${statusModalAction === "suspend" ? "suspenso" : "reativado"} com sucesso!`,
@@ -147,7 +135,7 @@ export function CompanyDetailPage({ tenantId }: { tenantId: string }) {
         await loadTenant();
       }
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Falha na requisição.");
+      setError(userFacingException(e,"Não foi possível alterar a situação da empresa. Tente novamente."));
     } finally {
       setIsActioning(false);
     }
@@ -214,7 +202,7 @@ export function CompanyDetailPage({ tenantId }: { tenantId: string }) {
                 <h1 className="text-2xl font-bold text-[#202322]">
                   {tenant.name}
                 </h1>
-                <p className="text-[#626866] font-mono">{tenant.slug}</p>
+                <div className="mt-2 flex flex-wrap items-center gap-2 text-sm text-[#626866]"><span className={`rounded-full px-2.5 py-1 text-xs font-bold ${tenant.status === "active" ? "bg-emerald-100 text-emerald-800" : tenant.status === "suspended" ? "bg-red-100 text-red-800" : "bg-gray-100"}`}>{clientStatusLabel(tenant.status)}</span><span>{contracts[0]?.billing_plans?.name || integritySummary?.plan?.name || "Plano não definido"}</span><span>·</span><span>{tenant.owner?.name || tenant.owner?.email || "Sem responsável Ordum"}</span></div>
               </div>
             </div>
 
@@ -253,10 +241,10 @@ export function CompanyDetailPage({ tenantId }: { tenantId: string }) {
                 Transferir
               </button>
               <a
-                href={`#/admin/operacoes?tenant=${tenant.id}`}
+                href={`#/admin/onboarding?tenant=${tenant.id}`}
                 className="px-4 py-2 bg-[#B66E45] text-white text-sm font-bold rounded-xl hover:bg-[#A05C38] transition-colors"
               >
-                Abrir Onboarding
+                Implantação
               </a>
             </div>
           </div>
@@ -281,98 +269,31 @@ export function CompanyDetailPage({ tenantId }: { tenantId: string }) {
         <div className="p-8">
           {activeTab === "overview" && (
             <div className="space-y-6">
-              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-4">
-                <div className="p-4 bg-gray-50 rounded-xl border border-[#DDD8CF]/40">
-                  <div className="text-sm text-gray-500">Status</div>
-                  <div className="font-bold text-gray-900 capitalize">
-                    {tenant.status}
-                  </div>
-                </div>
-                <div className="p-4 bg-gray-50 rounded-xl border border-[#DDD8CF]/40">
-                  <div className="text-sm text-gray-500">Lifecycle</div>
-                  <div className="font-bold text-gray-900 capitalize">
-                    {tenant.lifecycle_status?.replaceAll("_", " ") ||
-                      "não definido"}
-                  </div>
-                </div>
-                <div className="p-4 bg-gray-50 rounded-xl border border-[#DDD8CF]/40">
-                  <div className="text-sm text-gray-500">Risco</div>
-                  <div className="font-bold text-gray-900 capitalize">
-                    {tenant.risk_level || "não avaliado"}
-                  </div>
-                </div>
-                <div className="p-4 bg-gray-50 rounded-xl border border-[#DDD8CF]/40">
-                  <div className="text-sm text-gray-500">Criado em</div>
-                  <div className="font-bold text-gray-900">
-                    {new Date(tenant.created_at).toLocaleDateString()}
-                  </div>
-                </div>
+              <div><h2 className="text-xl font-black">Situação do cliente</h2><p className="mt-1 text-sm text-[#626866]">Informações essenciais para acompanhar esta conta.</p></div>
+              <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+                <BusinessMetric label="Situação" value={clientLifecycleLabel(tenant.lifecycle_status || tenant.status)} />
+                <BusinessMetric label="Plano" value={integritySummary?.plan?.name || "Não definido"} />
+                <BusinessMetric label="Data de entrada" value={new Date(tenant.created_at).toLocaleDateString("pt-BR")} />
+                <BusinessMetric label="Responsável Ordum" value={tenant.owner?.name || tenant.owner?.email || "Não atribuído"} />
               </div>
+              <div className="grid gap-4 lg:grid-cols-2"><section className="rounded-2xl bg-[#F6F5F2] p-5"><h3 className="font-black">Implantação</h3><div className="mt-3 flex items-end justify-between"><div><div className="text-3xl font-black">{integritySummary?.onboarding?.progress_percent ?? 0}%</div><p className="text-sm text-[#626866]">{onboardingLabel(integritySummary?.onboarding?.status)}</p></div><a href={`#/admin/onboarding?tenant=${tenant.id}`} className="text-sm font-bold text-[#B66E45]">Acompanhar</a></div><div className="mt-4 h-2 overflow-hidden rounded-full bg-[#DDD8CF]"><div className="h-full rounded-full bg-[#B66E45]" style={{width:`${integritySummary?.onboarding?.progress_percent ?? 0}%`}}/></div></section><section className="rounded-2xl bg-[#202322] p-5 text-white"><h3 className="font-black">Próxima ação recomendada</h3><p className="mt-2 text-sm text-white/70">{!integritySummary?.contracted?"Defina os produtos e o plano contratado.":!integritySummary?.configuration_complete?"Continue a implantação do Ordum Integridade.":integritySummary.channels_active===0?"Revise e publique o canal de denúncias.":"Acompanhe a saúde e o uso dos produtos ativos."}</p><button onClick={()=>setActiveTab(!integritySummary?.contracted?"products":"products")} className="mt-4 text-sm font-bold text-[#D2926D]">Abrir produtos →</button></section></div>
             </div>
           )}
 
-          {activeTab === "entitlements" && (
-            <div className="space-y-4">
-              <div>
-                <h2 className="text-lg font-bold">Entitlement efetivo</h2>
-                <p className="mt-1 text-sm text-gray-500">
-                  Resultado calculado no servidor a partir de contrato, versão
-                  do plano, assinatura, ativações e overrides temporários.
-                </p>
-              </div>
-              {!entitlements ? (
-                <div className="rounded-xl border border-dashed p-8 text-center text-sm text-gray-500">
-                  Nenhum entitlement calculável para este cliente.
-                </div>
-              ) : (
-                <>
-                  <div className="grid gap-3 md:grid-cols-3">
-                    <div className="rounded-xl bg-gray-50 p-4">
-                      <div className="text-xs text-gray-500">Tenant</div>
-                      <strong>{entitlements.tenant_status || "—"}</strong>
-                    </div>
-                    <div className="rounded-xl bg-gray-50 p-4">
-                      <div className="text-xs text-gray-500">Contrato</div>
-                      <strong>
-                        {entitlements.contract?.status || "sem contrato"}
-                      </strong>
-                    </div>
-                    <div className="rounded-xl bg-gray-50 p-4">
-                      <div className="text-xs text-gray-500">Assinatura</div>
-                      <strong>
-                        {entitlements.subscription?.status || "sem assinatura"}
-                      </strong>
-                    </div>
-                  </div>
-                  <div className="space-y-2">
-                    {entitlements.solutions?.length ? (
-                      entitlements.solutions.map((item: any) => (
-                        <div
-                          key={item.id}
-                          className="flex flex-col gap-2 rounded-xl border p-4 md:flex-row md:items-center md:justify-between"
-                        >
-                          <div>
-                            <strong>{item.name}</strong>
-                            <div className="text-xs text-gray-500">
-                              {item.decision_reason}
-                            </div>
-                          </div>
-                          <span
-                            className={`rounded-full px-3 py-1 text-xs font-bold ${item.enabled ? "bg-emerald-100 text-emerald-800" : "bg-gray-100 text-gray-600"}`}
-                          >
-                            {item.enabled ? "Habilitado" : "Bloqueado"}
-                          </span>
-                        </div>
-                      ))
-                    ) : (
-                      <div className="rounded-xl border border-dashed p-8 text-center text-sm text-gray-500">
-                        Nenhuma solução contratada ou ativada.
-                      </div>
-                    )}
-                  </div>
-                </>
-              )}
-            </div>
+          {activeTab === "products" && (
+            <div className="space-y-6"><div><h2 className="text-xl font-black">Produtos contratados</h2><p className="mt-1 text-sm text-[#626866]">Ativação, implantação e saúde de cada solução Ordum.</p></div><div className="grid gap-4 lg:grid-cols-2"><ProductCard name="Ordum Integridade" color="#3457D5" active={Boolean(integritySummary?.contracted)} status={integritySummary?.solution_status} progress={integritySummary?.onboarding?.progress_percent} detail={integritySummary?.channels_active?"Canal publicado":"Canal ainda não publicado"} users={integritySummary?.active_users} onManage={()=>{window.location.hash=`#/admin/onboarding?tenant=${tenant.id}`;}}/>{solutionKeys.includes("people")?<ProductCard name="Ordum Pessoas" color="#16897A" active status="active" detail="Produto ativo"/>:null}{solutionKeys.includes("talent")?<ProductCard name="Ordum Talentos" color="#D98C32" active status="active" detail="Produto ativo"/>:null}</div>{hasPlatformPermission("platform.solutions.manage")?<button onClick={()=>setActiveTab("solutions")} className="text-sm font-bold text-[#B66E45]">Gerenciar plano e produtos</button>:null}</div>
+          )}
+
+          {activeTab === "commercial" && (
+            <div className="space-y-6"><div><h2 className="text-xl font-black">Relacionamento comercial</h2><p className="mt-1 text-sm text-[#626866]">Responsável, propostas e contratos desta empresa.</p></div><section className="rounded-2xl bg-[#F6F5F2] p-5"><div className="text-sm text-[#626866]">Responsável Ordum</div><div className="mt-1 text-lg font-black">{tenant.owner?.name||tenant.owner?.email||"Não atribuído"}</div><div className="text-sm text-[#626866]">{tenant.assignment?.platform_teams?.name||"Sem equipe definida"}</div><button onClick={()=>setIsAssignModalOpen(true)} className="mt-4 text-sm font-bold text-[#B66E45]">Alterar responsável</button></section><div className="space-y-3">{contracts.length?contracts.map((contract:any)=><article key={contract.id} className="flex flex-col justify-between gap-3 rounded-2xl border border-[#DDD8CF] p-5 sm:flex-row sm:items-center"><div><strong>Contrato #{contract.contract_number}</strong><p className="mt-1 text-sm text-[#626866]">{contractStatusLabel(contract.status)} · {formatMoney(contract.amount_cents)}</p></div><a href="#/admin/contratos" className="text-sm font-bold text-[#B66E45]">Abrir contrato</a></article>):<div className="rounded-2xl border border-dashed p-8 text-center text-sm text-[#626866]">Nenhum contrato vinculado a esta empresa.</div>}</div></div>
+          )}
+
+          {activeTab === "people" && (
+            <div className="space-y-7"><div><h2 className="text-xl font-black">Pessoas e acessos</h2><p className="mt-1 text-sm text-[#626866]">Usuários, unidades e domínios vinculados à empresa.</p></div><section><h3 className="font-black">Usuários</h3><div className="mt-3 grid gap-3 md:grid-cols-2">{tenant.memberships?.length?tenant.memberships.map((item:any)=><div key={item.id} className="rounded-xl bg-[#F6F5F2] p-4"><strong>{item.display_name||"Usuário"}</strong><p className="text-sm text-[#626866]">{accessStatusLabel(item.status)}{item.employment_level?` · ${employmentLabel(item.employment_level)}`:""}</p></div>):<p className="text-sm text-[#626866]">Nenhum usuário vinculado.</p>}</div></section><div className="grid gap-6 lg:grid-cols-2"><section><h3 className="font-black">Unidades</h3><div className="mt-3 space-y-2">{tenant.departments?.length?tenant.departments.map((item:any)=><div key={item.id} className="rounded-xl border border-[#DDD8CF] p-4"><strong>{item.name}</strong><p className="text-xs text-[#626866]">{item.active?"Ativa":"Inativa"}</p></div>):<p className="text-sm text-[#626866]">Nenhuma unidade cadastrada.</p>}</div></section><section><h3 className="font-black">Domínios</h3><div className="mt-3 space-y-2">{tenant.tenant_domains?.length?tenant.tenant_domains.map((item:any)=><div key={item.id} className="rounded-xl border border-[#DDD8CF] p-4"><strong>{item.hostname}</strong><p className="text-xs text-[#626866]">{item.is_primary?"Principal":"Alternativo"} · {item.verified_at?"Verificado":"Aguardando verificação"}</p></div>):<p className="text-sm text-[#626866]">Nenhum domínio cadastrado.</p>}</div></section></div></div>
+          )}
+
+          {activeTab === "history" && (
+            <div className="space-y-5"><div><h2 className="text-xl font-black">Histórico da empresa</h2><p className="mt-1 text-sm text-[#626866]">Alterações administrativas relevantes, em linguagem operacional.</p></div>{tenant.audit?.length?tenant.audit.map((item:any)=><article key={item.id} className="border-l-2 border-[#D2926D] py-1 pl-4"><strong>{auditActionLabel(item.action)}</strong><p className="text-sm text-[#626866]">{item.actor_name||"Equipe Ordum"} · {new Date(item.created_at).toLocaleString("pt-BR")}</p></article>):<p className="rounded-xl border border-dashed p-8 text-center text-sm text-[#626866]">Nenhum evento registrado para esta empresa.</p>}</div>
           )}
 
           {activeTab === "solutions" && (
@@ -402,7 +323,6 @@ export function CompanyDetailPage({ tenantId }: { tenantId: string }) {
                       <div className="font-medium text-[#202322]">
                         {sol.name}
                       </div>
-                      <div className="text-xs text-[#626866]">{sol.key}</div>
                     </div>
                   </label>
                 ))}
@@ -643,10 +563,9 @@ export function CompanyDetailPage({ tenantId }: { tenantId: string }) {
               </h2>
               <div className="rounded-xl bg-gray-50 border p-4">
                 <div>
-                  Status de acesso:{" "}
+                  Situação financeira:{" "}
                   <strong>
-                    {tenant.tenant_billing_state?.access_status ||
-                      "sem cobrança"}
+                    {billingAccessLabel(tenant.tenant_billing_state?.access_status)}
                   </strong>
                 </div>
                 <div className="text-sm text-gray-500">
@@ -658,7 +577,7 @@ export function CompanyDetailPage({ tenantId }: { tenantId: string }) {
               {contracts.map((contract: any) => (
                 <div key={contract.id} className="rounded-xl border p-4">
                   <strong>
-                    Contrato #{contract.contract_number} · {contract.status}
+                    Contrato #{contract.contract_number} · {contractStatusLabel(contract.status)}
                   </strong>
                   <div className="text-sm text-gray-500">
                     {Array.isArray(contract.billing_subscriptions)
@@ -778,3 +697,16 @@ export function CompanyDetailPage({ tenantId }: { tenantId: string }) {
     </div>
   );
 }
+
+function BusinessMetric({label,value}:{label:string;value:React.ReactNode}){return <div className="rounded-2xl bg-[#F6F5F2] p-5"><div className="text-xs font-bold uppercase tracking-wide text-[#777D7A]">{label}</div><div className="mt-2 text-lg font-black text-[#202322]">{value||"—"}</div></div>}
+function ProductCard({name,color,active,status,progress,detail,users,onManage}:{name:string;color:string;active:boolean;status?:string;progress?:number;detail:string;users?:number;onManage?:()=>void}){return <article className="rounded-2xl border border-[#DDD8CF] bg-white p-5"><div className="flex items-start justify-between"><div><span className="inline-block h-2.5 w-10 rounded-full" style={{backgroundColor:color}}/><h3 className="mt-3 text-lg font-black">{name}</h3></div><span className={`rounded-full px-2.5 py-1 text-xs font-bold ${active?"bg-emerald-100 text-emerald-800":"bg-gray-100 text-gray-600"}`}>{active?solutionStatusLabel(status):"Não contratado"}</span></div><div className="mt-5 grid grid-cols-2 gap-3 text-sm"><div><span className="text-[#777D7A]">Implantação</span><p className="font-bold">{progress==null?"Não iniciada":`${progress}%`}</p></div><div><span className="text-[#777D7A]">Situação</span><p className="font-bold">{detail}</p></div>{users!=null?<div><span className="text-[#777D7A]">Usuários ativos</span><p className="font-bold">{users}</p></div>:null}</div>{onManage?<button onClick={onManage} className="mt-5 text-sm font-bold" style={{color}}>Gerenciar implantação →</button>:null}</article>}
+function clientStatusLabel(value:string){return ({active:"Ativo",suspended:"Suspenso",cancelled:"Cancelado",trial:"Em teste"} as Record<string,string>)[value]||"Em configuração";}
+function clientLifecycleLabel(value:string){return ({opportunity:"Oportunidade",approved:"Cliente aprovado",awaiting_payment:"Aguardando pagamento",onboarding:"Em implantação",active:"Ativo",at_risk:"Em risco",delinquent:"Pagamento em atraso",suspended:"Suspenso",cancelled:"Cancelado",closed:"Encerrado"} as Record<string,string>)[value]||clientStatusLabel(value);}
+function solutionStatusLabel(value?:string){return ({active:"Ativo",trial:"Em teste",suspended:"Suspenso",cancelled:"Cancelado",not_contracted:"Não contratado"} as Record<string,string>)[value||""]||"Ativo";}
+function onboardingLabel(value?:string){return ({not_started:"Não iniciada",in_progress:"Em andamento",blocked:"Precisa de atenção",completed:"Concluída",cancelled:"Cancelada"} as Record<string,string>)[value||""]||"Não iniciada";}
+function contractStatusLabel(value:string){return ({draft:"Rascunho",pending_approval:"Aguardando aprovação",approved:"Aprovado",pending_payment:"Aguardando pagamento",active:"Ativo",past_due:"Pagamento em atraso",suspended:"Suspenso",cancelled:"Cancelado",expired:"Encerrado"} as Record<string,string>)[value]||"Em andamento";}
+function billingAccessLabel(value?:string){return ({trial:"Período de teste",pending_payment:"Aguardando pagamento",active:"Em dia",grace:"Em período de regularização",suspended:"Suspensa",cancelled:"Encerrada",review:"Em análise"} as Record<string,string>)[value||""]||"Sem cobrança vinculada";}
+function accessStatusLabel(value:string){return ({active:"Acesso ativo",invited:"Convite enviado",suspended:"Acesso suspenso",inactive:"Inativo"} as Record<string,string>)[value]||"Acesso pendente";}
+function employmentLabel(value:string){return ({employee:"Colaborador",manager:"Gestor",director:"Diretoria",contractor:"Prestador"} as Record<string,string>)[value]||"Membro da empresa";}
+function auditActionLabel(value:string){const text=value.replaceAll("."," ").replaceAll("_"," ");return ({"client suspended":"Empresa suspensa","client reactivated":"Empresa reativada","client assigned":"Responsável alterado","tenant solutions updated":"Produtos atualizados"} as Record<string,string>)[text]||"Atualização administrativa";}
+function formatMoney(value:number){return new Intl.NumberFormat("pt-BR",{style:"currency",currency:"BRL"}).format((value||0)/100);}

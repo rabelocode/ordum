@@ -162,30 +162,23 @@ function AdminLayoutInner({ children, currentPath }: { children: React.ReactNode
   }
 
   const allNavItems = [
-    { id: "dashboard", icon: <LayoutDashboard className="w-5 h-5" />, label: "Visão Geral", path: "#/admin", section: "COMERCIAL", show: true },
+    { id: "dashboard", icon: <LayoutDashboard className="w-5 h-5" />, label: "Início", path: "#/admin", section: "INÍCIO", show: true },
     { id: "leads", icon: <Search className="w-5 h-5" />, label: "Leads", path: "#/admin/leads", section: "COMERCIAL", show: platformCan('platform.leads.read') || platformRole?.key === 'sales' },
     { id: "demos", icon: <Activity className="w-5 h-5" />, label: "Demonstrações", path: "#/admin/demos", section: "COMERCIAL", show: platformCan('platform.demos.manage') || platformRole?.key === 'sales' },
-    { id: "clientes", icon: <Building className="w-5 h-5" />, label: "Clientes", path: "#/admin/empresas", section: "COMERCIAL", show: platformCan('platform.clients.read') || platformRole?.key === 'sales' },
     { id: "propostas", icon: <FileText className="w-5 h-5" />, label: "Propostas", path: "#/admin/propostas", section: "COMERCIAL", show: platformCan('platform.commercial.read') },
     { id: "contratos", icon: <FileText className="w-5 h-5" />, label: "Contratos", path: "#/admin/contratos", section: "COMERCIAL", show: platformCan('platform.commercial.read') },
-    { id: "planos", icon: <Layers3 className="w-5 h-5" />, label: "Planos e preços", path: "#/admin/planos", section: "FINANCEIRO", show: platformCan('platform.billing.read') },
-    { id: "financeiro", icon: <WalletCards className="w-5 h-5" />, label: "Cobranças", path: "#/admin/financeiro", section: "FINANCEIRO", show: platformCan('platform.billing.read') },
-    { id: "onboarding", icon: <ClipboardList className="w-5 h-5" />, label: "Onboarding", path: "#/admin/onboarding", section: "CLIENTES", show: platformCan('platform.onboarding.read') },
+    { id: "clientes", icon: <Building className="w-5 h-5" />, label: "Empresas", path: "#/admin/empresas", section: "CLIENTES", show: platformCan('platform.clients.read') || platformRole?.key === 'sales' },
+    { id: "onboarding", icon: <ClipboardList className="w-5 h-5" />, label: "Implantação", path: "#/admin/onboarding", section: "CLIENTES", show: platformCan('platform.onboarding.read') },
     { id: "customer_success", icon: <HeartHandshake className="w-5 h-5" />, label: "Customer Success", path: "#/admin/customer-success", section: "CLIENTES", show: platformCan('platform.success.read') },
-    { id: "suporte", icon: <Headphones className="w-5 h-5" />, label: "Suporte interno", path: "#/admin/suporte", section: "CLIENTES", show: platformCan('platform.support.read') },
-    { id: "equipes", icon: <Users className="w-5 h-5" />, label: "Equipes", path: "#/admin/equipes", section: "EQUIPES", show: platformCan('platform.teams.read') || memberTeams.length > 0 },
-    { id: "desempenho", icon: <Activity className="w-5 h-5" />, label: "Meu Desempenho", path: "#/admin/desempenho", section: "EQUIPES", show: platformCan('platform.performance.own.read') || platformRole?.key === 'sales' },
-    { id: "metas", icon: <Target className="w-5 h-5" />, label: "Metas e comissões", path: "#/admin/metas", section: "EQUIPES", show: platformCan('platform.targets.read') },
-    { id: "acessos", icon: <KeyRound className="w-5 h-5" />, label: "Matriz de acessos", path: "#/admin/acessos", section: "EQUIPES", show: platformCan('platform.access.simulate') },
-    { id: "solucoes", icon: <Box className="w-5 h-5" />, label: "Soluções", path: "#/admin/solucoes", section: "PLATAFORMA", show: platformCan('platform.solutions.read') },
-    { id: "equipe_ordum", icon: <Users className="w-5 h-5" />, label: "Equipe Ordum", path: "#/admin/consultores", section: "OPERAÇÃO", show: platformCan('platform.staff.read') || platformRole?.key === 'admin' },
+    { id: "financeiro", icon: <WalletCards className="w-5 h-5" />, label: "Assinaturas e cobranças", path: "#/admin/financeiro", section: "FINANCEIRO", show: platformCan('platform.billing.read') },
+    { id: "planos", icon: <Layers3 className="w-5 h-5" />, label: "Planos", path: "#/admin/planos", section: "FINANCEIRO", show: platformCan('platform.billing.read') },
+    { id: "suporte", icon: <Headphones className="w-5 h-5" />, label: "Suporte", path: "#/admin/suporte", section: "OPERAÇÃO", show: platformCan('platform.support.read') },
+    { id: "sistema", icon: <Server className="w-5 h-5" />, label: "Saúde do sistema", path: "#/admin/sistema", section: "OPERAÇÃO", show: platformCan('platform.system.read') },
     { id: "auditoria", icon: <FileText className="w-5 h-5" />, label: "Auditoria", path: "#/admin/auditoria", section: "OPERAÇÃO", show: platformCan('platform.audit.read') || platformCan('platform.audit.team.read') },
-    { id: "operacoes", icon: <Waypoints className="w-5 h-5" />, label: "Operações", path: "#/admin/operacoes", section: "OPERAÇÃO", show: platformCan('platform.operations.read') },
-    { id: "privacidade", icon: <Scale className="w-5 h-5" />, label: "Privacidade", path: "#/admin/privacidade", section: "OPERAÇÃO", show: platformCan('platform.privacy.read') },
-    { id: "sistema", icon: <Server className="w-5 h-5" />, label: "Saúde do Sistema", path: "#/admin/sistema", section: "SISTEMA", show: platformCan('platform.system.read') },
-    { id: "deployments", icon: <GitMerge className="w-5 h-5" />, label: "Deployments", path: "#/admin/deployments", section: "SISTEMA", show: platformCan('platform.deploy.read') },
-    { id: "configuracoes", icon: <Settings className="w-5 h-5" />, label: "Configurações", path: "#/admin/configuracoes", section: "SISTEMA", show: platformCan('platform.settings.read') },
-    { id: "engenharia", icon: <Settings className="w-5 h-5" />, label: "Engenharia", path: "#/admin/engenharia", section: "ENGENHARIA", show: platformCan('platform.code.read') },
+    { id: "equipe_ordum", icon: <Users className="w-5 h-5" />, label: "Equipe Ordum", path: "#/admin/consultores", section: "ADMINISTRAÇÃO", show: platformCan('platform.staff.read') || platformRole?.key === 'admin' },
+    { id: "equipes", icon: <Users className="w-5 h-5" />, label: "Equipes comerciais", path: "#/admin/equipes", section: "ADMINISTRAÇÃO", show: platformCan('platform.teams.read') || memberTeams.length > 0 },
+    { id: "acessos", icon: <KeyRound className="w-5 h-5" />, label: "Acessos", path: "#/admin/acessos", section: "ADMINISTRAÇÃO", show: platformCan('platform.access.simulate') },
+    { id: "configuracoes", icon: <Settings className="w-5 h-5" />, label: "Configurações", path: "#/admin/configuracoes", section: "ADMINISTRAÇÃO", show: platformCan('platform.settings.read') },
   ];
 
   const visibleNavItems = allNavItems.filter(item => item.show);
@@ -236,7 +229,7 @@ function AdminLayoutInner({ children, currentPath }: { children: React.ReactNode
           </div>
           <div className="flex-1 min-w-0">
             <div className="text-sm font-bold text-white truncate">{platformRole?.name || "Admin"}</div>
-            <div className="text-[10px] text-gray-400 truncate uppercase">{platformMember?.relationship_type}</div>
+            <div className="text-[10px] text-gray-400 truncate">Ambiente administrativo Ordum</div>
           </div>
         </div>
         <button
@@ -295,7 +288,7 @@ function AdminLayoutInner({ children, currentPath }: { children: React.ReactNode
               {searchResults.map((item) => <a key={`${item.type}-${item.id}`} href={item.href} onClick={() => { setGlobalSearch(''); setSearchResults([]); }} className="block border-b border-[#EEEAE3] px-4 py-3 last:border-0 hover:bg-[#F6F5F2]"><div className="text-sm font-bold text-[#202322]">{item.title}</div><div className="text-xs text-[#626866]">{item.subtitle || item.type}</div></a>)}
             </div>}
           </div>
-          <div className="hidden text-xs text-[#777D7A] lg:block">{currentPath.replace('#/admin', 'Admin / ').replaceAll('/', ' / ')}</div>
+          <div className="hidden text-xs text-[#777D7A] lg:block">{breadcrumbLabel(currentPath)}</div>
         </header>
 
         <div className="flex-1 overflow-y-auto overflow-x-hidden p-4 md:p-8">
@@ -305,6 +298,8 @@ function AdminLayoutInner({ children, currentPath }: { children: React.ReactNode
     </div>
   );
 }
+
+function breadcrumbLabel(path:string){const labels:Record<string,string>={"#/admin":"Início","#/admin/leads":"Comercial / Leads","#/admin/demos":"Comercial / Demonstrações","#/admin/propostas":"Comercial / Propostas","#/admin/contratos":"Comercial / Contratos","#/admin/empresas":"Clientes / Empresas","#/admin/onboarding":"Clientes / Implantação","#/admin/customer-success":"Clientes / Customer Success","#/admin/financeiro":"Financeiro / Assinaturas e cobranças","#/admin/planos":"Financeiro / Planos","#/admin/suporte":"Operação / Suporte","#/admin/sistema":"Operação / Saúde do sistema","#/admin/auditoria":"Operação / Auditoria","#/admin/consultores":"Administração / Equipe Ordum","#/admin/equipes":"Administração / Equipes comerciais","#/admin/acessos":"Administração / Acessos","#/admin/configuracoes":"Administração / Configurações"};const exact=labels[path];if(exact)return exact;if(path.startsWith("#/admin/empresas/"))return "Clientes / Empresa";return "Administração";}
 
 export function OrdumAdminLayout(props: { children: React.ReactNode, currentPath: string }) {
   return <AdminLayoutInner {...props} />;

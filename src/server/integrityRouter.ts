@@ -28,6 +28,7 @@ const listSchema = z.object({
   from: z.string().datetime().optional(),
   to: z.string().datetime().optional(),
   sla: z.enum(["due_soon", "overdue"]).optional(),
+  view: z.enum(["all", "unassigned", "mine", "awaiting_reply", "closed"]).default("all"),
   page: z.coerce.number().int().min(1).default(1),
   limit: z.coerce.number().int().min(1).max(100).default(25),
   order: z
@@ -522,11 +523,31 @@ export function createIntegrityRouter(
       let query = db
         .from("integrity_cases")
         .select(
-          "id,protocol,status,severity,priority,sla_due_at,first_response_due_at,treatment_due_at,first_action_at,created_at,updated_at,owner_membership_id,committee_id,department_id,lock_version,integrity_categories(name),integrity_units(name),integrity_departments(name),integrity_committees(name),integrity_reports!inner(subject)",
+          "id,report_id,protocol,status,severity,priority,sla_due_at,first_response_due_at,treatment_due_at,first_action_at,created_at,updated_at,owner_membership_id,committee_id,department_id,lock_version,integrity_categories(name),integrity_units(name),integrity_departments(name),integrity_committees(name),integrity_reports!inner(subject)",
           { count: "exact" },
         )
         .eq("tenant_id", tenantId(req));
       query = (await scopeCaseQuery(query, db, req)).query;
+      if (q.view === "unassigned") query = query.is("owner_membership_id", null).is("committee_id", null).not("status", "in", "(closed,archived)");
+      if (q.view === "mine") query = query.eq("owner_membership_id", membershipId(req)).not("status", "in", "(closed,archived)");
+      if (q.view === "closed") query = query.in("status", ["closed", "archived"]);
+      if (q.view === "awaiting_reply") {
+        const tenantReports = await db.from("integrity_reports").select("id").eq("tenant_id", tenantId(req)).limit(5000);
+        if (tenantReports.error) return res.status(500).json({ error: "Não foi possível carregar as conversas pendentes." });
+        const reportIds = (tenantReports.data || []).map((item: any) => item.id);
+        const communication = reportIds.length
+          ? await db.from("integrity_report_messages").select("report_id,author_type,created_at").in("report_id", reportIds).order("created_at", { ascending: false }).limit(10000)
+          : { data: [], error: null };
+        if (communication.error) return res.status(500).json({ error: "Não foi possível carregar as conversas pendentes." });
+        const seen = new Set<string>();
+        const waiting = (communication.data || []).filter((message: any) => {
+          if (seen.has(message.report_id)) return false;
+          seen.add(message.report_id);
+          return message.author_type === "reporter";
+        }).map((message: any) => message.report_id);
+        if (!waiting.length) return res.json({ cases: [], page: q.page, limit: q.limit, total: 0, total_pages: 0 });
+        query = query.in("report_id", waiting).not("status", "in", "(closed,archived)");
+      }
       if (q.search) {
         const text = q.search.replace(/[%_,]/g, "");
         const reportIds = await matchingReportIds(db, tenantId(req), q.search);
@@ -576,10 +597,19 @@ export function createIntegrityRouter(
       if (profiles.error) return res.status(500).json({ error: "Não foi possível carregar os responsáveis." });
       const profileNames = new Map((profiles.data || []).map((profile: any) => [profile.id, profile.full_name]));
       const ownerNames = new Map((owners.data || []).map((owner: any) => [owner.id, profileNames.get(owner.user_id) || "Membro do tenant"]));
+      const pageReportIds = (result.data || []).map((item: any) => item.report_id);
+      const messages = pageReportIds.length
+        ? await db.from("integrity_report_messages").select("report_id,author_type,created_at").in("report_id", pageReportIds).order("created_at", { ascending: false })
+        : { data: [], error: null };
+      if (messages.error) return res.status(500).json({ error: "Não foi possível carregar a última atividade." });
+      const latestByReport = new Map<string, any>();
+      for (const message of messages.data || []) if (!latestByReport.has(message.report_id)) latestByReport.set(message.report_id, message);
       return res.json({
         cases: (result.data || []).map((item: any) => ({
           ...item,
           owner_name: item.owner_membership_id ? ownerNames.get(item.owner_membership_id) || "Membro indisponível" : null,
+          last_activity_at: latestByReport.get(item.report_id)?.created_at || item.updated_at,
+          has_unanswered_message: latestByReport.get(item.report_id)?.author_type === "reporter",
         })),
         page: q.page,
         limit: q.limit,

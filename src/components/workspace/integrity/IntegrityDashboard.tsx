@@ -1,79 +1,29 @@
-import { useCallback, useEffect, useState } from "react";
-import { AlertTriangle, CheckCircle2, Clock, RefreshCw } from "lucide-react";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { AlertTriangle, ArrowRight, Clock3, MessageCircle, UserRoundX } from "lucide-react";
 import { Button } from "../../ui/Button";
 import { Skeleton } from "../../ui/Skeleton";
-import { integrityApi, integrityDownload } from "../integrityApi";
+import { integrityApi } from "../integrityApi";
+import { ErrorState, Panel, statusLabel } from "./IntegrityUi";
 
-type Option = { id: string; name: string };
-type Filters = { period: string; status: string; severity: string; category_id: string; unit_id: string; department_id:string; committee_id: string; owner_id: string };
-const initialFilters: Filters = { period: "30", status: "", severity: "", category_id: "", unit_id: "", department_id:"", committee_id: "", owner_id: "" };
-
-export function IntegrityDashboard({ tenantId, onOpenCases }: { tenantId: string; onOpenCases: () => void }) {
-  const [filters, setFilters] = useState(initialFilters);
-  const [options, setOptions] = useState<Record<string, Option[]>>({ categories: [], units: [], committees: [], owners: [] });
-  const [state, setState] = useState<{ data: any; loading: boolean; error: string }>({ data: null, loading: true, error: "" });
-  const load = useCallback(async () => {
-    setState((value) => ({ ...value, loading: true, error: "" }));
-    try {
-      const query = new URLSearchParams(Object.fromEntries(Object.entries(filters).filter(([key, value]) => key !== "period" && value)));
-      if (filters.period) query.set("from", new Date(Date.now() - Number(filters.period) * 864e5).toISOString());
-      const data = await integrityApi<any>(tenantId, `/dashboard?${query}`);
-      setState({ data, loading: false, error: "" });
-    } catch (error) {
-      setState({ data: null, loading: false, error: error instanceof Error ? error.message : "Falha ao carregar indicadores." });
-    }
-  }, [filters, tenantId]);
-  useEffect(() => { integrityApi<any>(tenantId, "/filters").then(setOptions).catch(() => undefined); }, [tenantId]);
-  useEffect(() => { void load(); }, [load]);
-
-  if (state.loading && !state.data) return <DashboardSkeleton />;
-  if (state.error && !state.data) return <Panel><ErrorNotice message={state.error} retry={load} /></Panel>;
-  const data = state.data;
-  const metrics = [
-    ["Casos novos", data.received], ["Aguardando triagem", data.triage], ["Em investigação", data.investigation],
-    ["SLA vencido", (data.first_response_overdue || 0) + (data.treatment_overdue || 0)], ["Próximos do SLA", data.sla_due_soon],
-    ["Sem responsável", data.unassigned], ["Conflitos pendentes", data.conflicts_pending], ["Tarefas vencidas", data.tasks_overdue],
-  ];
+export function IntegrityDashboard({tenantId,userName,onOpenCases,onOpenCase}:{tenantId:string;userName:string;onOpenCases:(view?:string)=>void;onOpenCase:(id:string)=>void}){
+  const[state,setState]=useState<{data:any;loading:boolean;error:string}>({data:null,loading:true,error:""});
+  const load=useCallback(async()=>{setState((current)=>({...current,loading:true,error:""}));try{const from=new Date(Date.now()-30*864e5).toISOString();const[dashboard,pending,mine]=await Promise.all([integrityApi<any>(tenantId,`/dashboard?from=${encodeURIComponent(from)}`),integrityApi<any>(tenantId,"/pending"),integrityApi<any>(tenantId,"/cases?view=mine&limit=5&order=updated_at&direction=desc")]);setState({data:{dashboard,pending,mine},loading:false,error:""});}catch(error){setState({data:null,loading:false,error:error instanceof Error?error.message:"Não foi possível carregar sua visão geral."});}},[tenantId]);
+  useEffect(()=>{void load();},[load]);
+  const greeting=useMemo(()=>{const hour=new Date().getHours();return hour<12?"Bom dia":hour<18?"Boa tarde":"Boa noite";},[]);
+  if(state.loading)return <Panel><Skeleton className="h-40 rounded-3xl"/><div className="mt-5 grid gap-3 md:grid-cols-3">{Array.from({length:3}).map((_,index)=><Skeleton key={index} className="h-32 rounded-2xl"/>)}</div><Skeleton className="mt-6 h-72 rounded-2xl"/></Panel>;
+  if(state.error)return <Panel><ErrorState message={state.error}/></Panel>;
+  const{dashboard,pending,mine}=state.data;const attentionCount=pending.items?.length||0;
+  const attention=[
+    {key:"new",label:"Novos relatos",value:dashboard.received||0,description:"Aguardando a primeira análise",icon:AlertTriangle,view:"all"},
+    {key:"sla",label:"Prazos próximos ou vencidos",value:(dashboard.sla_due_soon||0)+(dashboard.first_response_overdue||0)+(dashboard.treatment_overdue||0),description:"Priorize os casos com menor prazo",icon:Clock3,view:"all"},
+    {key:"message",label:"Mensagens sem resposta",value:pending.counts?.external_message||0,description:"O denunciante aguarda retorno",icon:MessageCircle,view:"awaiting_reply"},
+    {key:"owner",label:"Casos sem responsável",value:dashboard.unassigned||0,description:"Defina quem fará o tratamento",icon:UserRoundX,view:"unassigned"},
+  ].filter((item)=>item.value>0).slice(0,3);
+  const program=[{label:"Casos abertos",value:dashboard.open},{label:"Em investigação",value:dashboard.investigation},{label:"Encerrados no período",value:dashboard.closed},{label:"Tempo até primeira ação",value:dashboard.average_first_action_hours==null?"—":`${dashboard.average_first_action_hours}h`},{label:"Tempo até conclusão",value:dashboard.average_resolution_hours==null?"—":`${dashboard.average_resolution_hours}h`},{label:"Taxa de reabertura",value:dashboard.reopen_rate==null?"—":`${dashboard.reopen_rate}%`}];
   return <Panel>
-    <div className="mb-5 flex flex-wrap items-end justify-between gap-3">
-      <div><h2 className="text-2xl font-bold">Cockpit operacional</h2><p className="mt-1 text-sm text-[#626866]">Indicadores reais, agregados e sem exposição de identidade.</p></div>
-      <div className="flex flex-wrap gap-2"><Button variant="outline" disabled={state.loading} onClick={load}><RefreshCw className={`mr-2 h-4 w-4 ${state.loading ? "animate-spin" : ""}`} />Atualizar</Button><Button variant="outline" onClick={()=>{const query=new URLSearchParams(Object.fromEntries(Object.entries(filters).filter(([key,value])=>key!=="period"&&value)));if(filters.period)query.set("from",new Date(Date.now()-Number(filters.period)*864e5).toISOString());void integrityDownload(tenantId,`/reports/executive.pdf?${query}`,"integridade-executivo.pdf");}}>PDF executivo</Button><Button variant="outline" onClick={()=>{const query=new URLSearchParams(Object.fromEntries(Object.entries(filters).filter(([key,value])=>key!=="period"&&value)));if(filters.period)query.set("from",new Date(Date.now()-Number(filters.period)*864e5).toISOString());void integrityDownload(tenantId,`/reports/executive.csv?${query}`,"integridade-executivo.csv");}}>CSV executivo</Button><Button onClick={onOpenCases}>Abrir casos</Button></div>
-    </div>
-    <div className="mb-5 grid gap-2 rounded-2xl border border-[#DDD8CF] bg-white p-4 sm:grid-cols-2 xl:grid-cols-4">
-      <Select label="Período" value={filters.period} onChange={(period) => setFilters({ ...filters, period })} options={[["7", "7 dias"], ["30", "30 dias"], ["90", "90 dias"], ["365", "12 meses"]]} empty={false} />
-      <Select label="Status" value={filters.status} onChange={(status) => setFilters({ ...filters, status })} options={[["received", "Novo"], ["triage", "Triagem"], ["investigation", "Investigação"], ["closed", "Encerrado"]]} />
-      <Select label="Severidade" value={filters.severity} onChange={(severity) => setFilters({ ...filters, severity })} options={[["low", "Baixa"], ["medium", "Média"], ["high", "Alta"], ["critical", "Crítica"]]} />
-      <OptionsSelect label="Categoria" value={filters.category_id} items={options.categories} onChange={(category_id) => setFilters({ ...filters, category_id })} />
-      <OptionsSelect label="Unidade/setor" value={filters.unit_id} items={options.units} onChange={(unit_id) => setFilters({ ...filters, unit_id })} />
-      <OptionsSelect label="Departamento" value={filters.department_id} items={options.departments || []} onChange={(department_id) => setFilters({ ...filters, department_id })} />
-      <OptionsSelect label="Comitê" value={filters.committee_id} items={options.committees} onChange={(committee_id) => setFilters({ ...filters, committee_id })} />
-      <OptionsSelect label="Responsável" value={filters.owner_id} items={options.owners} onChange={(owner_id) => setFilters({ ...filters, owner_id })} />
-      <Button variant="outline" onClick={() => setFilters(initialFilters)}>Limpar filtros</Button>
-    </div>
-    <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">{metrics.map(([label, value]) => <Metric key={String(label)} label={String(label)} value={value as number | null} />)}</div>
-    <div className="mt-4 grid gap-3 md:grid-cols-4">
-      <Summary icon={<Clock />} label="Primeira ação média" value={data.average_first_action_hours == null ? "—" : `${data.average_first_action_hours}h`} />
-      <Summary icon={<CheckCircle2 />} label="Conclusão média" value={data.average_resolution_hours == null ? "—" : `${data.average_resolution_hours}h`} />
-      <Summary icon={<AlertTriangle />} label="Taxa de reabertura" value={data.reopen_rate == null ? "—" : `${data.reopen_rate}%`} />
-      <Summary icon={<CheckCircle2 />} label="Encerrados" value={data.closed ?? "—"} />
-    </div>
-    <div className="mt-5 grid gap-4 lg:grid-cols-3">
-      <Distribution title="Por categoria" rows={data.by_category} />
-      <Distribution title="Por unidade/setor" rows={data.by_unit} />
-      <Distribution title="Por severidade" rows={data.by_severity} />
-      <Distribution title="Por departamento" rows={data.by_department} />
-      <Distribution title="Anônimo × identificado" rows={data.by_reporter_mode} />
-    </div>
-    <div className="mt-5 rounded-2xl border border-[#DDD8CF] bg-white p-5"><h3 className="font-bold">Evolução temporal</h3><div className="mt-4 flex h-36 items-end gap-1 overflow-x-auto" aria-label="Volume diário de casos">{(data.evolution || []).length ? data.evolution.map((row: any) => <div key={row.date} className="group flex min-w-5 flex-1 flex-col items-center justify-end"><span className="sr-only">{row.date}: {row.count}</span><div title={`${row.date}: ${row.count}`} className="w-full min-w-3 rounded-t bg-[#3457D5]" style={{ height: `${Math.max(6, row.count * 14)}px` }} /></div>) : <p className="self-center text-sm text-[#626866]">Ainda não há dados no período.</p>}</div></div>
-    <p className="mt-4 text-right text-xs text-[#626866]">Atualizado em {new Date(data.updated_at).toLocaleString("pt-BR")}</p>
+    <section className="rounded-3xl bg-[#202322] px-5 py-7 text-white sm:px-8 sm:py-9"><p className="text-sm text-white/65">{greeting}, {userName.split(" ")[0]}.</p><h2 className="mt-1 text-2xl font-black tracking-tight sm:text-3xl">{attentionCount?`Há ${attentionCount} ${attentionCount===1?"item":"itens"} que precisam da sua atenção.`:"Sua operação está em dia."}</h2><p className="mt-2 max-w-2xl text-sm text-white/65">Comece pelo que tem prazo, mensagem pendente ou ainda não possui responsável.</p></section>
+    <section className="mt-7"><div className="mb-3 flex items-end justify-between"><div><h3 className="text-lg font-black">Precisa da sua atenção</h3><p className="text-sm text-[#626866]">Atalhos para resolver, não apenas acompanhar.</p></div>{attention.length?<button onClick={()=>onOpenCases()} className="text-sm font-bold text-[#3457D5]">Ver todos</button>:null}</div>{attention.length?<div className="grid gap-3 md:grid-cols-3">{attention.map((item)=>{const Icon=item.icon;return <button key={item.key} onClick={()=>onOpenCases(item.view)} className="group rounded-2xl bg-white p-5 text-left shadow-[0_1px_0_rgba(32,35,34,.08),0_8px_24px_rgba(32,35,34,.05)] ring-1 ring-[#DDD8CF]/70 transition hover:-translate-y-0.5 hover:ring-[#3457D5]/40"><div className="flex items-start justify-between"><span className="flex h-10 w-10 items-center justify-center rounded-xl bg-[#3457D5]/10 text-[#3457D5]"><Icon className="h-5 w-5"/></span><strong className="text-3xl font-black">{item.value}</strong></div><h4 className="mt-5 font-bold">{item.label}</h4><p className="mt-1 text-sm text-[#626866]">{item.description}</p><span className="mt-4 inline-flex items-center gap-1 text-xs font-bold text-[#3457D5]">Resolver agora <ArrowRight className="h-3.5 w-3.5 transition group-hover:translate-x-1"/></span></button>})}</div>:<div className="rounded-2xl border border-emerald-200 bg-emerald-50 p-5 text-sm text-emerald-800">Nenhuma pendência urgente encontrada. Você pode revisar seus casos em andamento.</div>}</section>
+    <section className="mt-8 grid gap-6 lg:grid-cols-[1.5fr_1fr]"><div><div className="mb-3 flex items-center justify-between"><div><h3 className="text-lg font-black">Seus casos</h3><p className="text-sm text-[#626866]">Últimos casos sob sua responsabilidade.</p></div><button onClick={()=>onOpenCases("mine")} className="text-sm font-bold text-[#3457D5]">Abrir meus casos</button></div><div className="overflow-hidden rounded-2xl bg-white ring-1 ring-[#DDD8CF]/70">{mine.cases?.length?mine.cases.map((item:any)=><button key={item.id} onClick={()=>onOpenCase(item.id)} className="flex w-full items-center justify-between gap-4 border-b border-[#EEEAE3] px-4 py-4 text-left last:border-0 hover:bg-[#F8FAFF]"><div className="min-w-0"><div className="text-xs font-bold text-[#3457D5]">{item.protocol}</div><div className="truncate font-semibold">{item.integrity_reports?.subject||"Sem assunto"}</div><div className="mt-1 text-xs text-[#626866]">{statusLabel(item.status)} · {item.integrity_categories?.name||"Sem categoria"}</div></div><ArrowRight className="h-4 w-4 shrink-0 text-[#A8AEAB]"/></button>):<div className="p-8 text-center text-sm text-[#626866]">Você não possui casos atribuídos neste momento.</div>}</div></div><div><h3 className="text-lg font-black">Visão do programa</h3><p className="mb-3 text-sm text-[#626866]">Últimos 30 dias.</p><div className="grid grid-cols-2 gap-2">{program.map((item)=><div key={item.label} className="rounded-2xl bg-white p-4 ring-1 ring-[#DDD8CF]/70"><div className="text-2xl font-black">{item.value??"—"}</div><div className="mt-1 text-xs text-[#626866]">{item.label}</div></div>)}</div></div></section>
+    <p className="mt-5 text-right text-xs text-[#777D7A]">Atualizado em {new Date(dashboard.updated_at).toLocaleString("pt-BR")}</p>
   </Panel>;
 }
-
-function Panel({ children }: { children: React.ReactNode }) { return <main className="mx-auto max-w-[1500px] p-4 sm:p-6">{children}</main>; }
-function DashboardSkeleton() { return <Panel><Skeleton className="mb-5 h-28 rounded-2xl" /><div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">{Array.from({ length: 8 }).map((_, i) => <Skeleton key={i} className="h-28 rounded-2xl" />)}</div><Skeleton className="mt-5 h-52 rounded-2xl" /></Panel>; }
-function ErrorNotice({ message, retry }: { message: string; retry: () => void }) { return <div role="alert" className="rounded-2xl border border-red-200 bg-red-50 p-5 text-red-800"><p>{message}</p><Button className="mt-3" variant="outline" onClick={retry}>Tentar novamente</Button></div>; }
-function Metric({ label, value }: { label: string; value: number | null }) { return <div className="rounded-2xl border border-[#DDD8CF] bg-white p-5"><div className="text-xs font-bold uppercase tracking-wider text-[#626866]">{label}</div><div className="mt-3 text-3xl font-bold">{value ?? "—"}</div></div>; }
-function Summary({ icon, label, value }: { icon: React.ReactNode; label: string; value: React.ReactNode }) { return <div className="rounded-2xl border border-[#DDD8CF] bg-white p-4"><div className="flex items-center gap-2 text-[#3457D5]">{icon}<span className="text-sm font-medium text-[#626866]">{label}</span></div><div className="mt-2 text-2xl font-bold">{value}</div></div>; }
-function Distribution({ title, rows = [] }: { title: string; rows?: Array<{ label: string; count: number }> }) { const max = Math.max(1, ...rows.map((row) => row.count)); return <div className="rounded-2xl border border-[#DDD8CF] bg-white p-5"><h3 className="font-bold">{title}</h3><div className="mt-4 space-y-3">{rows.length ? rows.slice(0, 8).map((row) => <div key={row.label}><div className="mb-1 flex justify-between text-sm"><span>{row.label}</span><strong>{row.count}</strong></div><div className="h-2 rounded bg-[#EEEAE3]"><div className="h-2 rounded bg-[#3457D5]" style={{ width: `${Math.max(4, row.count / max * 100)}%` }} /></div></div>) : <p className="text-sm text-[#626866]">Sem dados suficientes.</p>}</div></div>; }
-function OptionsSelect({ label, value, items, onChange }: { label: string; value: string; items: Option[]; onChange: (value: string) => void }) { return <Select label={label} value={value} onChange={onChange} options={items.map((item) => [item.id, item.name])} />; }
-function Select({ label, value, onChange, options, empty = true }: { label: string; value: string; onChange: (value: string) => void; options: string[][]; empty?: boolean }) { return <select aria-label={label} value={value} onChange={(event) => onChange(event.target.value)} className="min-h-10 rounded-xl border border-[#DDD8CF] bg-white px-3 text-sm">{empty ? <option value="">{label}: todos</option> : null}{options.map(([key, text]) => <option key={key} value={key}>{text}</option>)}</select>; }

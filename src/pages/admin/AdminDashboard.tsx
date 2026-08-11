@@ -1,142 +1,40 @@
-import React, { useEffect, useMemo, useState } from 'react';
-import { AlertTriangle, ArrowDownRight, ArrowUpRight, Download, RefreshCw } from 'lucide-react';
-import { useAccess } from '../../core/auth/AccessContext';
+import { useEffect, useMemo, useState } from "react";
+import { AlertTriangle, ArrowRight, Building2, ChevronDown, Download, RefreshCw, TrendingUp, WalletCards } from "lucide-react";
+import { useAccess } from "../../core/auth/AccessContext";
+import { userFacingApiError } from "../../lib/userFacingError";
 
-type Metrics = Record<string, number | string | boolean | null>;
+type Metrics=Record<string,number|string|boolean|null>;
+const money=(value:unknown)=>typeof value==="number"?new Intl.NumberFormat("pt-BR",{style:"currency",currency:"BRL",maximumFractionDigits:0}).format(value/100):"—";
+const number=(value:unknown)=>typeof value==="number"?new Intl.NumberFormat("pt-BR").format(value):"—";
 
-const formatMoney = (value: number) => new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL', maximumFractionDigits: 0 }).format(value / 100);
-const formatNumber = (value: number) => new Intl.NumberFormat('pt-BR').format(value);
-
-const GROUPS = [
-  { title: 'Funil comercial', source: 'commercial', items: [
-    ['Leads recebidos', 'leads_received', 'count', '#/admin/leads'], ['Leads qualificados', 'leads_qualified', 'count', '#/admin/leads'],
-    ['Demonstrações', 'demos', 'count', '#/admin/demos'], ['Propostas', 'proposals', 'count', '#/admin/propostas'],
-    ['Contratos', 'contracts', 'count', '#/admin/contratos'], ['Conversão lead → contrato', 'lead_to_contract_percent', 'percent', '#/admin/contratos'],
-    ['Tempo médio no funil', 'average_funnel_hours', 'hours', '#/admin/leads'],
-  ]},
-  { title: 'Clientes e retenção', source: 'tenant', items: [
-    ['Em onboarding', 'onboarding_clients', 'count', '#/admin/onboarding'], ['Tenants ativos', 'active_tenants', 'count', '#/admin/empresas'],
-    ['Suspensos', 'suspended_tenants', 'count', '#/admin/empresas'], ['Cancelados', 'cancelled_tenants', 'count', '#/admin/empresas'],
-    ['Trials ativos', 'active_trials', 'count', '#/admin/empresas'], ['Trials próximos do vencimento', 'trials_expiring', 'count', '#/admin/empresas'],
-    ['Churn da base observada', 'churn_percent', 'percent', '#/admin/customer-success'], ['Renovações próximas', 'renewals_due', 'count', '#/admin/customer-success'],
-    ['Clientes em risco', 'at_risk_clients', 'count', '#/admin/customer-success'], ['Expansão', 'expansion_cents', 'money', '#/admin/customer-success'],
-  ]},
-  { title: 'Financeiro', source: 'financial', items: [
-    ['MRR', 'mrr_cents', 'money', '#/admin/financeiro'], ['ARR', 'arr_cents', 'money', '#/admin/financeiro'],
-    ['Receita recebida', 'received_cents', 'money', '#/admin/financeiro'], ['Receita pendente', 'pending_cents', 'money', '#/admin/financeiro'],
-    ['Receita vencida', 'overdue_cents', 'money', '#/admin/financeiro'], ['Tenants inadimplentes', 'delinquent_tenants', 'count', '#/admin/financeiro'],
-    ['Reembolsos', 'refund_count', 'count', '#/admin/financeiro'], ['Chargebacks', 'chargeback_count', 'count', '#/admin/financeiro'],
-  ]},
-  { title: 'Operação', source: 'operations', items: [
-    ['Webhooks com falha', 'webhook_failures', 'count', '#/admin/operacoes'], ['Conciliações divergentes', 'reconciliation_divergences', 'count', '#/admin/operacoes'],
-    ['Eventos operacionais falhos', 'operational_failures', 'count', '#/admin/operacoes'], ['Tarefas e SLAs vencidos', 'overdue_tasks', 'count', '#/admin/suporte'],
-  ]},
-] as const;
-
-function metricValue(value: unknown, kind: string) {
-  if (typeof value !== 'number') return '—';
-  if (kind === 'money') return formatMoney(value);
-  if (kind === 'percent') return `${new Intl.NumberFormat('pt-BR', { maximumFractionDigits: 1 }).format(value)}%`;
-  if (kind === 'hours') return `${new Intl.NumberFormat('pt-BR', { maximumFractionDigits: 1 }).format(value)} h`;
-  return formatNumber(value);
-}
-
-function Comparison({ current, previous }: { current: unknown; previous: unknown }) {
-  if (typeof current !== 'number' || typeof previous !== 'number' || previous === 0) return <span className="text-[11px] text-[#777D7A]">Sem base anterior comparável</span>;
-  const delta = ((current - previous) / Math.abs(previous)) * 100;
-  const Icon = delta >= 0 ? ArrowUpRight : ArrowDownRight;
-  return <span className={`inline-flex items-center gap-1 text-[11px] font-semibold ${delta >= 0 ? 'text-emerald-700' : 'text-rose-700'}`}><Icon className="h-3 w-3" />{Math.abs(delta).toLocaleString('pt-BR', { maximumFractionDigits: 1 })}% vs. período anterior</span>;
-}
-
-export function AdminDashboard() {
-  const { session, platformRole, hasPlatformPermission: platformCan } = useAccess();
-  const [payload, setPayload] = useState<{ current: Metrics | null; previous: Metrics | null; emptyReason?: string | null } | null>(null);
-  const [filters, setFilters] = useState<any>({ teams: [], people: [], plans: [], solutions: [] });
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState('');
-  const [period, setPeriod] = useState('30');
-  const [team, setTeam] = useState('');
-  const [owner, setOwner] = useState('');
-  const [plan, setPlan] = useState('');
-
-  const range = useMemo(() => {
-    const to = new Date();
-    const from = new Date(to.valueOf() - Number(period) * 86400000);
-    return { from: from.toISOString(), to: to.toISOString() };
-  }, [period]);
-
-  async function load() {
-    if (!session) return;
-    setLoading(true); setError('');
-    const params = new URLSearchParams({ ...range });
-    if (team) params.set('team', team);
-    if (owner) params.set('owner', owner);
-    if (plan) params.set('plan', plan);
-    try {
-      const headers = { Authorization: `Bearer ${session.access_token}` };
-      const [metricsResponse, filtersResponse] = await Promise.all([
-        fetch(`/api/admin/control-plane/metrics?${params}`, { headers }),
-        filters.teams.length ? Promise.resolve(null) : fetch('/api/admin/control-plane/filters', { headers }),
-      ]);
-      if (!metricsResponse.ok) throw new Error((await metricsResponse.json()).error || 'Não foi possível carregar os indicadores.');
-      setPayload(await metricsResponse.json());
-      if (filtersResponse) {
-        if (!filtersResponse.ok) throw new Error('Não foi possível carregar os filtros.');
-        setFilters(await filtersResponse.json());
-      }
-    } catch (caught: any) { setError(caught.message); }
-    finally { setLoading(false); }
-  }
-
-  useEffect(() => { void load(); }, [session, period, team, owner, plan]);
-
-  async function exportClients() {
-    if (!session) return;
-    const response = await fetch('/api/admin/control-plane/export/clients', { headers: { Authorization: `Bearer ${session.access_token}` } });
-    if (!response.ok) { setError('A exportação não pôde ser concluída.'); return; }
-    const blob = await response.blob();
-    const url = URL.createObjectURL(blob); const anchor = document.createElement('a');
-    anchor.href = url; anchor.download = 'ordum-clientes.csv'; anchor.click(); URL.revokeObjectURL(url);
-  }
-
-  const current = payload?.current;
-  const previous = payload?.previous;
-  const alerts = current ? [
-    ['critical', Number(current.webhook_failures || 0), 'Webhooks com falha', '#/admin/operacoes'],
-    ['critical', Number(current.reconciliation_divergences || 0), 'Divergências de conciliação', '#/admin/operacoes'],
-    ['warning', Number(current.overdue_tasks || 0), 'Tarefas ou SLAs vencidos', '#/admin/suporte'],
-    ['warning', Number(current.at_risk_clients || 0), 'Clientes em risco', '#/admin/customer-success'],
-    ['attention', Number(current.trials_expiring || 0), 'Trials próximos do vencimento', '#/admin/empresas'],
-  ].filter(([, count]) => Number(count) > 0) : [];
-
-  return <div className="mx-auto max-w-[1500px] space-y-6">
-    <div className="flex flex-col gap-4 xl:flex-row xl:items-end xl:justify-between">
-      <div><p className="text-xs font-bold uppercase tracking-[0.2em] text-[#B66E45]">Central de comando</p><h1 className="mt-1 text-3xl font-black tracking-tight text-[#202322]">Operação Ordum</h1><p className="mt-1 text-sm text-[#626866]">Indicadores reais e escopados para {platformRole?.name || 'seu papel'}.</p></div>
-      <div className="flex flex-wrap gap-2">
-        {platformCan('platform.exports.execute') && <button onClick={exportClients} className="inline-flex items-center gap-2 rounded-xl border border-[#DDD8CF] bg-white px-3 py-2 text-xs font-bold"><Download className="h-4 w-4" />Exportar clientes</button>}
-        <button onClick={() => void load()} disabled={loading} className="inline-flex items-center gap-2 rounded-xl bg-[#202322] px-3 py-2 text-xs font-bold text-white disabled:opacity-50"><RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />Atualizar</button>
-      </div>
-    </div>
-
-    <div className="grid gap-3 rounded-2xl border border-[#DDD8CF] bg-white p-4 md:grid-cols-4">
-      <label className="text-xs font-bold text-[#626866]">Período<select value={period} onChange={(e) => setPeriod(e.target.value)} className="mt-1 w-full rounded-lg border border-[#DDD8CF] bg-white p-2 text-sm text-[#202322]"><option value="7">Últimos 7 dias</option><option value="30">Últimos 30 dias</option><option value="90">Últimos 90 dias</option><option value="365">Últimos 12 meses</option></select></label>
-      <label className="text-xs font-bold text-[#626866]">Equipe<select value={team} onChange={(e) => setTeam(e.target.value)} className="mt-1 w-full rounded-lg border border-[#DDD8CF] bg-white p-2 text-sm"><option value="">Todas permitidas</option>{filters.teams.map((item: any) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
-      <label className="text-xs font-bold text-[#626866]">Responsável<select value={owner} onChange={(e) => setOwner(e.target.value)} className="mt-1 w-full rounded-lg border border-[#DDD8CF] bg-white p-2 text-sm"><option value="">Todos permitidos</option>{filters.people.map((item: any) => <option key={item.id} value={item.id}>{item.platform_roles?.name || item.relationship_type} · {item.id.slice(0, 8)}</option>)}</select></label>
-      <label className="text-xs font-bold text-[#626866]">Plano<select value={plan} onChange={(e) => setPlan(e.target.value)} className="mt-1 w-full rounded-lg border border-[#DDD8CF] bg-white p-2 text-sm"><option value="">Todos os planos</option>{filters.plans.map((item: any) => <option key={item.id} value={item.id}>{item.name} v{item.version}</option>)}</select></label>
-    </div>
-
-    {error && <div role="alert" className="rounded-xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-800">{error}</div>}
-    {alerts.length > 0 && <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4"><div className="mb-3 flex items-center gap-2 font-bold text-amber-950"><AlertTriangle className="h-5 w-5" />Alertas priorizados</div><div className="grid gap-2 md:grid-cols-2 xl:grid-cols-3">{alerts.map(([priority, count, label, href]) => <a href={String(href)} key={String(label)} className="rounded-xl bg-white/80 p-3 text-sm"><span className="font-black text-[#202322]">{count}</span> <span>{label}</span><span className="ml-2 text-[10px] font-bold uppercase text-amber-800">{priority}</span></a>)}</div></div>}
-
-    {loading && !current ? <div className="grid gap-4 md:grid-cols-3"><div className="h-36 animate-pulse rounded-2xl bg-white"/><div className="h-36 animate-pulse rounded-2xl bg-white"/><div className="h-36 animate-pulse rounded-2xl bg-white"/></div> : !current ? <div className="rounded-2xl border border-dashed border-[#C8C2B7] bg-white p-12 text-center"><h2 className="font-bold">Sem dados disponíveis</h2><p className="mt-2 text-sm text-[#626866]">{payload?.emptyReason || 'Os indicadores não puderam ser calculados para este escopo.'}</p></div> : <>
-      {payload?.emptyReason && <div className="rounded-xl border border-sky-200 bg-sky-50 p-4 text-sm text-sky-900">{payload.emptyReason} Métricas sem base aparecem como “—”; nenhum número foi estimado.</div>}
-      {GROUPS.map((group) => <section key={group.title} className="space-y-3"><div className="flex items-center justify-between"><h2 className="text-lg font-black text-[#202322]">{group.title}</h2></div><div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">{group.items.map(([label, key, kind, href]) => {
-        const sourceAvailable = group.source === 'commercial' ? current.has_commercial_data : group.source === 'financial' ? current.has_financial_data : true;
-        const value = sourceAvailable ? current[key] : null;
-        return <a key={key} href={href} className="rounded-2xl border border-[#DDD8CF]/80 bg-white p-4 shadow-sm transition hover:-translate-y-0.5 hover:border-[#B66E45]/60"><div className="text-xs font-bold uppercase tracking-wide text-[#777D7A]">{label}</div><div className="mt-2 text-2xl font-black text-[#202322]">{metricValue(value, kind)}</div><div className="mt-2"><Comparison current={value} previous={previous?.[key]} /></div></a>;
-      })}</div></section>)}
-      <p className="text-right text-xs text-[#777D7A]">Última atualização da base: {current.last_updated_at && current.last_updated_at !== '-infinity' ? new Date(String(current.last_updated_at)).toLocaleString('pt-BR') : 'nenhum registro disponível'}</p>
+export function AdminDashboard(){
+  const{session,user,platformRole,hasPlatformPermission}=useAccess();const[payload,setPayload]=useState<{current:Metrics|null;previous:Metrics|null;emptyReason?:string|null}|null>(null);const[filters,setFilters]=useState<any>({teams:[],plans:[]});const[loading,setLoading]=useState(true);const[error,setError]=useState("");const[period,setPeriod]=useState("30");const[team,setTeam]=useState("");const[plan,setPlan]=useState("");const[showFilters,setShowFilters]=useState(false);
+  const range=useMemo(()=>{const to=new Date();const from=new Date(to.valueOf()-Number(period)*864e5);return{from:from.toISOString(),to:to.toISOString()};},[period]);
+  async function load(){if(!session)return;setLoading(true);setError("");const params=new URLSearchParams({...range});if(team)params.set("team",team);if(plan)params.set("plan",plan);try{const headers={Authorization:`Bearer ${session.access_token}`};const[metricsResponse,filtersResponse]=await Promise.all([fetch(`/api/admin/control-plane/metrics?${params}`,{headers}),filters.teams.length?Promise.resolve(null):fetch("/api/admin/control-plane/filters",{headers})]);const body=await metricsResponse.json().catch(()=>({}));if(!metricsResponse.ok)throw new Error(userFacingApiError(body,metricsResponse.status,"Não foi possível carregar o resumo. Tente novamente."));setPayload(body);if(filtersResponse){const options=await filtersResponse.json().catch(()=>({}));if(filtersResponse.ok)setFilters(options);}}catch(caught){setError(caught instanceof Error?caught.message:"Não foi possível carregar o resumo.");}finally{setLoading(false);}}
+  useEffect(()=>{void load();},[session,period,team,plan]);
+  async function exportClients(){if(!session)return;const response=await fetch("/api/admin/control-plane/export/clients",{headers:{Authorization:`Bearer ${session.access_token}`}});if(!response.ok){setError("Não foi possível exportar os clientes. Tente novamente.");return;}const url=URL.createObjectURL(await response.blob());const anchor=document.createElement("a");anchor.href=url;anchor.download="ordum-clientes.csv";anchor.click();URL.revokeObjectURL(url);}
+  const current=payload?.current;const firstName=(user?.user_metadata?.full_name||user?.email?.split("@")[0]||"Olá").split(" ")[0];
+  const actions=current?[
+    {label:"Leads recebidos",value:current.leads_received,detail:"Revise e registre o primeiro contato",href:"#/admin/leads",tone:"copper"},
+    {label:"Propostas no período",value:current.proposals,detail:"Acompanhe aprovações e aceite",href:"#/admin/propostas",tone:"blue"},
+    {label:"Implantações em andamento",value:current.onboarding_clients,detail:"Veja quem precisa avançar",href:"#/admin/onboarding",tone:"blue"},
+    {label:"Clientes em risco",value:current.at_risk_clients,detail:"Abra o plano de recuperação",href:"#/admin/customer-success",tone:"amber"},
+    {label:"Cobranças vencidas",value:current.overdue_cents,detail:"Acompanhe a recuperação",href:"#/admin/financeiro",tone:"red",money:true},
+  ].filter((item)=>typeof item.value==="number"&&item.value>0):[];
+  const funnel=[["Leads",current?.leads_received,"#/admin/leads"],["Demonstrações",current?.demos,"#/admin/demos"],["Propostas",current?.proposals,"#/admin/propostas"],["Contratos",current?.contracts,"#/admin/contratos"]] as const;
+  return <div className="mx-auto max-w-[1400px] space-y-8"><header className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between"><div><p className="text-sm text-[#626866]">Bom dia, {firstName}.</p><h1 className="mt-1 text-3xl font-black tracking-tight">Veja o que precisa da sua atenção.</h1><p className="mt-2 text-sm text-[#626866]">Resumo real do período para {platformRole?.name||"seu perfil"}.</p></div><div className="flex flex-wrap gap-2">{hasPlatformPermission("platform.exports.execute")?<button onClick={()=>void exportClients()} className="inline-flex items-center gap-2 rounded-xl border border-[#DDD8CF] bg-white px-4 py-2.5 text-sm font-bold"><Download className="h-4 w-4"/>Exportar clientes</button>:null}<button onClick={()=>void load()} disabled={loading} className="inline-flex items-center gap-2 rounded-xl bg-[#202322] px-4 py-2.5 text-sm font-bold text-white disabled:opacity-50"><RefreshCw className={`h-4 w-4 ${loading?"animate-spin":""}`}/>Atualizar</button></div></header>
+    <div><button onClick={()=>setShowFilters((value)=>!value)} className="inline-flex items-center gap-2 text-sm font-bold text-[#626866]">Período: últimos {period==="365"?"12 meses":`${period} dias`} <ChevronDown className={`h-4 w-4 transition ${showFilters?"rotate-180":""}`}/></button>{showFilters?<div className="mt-3 grid gap-3 rounded-2xl bg-white p-4 ring-1 ring-[#DDD8CF]/70 md:grid-cols-3"><Select label="Período" value={period} onChange={setPeriod} options={[["7","Últimos 7 dias"],["30","Últimos 30 dias"],["90","Últimos 90 dias"],["365","Últimos 12 meses"]]}/><Select label="Equipe" value={team} onChange={setTeam} options={[["","Todas as equipes permitidas"],...filters.teams.map((item:any)=>[item.id,item.name])]}/><Select label="Plano" value={plan} onChange={setPlan} options={[["","Todos os planos"],...filters.plans.map((item:any)=>[item.id,item.name])]}/></div>:null}</div>
+    {error?<div role="alert" className="rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-800"><strong>Não foi possível atualizar o painel.</strong><p className="mt-1">{error}</p><button onClick={()=>void load()} className="mt-3 font-bold underline">Tentar novamente</button></div>:null}
+    {loading&&!current?<DashboardSkeleton/>:!current?<div className="rounded-2xl border border-dashed border-[#C8C2B7] bg-white p-12 text-center"><h2 className="font-bold">Ainda não há dados neste período</h2><p className="mt-2 text-sm text-[#626866]">{payload?.emptyReason||"Altere o período ou comece pelo cadastro de leads."}</p><a href="#/admin/leads" className="mt-4 inline-flex rounded-xl bg-[#B66E45] px-4 py-2 text-sm font-bold text-white">Ir para Leads</a></div>:<>
+      <section><div className="mb-3"><h2 className="text-xl font-black">Ações pendentes</h2><p className="text-sm text-[#626866]">Abra diretamente a fila que precisa avançar.</p></div>{actions.length?<div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">{actions.slice(0,6).map((item)=><a key={item.label} href={item.href} className="group rounded-2xl bg-white p-5 shadow-[0_1px_0_rgba(32,35,34,.08),0_8px_24px_rgba(32,35,34,.05)] ring-1 ring-[#DDD8CF]/70 transition hover:-translate-y-0.5 hover:ring-[#B66E45]/50"><div className="flex items-start justify-between"><span className="text-sm font-bold">{item.label}</span><span className={`rounded-xl px-3 py-1 text-xl font-black ${item.tone==="red"?"bg-red-50 text-red-700":item.tone==="amber"?"bg-amber-50 text-amber-800":item.tone==="copper"?"bg-[#F5E8DF] text-[#8B4E2F]":"bg-blue-50 text-blue-700"}`}>{item.money?money(item.value):number(item.value)}</span></div><p className="mt-4 text-sm text-[#626866]">{item.detail}</p><span className="mt-4 inline-flex items-center gap-1 text-xs font-bold text-[#B66E45]">Abrir fila <ArrowRight className="h-3.5 w-3.5 transition group-hover:translate-x-1"/></span></a>)}</div>:<div className="rounded-2xl border border-emerald-200 bg-emerald-50 p-5 text-sm text-emerald-800">Nenhuma pendência prioritária foi encontrada neste período.</div>}</section>
+      <section className="grid gap-5 lg:grid-cols-[1.4fr_1fr]"><div className="rounded-2xl bg-white p-6 ring-1 ring-[#DDD8CF]/70"><div className="flex items-center gap-2"><TrendingUp className="h-5 w-5 text-[#B66E45]"/><h2 className="text-lg font-black">Comercial</h2></div><p className="mt-1 text-sm text-[#626866]">Do primeiro contato ao cliente.</p><div className="mt-6 grid grid-cols-2 gap-3 sm:grid-cols-4">{funnel.map(([label,value,href],index)=><a href={href} key={label} className="relative rounded-xl bg-[#F6F5F2] p-4 hover:bg-[#F1E5DD]"><div className="text-2xl font-black">{number(value)}</div><div className="mt-1 text-xs font-semibold text-[#626866]">{label}</div>{index<funnel.length-1?<ArrowRight className="absolute -right-2.5 top-1/2 z-10 hidden h-5 w-5 -translate-y-1/2 rounded-full bg-white text-[#B66E45] sm:block"/>:null}</a>)}</div><div className="mt-4 text-sm text-[#626866]">Conversão lead → contrato: <strong className="text-[#202322]">{typeof current.lead_to_contract_percent==="number"?`${current.lead_to_contract_percent.toLocaleString("pt-BR")}%`:"—"}</strong></div></div><div className="rounded-2xl bg-[#202322] p-6 text-white"><div className="flex items-center gap-2"><WalletCards className="h-5 w-5 text-[#D2926D]"/><h2 className="text-lg font-black">Receita</h2></div><div className="mt-5 grid grid-cols-2 gap-4"><Metric label="MRR" value={money(current.mrr_cents)}/><Metric label="Clientes ativos" value={number(current.active_tenants)}/><Metric label="Ticket médio" value={typeof current.mrr_cents==="number"&&typeof current.active_tenants==="number"&&current.active_tenants>0?money(current.mrr_cents/current.active_tenants):"—"}/><Metric label="Inadimplentes" value={number(current.delinquent_tenants)}/></div><a href="#/admin/financeiro" className="mt-6 inline-flex items-center gap-1 text-sm font-bold text-[#D2926D]">Ver financeiro <ArrowRight className="h-4 w-4"/></a></div></section>
+      <section><div className="mb-3 flex items-center gap-2"><Building2 className="h-5 w-5 text-[#B66E45]"/><h2 className="text-lg font-black">Clientes</h2></div><div className="grid gap-3 sm:grid-cols-3"><ClientCard label="Em implantação" value={current.onboarding_clients} href="#/admin/onboarding"/><ClientCard label="Ativos" value={current.active_tenants} href="#/admin/empresas"/><ClientCard label="Em risco" value={current.at_risk_clients} href="#/admin/customer-success"/></div></section>
+      <p className="text-right text-xs text-[#777D7A]">Atualizado em {current.last_updated_at&&current.last_updated_at!=="-infinity"?new Date(String(current.last_updated_at)).toLocaleString("pt-BR"):"sem registros disponíveis"}</p>
     </>}
   </div>;
 }
 
+function Select({label,value,onChange,options}:{label:string;value:string;onChange:(value:string)=>void;options:string[][]}){return <label className="text-xs font-bold text-[#626866]">{label}<select value={value} onChange={(event)=>onChange(event.target.value)} className="mt-1 w-full rounded-xl border border-[#DDD8CF] bg-white p-2.5 text-sm font-normal text-[#202322]">{options.map(([key,text])=><option key={key} value={key}>{text}</option>)}</select></label>}
+function Metric({label,value}:{label:string;value:string}){return <div><div className="text-2xl font-black">{value}</div><div className="mt-1 text-xs text-white/55">{label}</div></div>}
+function ClientCard({label,value,href}:{label:string;value:unknown;href:string}){return <a href={href} className="flex items-center justify-between rounded-2xl bg-white p-5 ring-1 ring-[#DDD8CF]/70 hover:ring-[#B66E45]/50"><div><div className="text-3xl font-black">{number(value)}</div><div className="mt-1 text-sm text-[#626866]">{label}</div></div><ArrowRight className="h-5 w-5 text-[#B66E45]"/></a>}
+function DashboardSkeleton(){return <div className="grid gap-3 md:grid-cols-3">{Array.from({length:6}).map((_,index)=><div key={index} className="h-32 animate-pulse rounded-2xl bg-white"/>)}</div>}
