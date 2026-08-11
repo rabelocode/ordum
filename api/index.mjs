@@ -2309,8 +2309,7 @@ function createAdminLeadsRouter(getSupabaseAdmin2, _old_requirePlatformAuth) {
         owner_platform_member_id: req.body.owner_platform_member_id || assignmentResult.data.owner_platform_member_id || req.platformContext.platformMember.id,
         status: "scheduled",
         starts_at,
-        notes: req.body.notes || null,
-        created_by_user_id: req.user.id
+        notes: req.body.notes || null
       }).select().single();
       if (error) return res.status(400).json({ error: error.message });
       await db.from("commercial_activities").insert({

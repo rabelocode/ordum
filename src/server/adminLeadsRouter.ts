@@ -396,7 +396,6 @@ export function createAdminLeadsRouter(getSupabaseAdmin: any, _old_requirePlatfo
         status: 'scheduled',
         starts_at,
         notes: req.body.notes || null,
-        created_by_user_id: req.user.id,
       }).select().single();
       if (error) return res.status(400).json({ error: error.message });
 
