@@ -84,6 +84,12 @@ async function cleanup() {
     if (result.error) errors.push(`${label}: ${result.error.message}`);
   };
   try {
+    if (!ids.lead) { const found=await db.from("marketing_leads").select("id").eq("company",company).maybeSingle(); if(found.data)ids.lead=found.data.id; }
+    if (!ids.team) { const found=await db.from("platform_teams").select("id").eq("name",teamName).maybeSingle(); if(found.data)ids.team=found.data.id; }
+    if (!ids.plan) { const found=await db.from("billing_plans").select("id").eq("code",planCode).maybeSingle(); if(found.data)ids.plan=found.data.id; }
+    if (ids.lead && !ids.demo) { const found=await db.from("commercial_demos").select("id").eq("lead_id",ids.lead).maybeSingle(); if(found.data)ids.demo=found.data.id; }
+    if (ids.lead && !ids.proposal) { const found=await db.from("commercial_proposals").select("id").eq("lead_id",ids.lead).maybeSingle(); if(found.data)ids.proposal=found.data.id; }
+    if (ids.proposal && !ids.contract) { const found=await db.from("commercial_contracts").select("id,tenant_id").eq("proposal_id",ids.proposal).maybeSingle(); if(found.data){ids.contract=found.data.id;ids.tenant=found.data.tenant_id||ids.tenant;} }
     if (ids.tenant) {
       const runs = await db
         .from("onboarding_runs")
@@ -299,7 +305,7 @@ try {
     const memberValue = await memberSelect.locator("option").filter({ hasText: email }).getAttribute("value");
     if (!memberValue) throw new Error(`Member option not found for ${email}`);
     await memberSelect.selectOption(memberValue);
-    await page.getByLabel(/Função na Equipe/).selectOption(role);
+    await page.locator("#team-member-role").selectOption(role);
     await page.getByRole("button", { name: "Adicionar", exact: true }).click();
     await page.getByText(email).waitFor();
   }
@@ -333,7 +339,7 @@ try {
   await page.getByLabel("E-mail").fill(`contato.${runId}@example.com`);
   await page.getByLabel("Equipe responsável").selectOption({ label: teamName });
   await page.getByRole("button", { name: "Criar lead" }).click();
-  await page.getByText(company).first().waitFor();
+  await page.locator("tr").filter({ hasText: company }).waitFor();
   const lead = await db
     .from("marketing_leads")
     .select("id")
@@ -350,7 +356,7 @@ try {
   await leadRow.getByRole("button", { name: "Agendar demo" }).click();
   await page.getByLabel(/Equipe responsável/).selectOption({ label: teamName });
   await page.getByLabel(/Observações/).fill("Demonstração de homologação");
-  await page.getByRole("button", { name: /Agendar Demonstração/ }).click();
+  await page.getByRole("button", { name: "Agendar Demo", exact: true }).click();
   await page.getByText(/Demonstração agendada com sucesso/).waitFor();
   const demo = await db
     .from("commercial_demos")
@@ -366,13 +372,16 @@ try {
   await page.getByLabel(/Próxima ação/).fill("Preparar proposta");
   await page.getByRole("button", { name: "Salvar" }).click();
   await page.getByText(/Resultado registrado/).waitFor();
-  await demoCard.getByRole("link", { name: "Criar proposta" }).click();
+  await page.getByRole("button", { name: "Realizadas" }).click();
+  await page.locator("article").filter({ hasText: company }).getByRole("link", { name: "Criar proposta" }).click();
   await page.getByText("Etapa 1 de 4").waitFor();
   await page.getByRole("button", { name: /Continuar/ }).click();
   await page.getByLabel("Plano").selectOption({ label: planName });
   await page.getByRole("button", { name: /Continuar/ }).click();
   await page.getByRole("button", { name: /Continuar/ }).click();
   await page.getByRole("button", { name: "Criar proposta" }).click();
+  await page.waitForTimeout(1500);
+  console.log(`PROPOSAL_CREATE=${(await page.locator("body").innerText()).slice(-1200)}`);
   await page.getByText(/Proposta criada e enviada/).waitFor();
   const proposal = await db
     .from("commercial_proposals")

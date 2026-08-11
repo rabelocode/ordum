@@ -106,7 +106,8 @@ export function createAdminLeadsRouter(getSupabaseAdmin: any, _old_requirePlatfo
       const { data: usersData } = await getSupabaseAdmin().auth.admin.listUsers();
       
       let leads = data.map((l: any) => {
-        const assignment = l.platform_lead_assignments?.[0];
+        const assignmentRelation = l.platform_lead_assignments;
+        const assignment = Array.isArray(assignmentRelation) ? assignmentRelation[0] : assignmentRelation;
         let owner = null;
         if (assignment?.platform_members?.user_id) {
           const u = usersData?.users?.find((u: any) => u.id === assignment.platform_members.user_id);

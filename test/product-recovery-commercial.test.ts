@@ -120,6 +120,11 @@ test('legacy unassigned leads can be distributed in a bounded audited batch',()=
   assert.match(api,/lead\.bulk_assigned/);
 });
 
+test('lead API normalizes singular and array assignment relations before proposal creation',()=>{
+  const api=read('src/server/adminLeadsRouter.ts');
+  assert.match(api,/Array\.isArray\(assignmentRelation\) \? assignmentRelation\[0\] : assignmentRelation/);
+});
+
 test('team deactivation transfers active work atomically and stays service-only',()=>{
   const migration=read('supabase/migrations/20260811195021_safe_commercial_team_deactivation.sql');
   assert.match(migration,/create or replace function public\.admin_deactivate_commercial_team/);
