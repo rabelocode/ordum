@@ -1,43 +1,42 @@
 Owner: chatgpt_backend
 Status: ready_for_product_review
 Branch: fix/admin-functional-recovery
-Head: ce2c6fb692a5aa3495089aa4b971868874f1e45c
+Head: c5a79993d69ca2b2a2df4e8b634be0218454ff8d
 Implemented:
-- First-run do Admin para instalação sem equipe: criar a primeira equipe, adicionar responsáveis, definir gerente e iniciar a operação pela interface.
-- Equipes comerciais administráveis com indicadores de carteira, desativação segura com equipe de destino, membros internos completos e linguagem humana.
-- Gestão de membros responsiva: desktop em tabela e mobile em cards; papéis e vínculos traduzidos.
-- Caixa de leads sem responsável, seleção em lote e distribuição auditada por equipe/responsável.
-- Dashboard com ações diretas para operação não configurada, leads sem responsável, demos do dia, aprovações, contratos prontos e implantações atrasadas.
-- Lead preserva equipe/responsável ao virar demonstração e proposta; proposta herda o contexto comercial.
-- Governança de dupla aprovação comprovada com criador e segunda pessoa aprovadora.
-- Visões de propostas corrigidas para rascunho, aprovação, minha aprovação, pronta para envio, enviada, aceita e recusada, com contagens coerentes.
-- Feedback de propostas só confirma sucesso após o registro atualizado estar visível.
-- Contrato herda proposta aceita, registra formalização externa real e ativa cliente em trial explícito sem simular cobrança.
-- Cliente ativado recebe Ordum Integridade, onboarding e CTA operacional para continuar a implantação.
+- Uma empresa agora configura e publica o Canal de Integridade, recebe relatos anônimos ou identificados, acompanha por protocolo + segredo e trata o caso até decisão, encerramento e reabertura pela interface.
+- Canal público reconstruído com linguagem de confiança, wizard em seis etapas, revisão, comprovante copiável/baixável e miniportal de acompanhamento responsivo.
+- Bug de envio antecipado ao avançar para a revisão corrigido: continuar e enviar são ações distintas.
+- Caixa de casos ganhou visões Novos, Sem responsável e SLA crítico, mantendo filtros avançados, paginação no servidor e cards mobile.
+- Decisão formal com classificação, conclusão, medidas, fundamentação privada, mensagem opcional ao denunciante e checklist de encerramento.
+- Evidências com seleção/drag-and-drop, descrição, sinalização de visibilidade e cadeia de custódia sem expor caminho de Storage.
+- Timeline não exibe chaves técnicas desconhecidas; usa mensagem operacional segura.
+- Cabeçalho público usa o nome da organização e evita título duplicado.
 Database:
-- Migration 20260811195021_safe_commercial_team_deactivation.sql aplicada oficialmente.
-- Função de desativação transfere trabalho ativo e não permite deixar operação órfã.
-- Nenhum dado real apagado; billing de produção permaneceu desativado.
+- Nenhuma migration ou DDL necessária neste pacote.
+- RLS, Storage privado, signed URLs, rate limit persistente e aggregate-only preservados e exercitados no E2E.
 Tests:
 - Secret scan PASS: 344 arquivos rastreados.
 - Migration validation PASS: 33 migrations ordenadas.
-- Lint PASS; typecheck PASS; build client/server/Vercel PASS.
-- Suite completa: 194 testes, 193 PASS, 0 FAIL, 1 live comercial SKIP explícito.
-- Browser E2E descartável PASS no run ui-msp51ny7.
+- Lint/typecheck/build client-server-Vercel PASS.
+- Suite completa: 196 testes, 195 PASS, 0 FAIL, 1 live comercial SKIP explícito.
+- Live Integridade E2E Preview PASS: run integrity_e2e_1786488725315_f74537ae.
 Preview:
-- READY — dpl_7yLuwNn3Qiai4kxYeuGXpksyBmGX
-- https://ordum-gqfahckmq-ordum.vercel.app
+- READY — dpl_AXDr9723Bp83k6JGoTh6Kfh4q9e9
+- https://ordum-gi9nv51rr-ordum.vercel.app
 - Alias: https://ordum-git-fix-admin-functional-recovery-ordum.vercel.app
 QA:
-- Fluxo clicado pela interface: login Admin sem equipe → criar equipe → adicionar gerente e aprovador → criar plano trial com Integridade → criar e atribuir lead → registrar contato → agendar demo → registrar resultado → criar proposta → segunda pessoa aprovar → registrar envio → registrar aceite → gerar contrato → segunda pessoa aprovar contrato → registrar assinatura externa → ativar cliente → abrir implantação.
-- A API/service role foi usada somente para criar os dois usuários descartáveis e executar cleanup.
-- Desktop 1440x1000 e mobile 390x844 validados; equipes, cliente e implantação não exigem tabela horizontal.
-- Screenshots finais: tmp/qa-package3/ui-msp51ny7/01-first-run.png, 02-team-ready.png, 02b-team-mobile.png, 03-lead-created.png, 04-proposal-awaiting-approval.png, 05-proposal-approved.png, 06-client-activated.png, 07-client-mobile.png e 08-onboarding-mobile.png.
-- Vercel: nenhum log de nível error/5xx encontrado no deployment final.
-- Cleanup comprovado: Auth E2E 0; platform_members E2E 0; equipes E2E 0; leads E2E 0; planos E2E 0.
-- Supabase Advisors revisados: 13 WARN de segurança e 31 WARN de performance já conhecidos; nenhum alerta foi introduzido pelas alterações de UI. Referência: https://supabase.com/docs/guides/database/database-linter
+- Fluxo clicado no browser: publicar canal configurado → enviar relato anônimo pelo wizard → receber protocolo/segredo → acompanhar mobile → complementar informações → compliance abrir caso → triagem → investigação → tarefa → mensagem externa com confirmação → nota privada → evidência → decisão → encerramento → reabertura.
+- Papéis validados: tenant_admin, compliance, investigador atribuído mobile, investigador não atribuído, usuário sem permissão, tenant cruzado e Admin Global aggregate-only.
+- Fronteiras comprovadas: nota interna ausente do portal público; identidade protegida; Admin Global sem dossiê/conteúdo; Storage cross-tenant bloqueado; rate limit no intento 21.
+- Desktop 1440x1000 e mobile 390x844 sem overflow no canal, acompanhamento, caixa e detalhe.
+- Screenshots: tmp/product-recovery/public-report-receipt-mobile.png, public-tracking-mobile.png, investigator_assigned_mobile-case-detail.png, integrity-complete-ui-flow.png, tenant_admin_desktop-settings.png e admin-company-products.png.
+- Cleanup PASS: residualTenants 0; residualAuth 0; Storage descartável removido.
+- Vercel: 0 runtime errors e 0 logs 5xx no deployment final.
+- Supabase Advisors: 13 WARN de segurança e 31 WARN de performance já conhecidos; tabelas server-only sem policy aparecem como INFO e policies permissivas sobrepostas permanecem como dívida de performance, sem ampliação de acesso neste pacote. Referência: https://supabase.com/docs/guides/database/database-linter
 Blockers:
-- Asaas permanece Sandbox-only, desabilitado e fail-closed até o responsável fornecer credenciais válidas futuramente. Nenhuma cobrança foi simulada ou executada.
+- Scheduler idempotente não foi executado no QA local/Preview por ausência da credencial de cron no ambiente do runner; o restante do fluxo não depende dele.
+- Asaas permanece Sandbox-only/fail-closed até credenciais futuras; não foi alterado neste pacote.
 Suggested next package:
-- Revisão comercial do fluxo no Preview com nomes/papéis reais da equipe Ordum.
-- Cadastrar credenciais Asaas Sandbox quando disponíveis e executar a homologação de billing já preparada.
+- Revisão comercial do produto no Preview com conteúdo e identidade visual de uma empresa piloto.
+- Configurar a credencial do cron no runner de homologação e incluir o scheduler no live E2E.
+- Planejar consolidação das policies permissivas somente com equivalência de autorização e plano de query comprovados.
