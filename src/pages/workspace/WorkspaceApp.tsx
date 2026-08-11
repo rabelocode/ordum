@@ -87,9 +87,9 @@ export function WorkspaceApp() {
 
   const getAuthorizedModules = () => {
     const modules: ModuleId[] = [];
-    if (hasSolution('integrity') && canAccessIntegrity) modules.push('integrity');
-    if (hasSolution('people') && canAccessPeople) modules.push('people');
-    if (hasSolution('talent') && canAccessTalent) modules.push('talent');
+    if (hasSolution('integridade') && canAccessIntegrity) modules.push('integrity');
+    if (hasSolution('pessoas') && canAccessPeople) modules.push('people');
+    if (hasSolution('talentos') && canAccessTalent) modules.push('talent');
     return modules;
   };
 

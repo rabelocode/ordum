@@ -29,3 +29,10 @@ test('billing-independent activation remains explicitly trial-gated',()=>{
   assert.match(server,/source: 'commercial_trial'/);
   assert.doesNotMatch(server,/prepare-client[\s\S]{0,6000}provision_paid_contract/);
 });
+
+test('workspace resolves contracted catalog keys into product routes',()=>{
+  const workspace=read('src/pages/workspace/WorkspaceApp.tsx');
+  assert.match(workspace,/hasSolution\('integridade'\).*modules\.push\('integrity'\)/);
+  assert.match(workspace,/hasSolution\('pessoas'\).*modules\.push\('people'\)/);
+  assert.match(workspace,/hasSolution\('talentos'\).*modules\.push\('talent'\)/);
+});
