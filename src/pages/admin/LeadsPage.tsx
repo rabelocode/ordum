@@ -358,7 +358,7 @@ export function LeadsPage() {
 
       {/* Modal Transição de Status do Lead */}
       {transitionModal && (
-        <div className="fixed inset-0 z-50 bg-black/50 p-4 flex items-center justify-center">
+        <div className="fixed inset-0 z-50 bg-black/50 p-4 flex items-center justify-center" role="dialog" aria-modal="true" aria-labelledby="schedule-demo-title">
           <form onSubmit={handleTransitionSubmit} className="w-full max-w-md rounded-2xl bg-white p-6 shadow-2xl space-y-4">
             <div className="flex items-center justify-between">
               <h3 className="text-lg font-bold text-[#202322]">Alterar etapa do lead</h3>
@@ -436,7 +436,7 @@ export function LeadsPage() {
         <div className="fixed inset-0 z-50 bg-black/50 p-4 flex items-center justify-center">
           <form onSubmit={handleDemoSubmit} className="w-full max-w-md rounded-2xl bg-white p-6 shadow-2xl space-y-4">
             <div className="flex items-center justify-between">
-              <h3 className="text-lg font-bold text-[#202322]">Agendar Demonstração</h3>
+              <h3 id="schedule-demo-title" className="text-lg font-bold text-[#202322]">Agendar Demonstração</h3>
               <button type="button" onClick={() => setDemoModalLead(null)} aria-label="Fechar"><X className="w-5 h-5" /></button>
             </div>
             <p className="text-xs text-gray-500">Lead: {demoModalLead.name} ({demoModalLead.company})</p>
