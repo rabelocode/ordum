@@ -113,7 +113,7 @@ async function runBrowserQa(scenarios: Array<{ name: string; user: FixtureUser; 
       try { await casesButton.click({ timeout: 15000 }); } catch (error) { const visible=(await page.locator("body").innerText()).replace(/\s+/g," ").slice(0,600); throw new Error(`${scenario.name}: navegação de casos indisponível (${visible}); ${String(error)}`); }
       if (scenario.expectedCase) {
         try {
-          await page.getByText(subject, { exact: true }).first().waitFor({ timeout: 15000 });
+          await page.getByText(subject, { exact: true }).filter({ visible: true }).first().waitFor({ timeout: 15000 });
         } catch {
           const visible = (await page.locator("body").innerText()).replace(/\s+/g, " ").slice(0, 500);
           throw new Error(`${scenario.name}: caso esperado ausente na interface (${visible})`);
@@ -124,7 +124,7 @@ async function runBrowserQa(scenarios: Array<{ name: string; user: FixtureUser; 
           await exportButton.waitFor({ state: "visible" });
         }
         await page.screenshot({ path: `tmp/product-recovery/${scenario.name}-cases.png`, fullPage: true });
-        await page.getByText(subject, { exact: true }).first().click();
+        await page.getByText(subject, { exact: true }).filter({ visible: true }).first().click();
         await page.getByRole("heading", { name: subject, exact: true }).waitFor();
         for (const tabName of ["Visão geral", "Investigação", "Comunicação", "Evidências", "Histórico"]) {
           await page.getByRole("button", { name: tabName, exact: true }).waitFor();
@@ -137,12 +137,12 @@ async function runBrowserQa(scenarios: Array<{ name: string; user: FixtureUser; 
         await page.evaluate(() => { window.location.hash = "#/workspace/integridade"; });
         await page.reload({ waitUntil: "networkidle" });
         await page.getByRole("button", { name: "Configurações" }).click();
-        await page.getByRole("heading", { name: "Configurações do Integridade" }).waitFor();
-        await page.getByRole("button", { name: "Testar configuração" }).click();
-        await page.getByText(/Teste operacional do canal aprovado/).waitFor();
+        await page.getByRole("heading", { name: "Prepare o canal para sua empresa" }).waitFor();
         await page.getByRole("button", { name: "Primeiros passos" }).click();
-        await page.getByRole("heading", { name: "Coloque o canal em operação" }).waitFor();
+        await page.getByRole("heading", { name: /Seu canal está pronto|Prepare seu canal com segurança/ }).waitFor();
         await page.getByText(/etapas · 100%/).waitFor();
+        await page.getByRole("button", { name: "Testar canal" }).click();
+        await page.getByText(/Teste concluído/).waitFor();
         await page.screenshot({ path: `tmp/product-recovery/${scenario.name}-settings.png`, fullPage: true });
       } else if (await page.getByRole("button", { name: "Configurações" }).count()) {
         failures.push(`${scenario.name}: configurações expostas sem permissão`);
@@ -153,6 +153,24 @@ async function runBrowserQa(scenarios: Array<{ name: string; user: FixtureUser; 
     await browser.close();
   }
   if (failures.length) throw new Error(`browser QA: ${failures.join("; ")}`);
+}
+
+async function runAdminProductQa(user:FixtureUser,tenantId:string,tenantName:string){
+  const browser=await chromium.launch({headless:true});
+  const failures:string[]=[];
+  try{
+    const context=await browser.newContext({viewport:{width:1440,height:1000}});const page=await context.newPage();
+    page.on("console",message=>{if(message.type()==="error")failures.push(`admin console ${message.text().slice(0,120)}`);});
+    page.on("response",response=>{if(response.status()>=500)failures.push(`admin HTTP ${response.status()} ${new URL(response.url()).pathname}`);});
+    await page.goto(`${APP_URL}/#/login`,{waitUntil:"networkidle"});await page.locator('input[type="email"]').fill(user.email);await page.locator('input[type="password"]').fill(user.password);await page.locator('button[type="submit"]').click();await page.waitForURL(/#\/(workspace|admin)/,{timeout:20000});
+    await page.evaluate(()=>{window.location.hash="#/admin";});await page.reload({waitUntil:"networkidle"});await page.getByRole("heading",{name:"Veja o que precisa da sua atenção."}).waitFor();
+    for(const label of ["Comercial","Clientes","Financeiro","Operação","Administração"])await page.getByText(new RegExp(`^${label}$`,"i")).first().waitFor();
+    await page.screenshot({path:"tmp/product-recovery/admin-dashboard.png",fullPage:true});
+    await page.evaluate(id=>{window.location.hash=`#/admin/empresas/${id}`;},tenantId);await page.reload({waitUntil:"networkidle"});await page.getByRole("heading",{name:tenantName,exact:true}).waitFor();await page.getByRole("button",{name:"Resumo",exact:true}).waitFor();await page.getByRole("button",{name:"Produtos",exact:true}).click();await page.getByRole("heading",{name:"Produtos contratados"}).waitFor();
+    const visible=(await page.locator("body").innerText()).toLowerCase();for(const forbidden of ["tenant_id","membership","entitlement","control plane","aggregate_only","correlation id","uuid","service_role"])if(visible.includes(forbidden))failures.push(`empresa expôs termo técnico: ${forbidden}`);
+    await page.screenshot({path:"tmp/product-recovery/admin-company-products.png",fullPage:true});await context.close();
+  }finally{await browser.close();}
+  if(failures.length)throw new Error(`admin product QA: ${failures.join("; ")}`);
 }
 
 async function runPublicMobileQa(channelSlug: string, protocol: string, secret: string) {
@@ -182,7 +200,7 @@ async function runPublicMobileQa(channelSlug: string, protocol: string, secret: 
 }
 
 export async function runIntegrityE2E(): Promise<Evidence> {
-  must(SUPABASE_URL, "SUPABASE_URL"); must(SECRET, "SUPABASE_SECRET_KEY"); must(PUBLISHABLE, "VITE_SUPABASE_PUBLISHABLE_KEY"); must(CRON_SECRET,"CRON_SECRET");
+  must(SUPABASE_URL, "SUPABASE_URL"); must(SECRET, "SUPABASE_SECRET_KEY"); must(PUBLISHABLE, "VITE_SUPABASE_PUBLISHABLE_KEY"); if(process.env.SKIP_INTEGRITY_SCHEDULER!=="1")must(CRON_SECRET,"CRON_SECRET");
   const db = createClient(SUPABASE_URL, SECRET, { auth: { autoRefreshToken: false, persistSession: false } });
   const health = await request("/");
   if (health.status !== 200) throw new Error(`preflight Preview: HTTP ${health.status}`);
@@ -307,7 +325,9 @@ export async function runIntegrityE2E(): Promise<Evidence> {
       { name: "investigator_assigned_mobile", user: assignedInvestigator, expectedCase: true, mobile: true },
       { name: "investigator_unassigned_desktop", user: unassignedInvestigator, expectedCase: false },
     ], reportBody.subject);
+    await runAdminProductQa(adminA,tenantA.id,`Integrity E2E A ${suffix}`);
     evidence.browserQa = true;
+    evidence.adminProductQa = true;
     expect(await workspace(`/settings/committees/${committee.id}`, { method: "PATCH", body: JSON.stringify({ name: "Comitê de Ética", description: "Comitê do piloto", member_ids: [assignedInvestigator.membershipId], active: false, status: "inactive" }) }), 409, "committee orphan protection");
     expect(await workspace(`/settings/committees/${committee.id}`, { method: "PATCH", body: JSON.stringify({ name: "Comitê de Ética e Conduta", description: "Comitê do piloto", member_ids: [assignedInvestigator.membershipId, unassignedInvestigator.membershipId], active: true, status: "active" }) }), 200, "committee update");
     expect(await workspace(`/cases/${caseRow.id}`, {}, unassignedInvestigator, tenantA.id), 200, "committee investigator read");
@@ -395,7 +415,9 @@ export async function runIntegrityE2E(): Promise<Evidence> {
     const dashboard = expect(await workspace("/dashboard"), 200, "dashboard");
     if (!dashboard.updated_at || !Array.isArray(dashboard.by_category) || !Array.isArray(dashboard.by_department) || !Array.isArray(dashboard.by_reporter_mode) || !Array.isArray(dashboard.evolution)) throw new Error("dashboard operacional incompleto");
     const pending=expect(await workspace("/pending"),200,"pending queue"); if(!Array.isArray(pending.items))throw new Error("pending queue invalid");
-    const scheduler=expect(await request("/api/internal/integrity/run",{},CRON_SECRET),200,"integrity scheduler"); const schedulerAgain=expect(await request("/api/internal/integrity/run",{},CRON_SECRET),200,"integrity scheduler idempotent"); if(!schedulerAgain.idempotent||schedulerAgain.run_key!==scheduler.run_key)throw new Error("scheduler is not idempotent");
+    if(process.env.SKIP_INTEGRITY_SCHEDULER!=="1"){
+      const scheduler=expect(await request("/api/internal/integrity/run",{},CRON_SECRET),200,"integrity scheduler"); const schedulerAgain=expect(await request("/api/internal/integrity/run",{},CRON_SECRET),200,"integrity scheduler idempotent"); if(!schedulerAgain.idempotent||schedulerAgain.run_key!==scheduler.run_key)throw new Error("scheduler is not idempotent");
+    }else evidence.schedulerSkipped="credential unavailable to local QA";
     const filtered = expect(await workspace(`/cases?category_id=${category.id}&unit_id=${unit.id}&department_id=${department.id}&committee_id=${committee.id}&page=1&limit=1&order=created_at&direction=desc`), 200, "combined filters and pagination");
     if (filtered.total < 1 || filtered.cases.length !== 1 || filtered.total_pages < 1) throw new Error("filtros/paginação não retornaram o caso esperado");
     const exported = await workspace(`/cases/export.csv?category_id=${category.id}`);
@@ -437,7 +459,7 @@ export async function runIntegrityE2E(): Promise<Evidence> {
       if (attempt.status !== 404) throw new Error(`rate limit tentativa ${i + 1}: HTTP ${attempt.status}`);
     }
     if (!limited) throw new Error("rate limit persistente não bloqueou");
-    Object.assign(evidence, { phase4g:true,deploymentWizard:true,organizationHierarchy:true,customFields:true,advancedRouting:true,schedulerIdempotent:true,pendingQueue:true,publicStatusMapping:true,executiveReport:true,anonymous: true, identified: true, tenantIsolation: true, rbac: true, assignedInvestigator: true, committeeScope: true, compliance: true, protectedIdentity: true, configurationLifecycle: true, routingPreview: true, orphanProtection: true, conflict: true, storagePrivate: true, signedUrls: true, evidenceChecksum: true, tasks: true, subtasks: true, taskEditing: true, messagesBoundary: true, recommendation: true, decision: true, reopen: true, retentionLifecycle: true, templates: true, accessGovernance: true, adminAggregateOnly: true, dashboard: true, channelReadiness: true, filtersPagination: true, exportsAudited: true });
+    Object.assign(evidence, { phase4g:true,deploymentWizard:true,organizationHierarchy:true,customFields:true,advancedRouting:true,schedulerIdempotent:process.env.SKIP_INTEGRITY_SCHEDULER!=="1",pendingQueue:true,publicStatusMapping:true,executiveReport:true,anonymous: true, identified: true, tenantIsolation: true, rbac: true, assignedInvestigator: true, committeeScope: true, compliance: true, protectedIdentity: true, configurationLifecycle: true, routingPreview: true, orphanProtection: true, conflict: true, storagePrivate: true, signedUrls: true, evidenceChecksum: true, tasks: true, subtasks: true, taskEditing: true, messagesBoundary: true, recommendation: true, decision: true, reopen: true, retentionLifecycle: true, templates: true, accessGovernance: true, adminAggregateOnly: true, dashboard: true, channelReadiness: true, filtersPagination: true, exportsAudited: true });
   } catch (error) {
     primaryError = error;
   } finally {

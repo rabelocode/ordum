@@ -330,7 +330,7 @@ export function createIntegrityRouter(
     const profiles = userIds.length ? await db.from("profiles").select("id,full_name").in("id", userIds) : { data: [], error: null };
     if (profiles.error) throw profiles.error;
     const profileNames = new Map<string,string>((profiles.data || []).map((item: any) => [item.id,String(item.full_name || "")]));
-    return new Map<string,string>((memberships.data || []).map((item: any) => [item.id,profileNames.get(item.user_id) || "Membro do tenant"]));
+    return new Map<string,string>((memberships.data || []).map((item: any) => [item.id,profileNames.get(item.user_id) || "Pessoa da equipe"]));
   }
 
   async function scopedCommitteeIds(db: any, req: express.Request) {
@@ -471,7 +471,7 @@ export function createIntegrityRouter(
       return res.json({
         members: (memberships.data || []).map((item: any) => ({
           id: item.id,
-          name: names.get(item.user_id) || "Membro do tenant",
+          name: names.get(item.user_id) || "Pessoa da equipe",
         })),
       });
     }),
@@ -503,7 +503,7 @@ export function createIntegrityRouter(
         units: units.data || [],
         departments: departments.data || [],
         committees: committees.data || [],
-        owners: (memberships.data || []).map((item: any) => ({ id: item.id, name: names.get(item.user_id) || "Membro do tenant" })),
+        owners: (memberships.data || []).map((item: any) => ({ id: item.id, name: names.get(item.user_id) || "Pessoa da equipe" })),
       });
     }),
   );
@@ -596,7 +596,7 @@ export function createIntegrityRouter(
         : { data: [], error: null };
       if (profiles.error) return res.status(500).json({ error: "Não foi possível carregar os responsáveis." });
       const profileNames = new Map((profiles.data || []).map((profile: any) => [profile.id, profile.full_name]));
-      const ownerNames = new Map((owners.data || []).map((owner: any) => [owner.id, profileNames.get(owner.user_id) || "Membro do tenant"]));
+      const ownerNames = new Map((owners.data || []).map((owner: any) => [owner.id, profileNames.get(owner.user_id) || "Pessoa da equipe"]));
       const pageReportIds = (result.data || []).map((item: any) => item.report_id);
       const messages = pageReportIds.length
         ? await db.from("integrity_report_messages").select("report_id,author_type,created_at").in("report_id", pageReportIds).order("created_at", { ascending: false })
@@ -762,7 +762,7 @@ export function createIntegrityRouter(
         : { data: [], error: null };
       if (profiles.error) return res.status(500).json({ error: "Não foi possível identificar os atores da timeline." });
       const namesByUser = new Map((profiles.data || []).map((profile: any) => [profile.id, profile.full_name]));
-      const namesByMembership = new Map((actors.data || []).map((actor: any) => [actor.id, namesByUser.get(actor.user_id) || "Membro do tenant"]));
+      const namesByMembership = new Map((actors.data || []).map((actor: any) => [actor.id, namesByUser.get(actor.user_id) || "Pessoa da equipe"]));
       return res.json({
         events: (result.data || []).map((event: any) => ({
           ...event,
@@ -1331,7 +1331,7 @@ export function createIntegrityRouter(
       return res.json({ tasks: (result.data || []).map((item: any) => ({
         ...item,
         assignee_name: names.get(item.assignee_membership_id) || null,
-        creator_name: names.get(item.created_by_membership_id) || "Membro do tenant",
+        creator_name: names.get(item.created_by_membership_id) || "Pessoa da equipe",
         completed_by_name: names.get(item.completed_by_membership_id) || null,
       })) });
     }),
@@ -1635,7 +1635,7 @@ export function createIntegrityRouter(
         : { data: [], error: null };
       if (profiles.error) return res.status(500).json({ error: "Não foi possível carregar os nomes dos responsáveis." });
       const profileNames = new Map((profiles.data || []).map((profile: any) => [profile.id, profile.full_name]));
-      const namedMembers = (members.data || []).map((member: any) => ({ ...member, name: profileNames.get(member.user_id) || "Membro do tenant" }));
+      const namedMembers = (members.data || []).map((member: any) => ({ ...member, name: profileNames.get(member.user_id) || "Pessoa da equipe" }));
       const checks = [
         { key: "organization", label: "Dados da organização", complete: Boolean((req as any).tenantContext?.tenant?.name) },
         { key: "texts", label: "Textos e instruções", complete: Boolean(settings.data?.configured_at && settings.data?.introduction) },
@@ -1646,8 +1646,8 @@ export function createIntegrityRouter(
         { key: "responsibles", label: "Responsáveis ativos", complete: namedMembers.length > 0 },
         { key: "committee", label: "Comitê ativo com membros", complete: (committees.data || []).some((item: any) => item.status === "active" && (committeeMembers.data || []).some((member: any) => member.committee_id === item.id && member.active)) },
         { key: "investigators", label: "Investigadores definidos", complete: (committeeMembers.data || []).some((member: any) => member.active) },
-        { key: "routing", label: "Roteamento ou fallback ativo", complete: (routingRules.data || []).some((item: any) => item.status === "active" && item.active) || Boolean(settings.data?.default_assignee_membership_id || settings.data?.default_committee_id) },
-        { key: "sla", label: "SLAs definidos", complete: Boolean(settings.data?.default_sla_hours && settings.data?.treatment_sla_hours) },
+        { key: "routing", label: "Encaminhamento automático definido", complete: (routingRules.data || []).some((item: any) => item.status === "active" && item.active) || Boolean(settings.data?.default_assignee_membership_id || settings.data?.default_committee_id) },
+        { key: "sla", label: "Prazos definidos", complete: Boolean(settings.data?.default_sla_hours && settings.data?.treatment_sla_hours) },
         { key: "communication", label: "Política de comunicação", complete: Boolean(settings.data?.communication_policy) },
         { key: "channel_test", label: "Canal testado", complete: Boolean(settings.data?.channel_tested_at) },
         { key: "published", label: "Canal publicado", complete: Boolean(settings.data?.channel_published_at && (channels.data || []).some((item: any) => item.active)) },
@@ -2142,7 +2142,7 @@ export function createIntegrityRouter(
       const profiles = userIds.length ? await db.from("profiles").select("id,full_name").in("id", userIds) : { data: [], error: null };
       if (memberships.error || profiles.error) return res.status(500).json({ error: "Não foi possível identificar os investigadores." });
       const profileNames = new Map((profiles.data || []).map((item: any) => [item.id, item.full_name]));
-      const names = new Map((memberships.data || []).map((item: any) => [item.id, profileNames.get(item.user_id) || "Membro do tenant"]));
+      const names = new Map((memberships.data || []).map((item: any) => [item.id, profileNames.get(item.user_id) || "Pessoa da equipe"]));
       return res.json({ collaborators: (rows.data || []).map((item: any) => ({ ...item, name: names.get(item.membership_id) || "Membro indisponível" })) });
     }),
   );
@@ -2337,7 +2337,7 @@ export function createIntegrityRouter(
         const roles = (membershipRoles.data || []).filter((item: any) => item.membership_id === member.id);
         const permissionKeys = [...new Set(roles.flatMap((role: any) => (rolePermissions.data || []).filter((item: any) => item.role_id === role.role_id).map((item: any) => item.permissions?.key)).filter(Boolean))];
         return {
-          membership_id: member.id, name: names.get(member.user_id) || "Membro do tenant", status: member.status,
+          membership_id: member.id, name: names.get(member.user_id) || "Pessoa da equipe", status: member.status,
           roles: roles.map((item: any) => item.roles?.name || item.roles?.key).filter(Boolean), permissions: permissionKeys,
           committees: (committees.data || []).filter((item: any) => item.membership_id === member.id && item.active).map((item: any) => item.integrity_committees?.name).filter(Boolean),
           active_cases: (assignments.data || []).filter((item: any) => item.owner_membership_id === member.id).length + (collaborators.data || []).filter((item: any) => item.membership_id === member.id).length,
@@ -2377,7 +2377,7 @@ export function createIntegrityRouter(
       const profiles = userIds.length ? await db.from("profiles").select("id,full_name").in("id", userIds) : { data: [], error: null };
       if (memberships.error || profiles.error) return res.status(500).json({ error: "Não foi possível identificar os responsáveis." });
       const profileNames = new Map<string,string>((profiles.data || []).map((item: any) => [item.id,String(item.full_name || "")]));
-      const memberNames = new Map<string,string>((memberships.data || []).map((item: any) => [item.id,profileNames.get(item.user_id) || "Membro do tenant"]));
+      const memberNames = new Map<string,string>((memberships.data || []).map((item: any) => [item.id,profileNames.get(item.user_id) || "Pessoa da equipe"]));
       let identity: any = null;
       if (includeIdentity && found.data.integrity_reports.reporter_mode === "identified") {
         const identityResult = await db.from("integrity_report_identities").select("name,email,phone").eq("report_id", found.data.report_id).maybeSingle();
@@ -2390,7 +2390,7 @@ export function createIntegrityRouter(
         protocol: found.data.protocol, status: found.data.status, category: found.data.integrity_categories?.name,
         severity: found.data.severity, priority: found.data.priority, unit: found.data.integrity_units?.name,
         committee: found.data.integrity_committees?.name, owner: memberNames.get(found.data.owner_membership_id) || null,
-        collaborators: (collaborators.data || []).map((item: any) => memberNames.get(item.membership_id) || "Membro do tenant"),
+        collaborators: (collaborators.data || []).map((item: any) => memberNames.get(item.membership_id) || "Pessoa da equipe"),
         createdAt: found.data.created_at, firstActionAt: found.data.first_action_at,
         firstResponseDueAt: found.data.first_response_due_at, treatmentDueAt: found.data.treatment_due_at, closedAt: found.data.closed_at,
         subject: found.data.integrity_reports.subject, description: found.data.integrity_reports.description,
