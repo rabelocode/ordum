@@ -1,47 +1,49 @@
 Owner: chatgpt_backend
 Status: ready_for_product_review
 Branch: fix/admin-functional-recovery
-Head: b8fda0eaedf07529aa3f81208c95660216b2b018
+Head: bd20d78cf84fdd71a8de9b0eb4a9848d480a3a3b
 Implemented:
-- Integridade reorganizado em cinco áreas de negócio: Visão geral, Casos, Investigações, Relatórios e Configurações; implantação e regras técnicas ficaram dentro do contexto correto.
-- Home refeita para começar por atenção necessária, casos do usuário e somente os indicadores essenciais.
-- Caixa de casos refeita com visões rápidas, busca, filtros em drawer, paginação no servidor, responsável/atividade legíveis e cards mobile.
-- Detalhe do caso refeita com cabeçalho operacional, ações contextuais, visão geral, investigação, conversa, evidências e histórico; comunicação externa exige confirmação explícita e notas privadas permanecem separadas.
-- Configurações e primeiros passos simplificados com CTAs específicos, textos humanos e canal pronto/publicado; chaves internas e termos de banco não aparecem nos formulários.
-- Admin reorganizado por Comercial, Clientes, Financeiro, Operação e Administração; itens de engenharia/deploy foram retirados da navegação comum.
-- Dashboard Admin refeito para ações pendentes, funil comercial simples, receita e saúde de clientes, sem parede de métricas.
-- Página da empresa refeita em Resumo, Produtos, Comercial, Financeiro, Pessoas e acessos e Histórico; dados agregados do Integridade preservam a fronteira de confidencialidade.
-- Leads ganhou fluxo comercial legível, ações rápidas desktop/mobile e transições com mensagens humanas; propostas e contratos usam a camada centralizada de erros amigáveis.
-- API da caixa de casos passou a suportar Todos, Não atribuídos, Meus casos, Aguardando resposta e Encerrados, incluindo última atividade e mensagem pendente.
-- Fallbacks de nomes e checklist operacional foram traduzidos para linguagem de equipe, encaminhamento e prazos.
+- Fluxo comercial completo operável pela interface: lead, contato, etapa, demonstração, resultado, proposta, aprovação segregada, envio, aceite, contrato, assinatura externa auditável, ativação em trial, cliente, implantação e acesso ao Integridade.
+- Demonstrações reconstruídas com visões Próximas/Hoje/Realizadas/Canceladas, agendamento, reagendamento, resultado e ações contextuais sem diálogos nativos.
+- Propostas reconstruídas com wizard Cliente → Produtos → Plano e preço → Condições → Revisão, totais visuais, validade padrão, progresso e ações válidas por estado.
+- Contratos reconstruídos com progresso real, assinatura externa explícita e ativação de cliente em trial sem chamar Billing/Asaas.
+- Leads receberam criação, registro de contato, mudança de etapa, agendamento de demo, observações e ações desktop/mobile.
+- Implantação virou fila operacional com progresso, responsável, prazo, próxima ação e encaminhamento para a configuração do produto, sem duplicar o wizard do Integridade.
+- Customer Success virou carteira por saúde; Suporte recebeu visões operacionais e separação entre mensagem externa e nota interna; Auditoria passou a usar frases humanas e detalhes técnicos recolhidos.
+- Erros técnicos conhecidos são traduzidos em orientação de negócio; autoaprovação informa a segregação de responsabilidade sem expor código/status HTTP.
+- Catálogo contratado em português agora resolve corretamente as rotas do workspace (`integridade`, `pessoas`, `talentos`).
+- Layouts mobile em cards validados para leads, demonstrações, propostas, contratos, implantação e empresa.
 Database:
-- Nenhuma migration nova; infraestrutura, RLS e Storage existentes foram preservados.
+- Migration `20260811155637_commercial_product_recovery_flow.sql` aplicada oficialmente no Supabase: metadados de envio da proposta e assinatura externa do contrato, de forma aditiva.
+- Fixture comercial descartável removida integralmente; nenhum dado real foi alterado.
 Tests:
-- Secret scan PASS: 323 arquivos.
-- Migration validation PASS: 30 migrations ordenadas.
+- Secret scan PASS: 338 arquivos rastreados.
+- Migration validation PASS: 31 migrations ordenadas.
 - Lint PASS; typecheck PASS; build client/server/Vercel PASS.
-- Suite: 178 testes, 177 PASS, 0 FAIL, 1 live comercial SKIP explícito.
-- Live Integridade E2E PASS: run `integrity_e2e_1786460180307_c32b81e5`; health 200; report 201; browser QA e Admin Product QA PASS; rate limit na tentativa 21; cleanup PASS; tenants residuais 0; Auth residual 0.
+- Suite completa: 183 testes, 182 PASS, 0 FAIL, 1 live comercial SKIP explícito.
+- Produto comercial: 5 testes direcionados PASS, incluindo ausência de diálogos nativos, ativação trial-only, catálogo do workspace, validade e erro humano de autoaprovação.
 Preview:
-- READY — `dpl_DQe4JZhmy2RJkjpQPYnuqDwoHbny`
-- https://ordum-nnbcil55u-ordum.vercel.app
+- READY — `dpl_GKFfVUeTphk4CYSDhShbxPQ7LWft`
+- https://ordum-pfj82c5cx-ordum.vercel.app
 - Alias: https://ordum-git-fix-admin-functional-recovery-ordum.vercel.app
 QA:
-- Admin desktop: dashboard por ação e empresa/produtos percorridos; navegação comercial validada; nenhum termo técnico proibido visível na empresa.
-- Integridade desktop: tenant_admin e compliance percorreram caixa, exportação, detalhe, tabs e configuração/primeiros passos.
-- Integridade mobile 390x844: investigador atribuído percorreu cards e detalhe; investigador não atribuído permaneceu bloqueado.
-- Canal público mobile, anonimato/identificação, RLS assigned/unassigned/cross-tenant/identity, mensagens, evidências, PDF, relatórios e aggregate-only validados.
-- Screenshots QA: `tmp/product-recovery/*` no ambiente da execução; inspeção visual aprovada sem overflow bloqueante.
-- Preview final respondeu HTTP 200; Vercel registrou 0 logs 5xx no deployment final.
+- Browser desktop comprovou: login Admin → criar lead → registrar contato → alterar etapa → agendar demo → registrar resultado → criar proposta com Integridade → aprovação por segundo admin → envio → aceite → contrato → aprovação → assinatura externa → ativação trial → empresa → implantação → workspace Integridade.
+- Segregação comprovada: o criador não aprovou a própria proposta; um segundo ator descartável aprovou, e o primeiro aprovou o contrato.
+- Evidência de dados antes do cleanup: leads 1; demos 1; propostas aceitas 1; contratos assinados 1; tenants em implantação 1; soluções ativas 1; onboarding_runs 1.
+- Cleanup comprovado: Auth E2E 0; platform_members E2E 0; leads 0; demos 0; propostas 0; tenants 0; planos QA 0; equipes QA 0.
+- Mobile 390x844 comprovado em leads, demos, propostas, contratos, implantação e empresa; leads usaram cards sem tabela horizontal.
+- Screenshots versionados em `artifacts/qa/product-recovery-2/01-lead-created.png` até `12-mobile-company.png`.
+- Preview final autenticado carregou a área de Leads sem erro técnico visível; deployment final registrou 0 respostas 5xx na janela inspecionada.
+- Supabase Advisors executados: Security 58 avisos (45 INFO, 13 WARN) e Performance 219 (188 INFO, 31 WARN); nenhuma alteração de RLS foi introduzida por este pacote.
 Blockers:
-- `CRON_SECRET` é devolvido redigido pelo pull da Vercel; scheduler não foi reexecutado nesta rodada. O teste unitário de proteção/idempotência passou e a validação live anterior permanece registrada no handoff precedente.
-- Billing/Asaas continua como dependência externa controlada e não foi alterado.
-- Demonstrações, Billing e telas administrativas secundárias ainda usam diálogos legados; ficaram fora do P0 entregue e não devem ser considerados recuperados visualmente.
-- Fluxo comercial completo lead → demo → proposta → contrato não foi mutado em browser contra dados reais; regras/transições passaram na suíte, mas o QA visual descartável completo permanece pendente.
-- Assinatura eletrônica continua indisponível por ausência de provedor real; nenhum estado fictício foi adicionado.
+- O catálogo real possui somente um plano ativo de teste, com nome e configuração comercial inadequados e sem dias de trial; o QA usou plano descartável e não alterou preços/regras reais. É necessária configuração comercial do catálogo pelo responsável.
+- Billing/Asaas permanece bloqueado por credenciais externas e não foi usado; ativação testada foi exclusivamente trial.
+- Assinatura eletrônica não possui provedor real; o produto registra apenas assinatura externa de forma auditável.
+- Entrada do cliente no workspace ainda depende de convite/membership; o Admin não faz impersonation silenciosa. O próximo pacote deve tornar o convite do owner uma etapa operacional da implantação.
+- Suporte possui fila e linguagem recuperadas, mas o detalhe conversacional completo ainda é um gargalo de produto.
 Suggested next package:
-- Product review do P0 entregue com decisão sobre ajustes de densidade e nomenclatura.
-- Recuperar visualmente Demonstrações, Propostas e Contratos, removendo diálogos nativos restantes.
-- Criar fixture comercial descartável independente de Billing para QA browser lead → contrato.
-- Refinar Administração/Auditoria e esconder detalhes técnicos em drawer autorizado.
-- Revalidar o scheduler live somente com acesso seguro ao segredo do Preview.
+- Revisão de produto do fluxo comercial e ajustes finos de densidade/nomenclatura usando as evidências versionadas.
+- Configurar catálogo comercial real (planos, produtos, trial e métodos) sem hardcode e com decisão explícita de valores.
+- Completar convite do owner/equipe diretamente pela implantação e conduzir o primeiro acesso ao wizard do Integridade.
+- Completar detalhe conversacional de Suporte com mensagens, notas, responsável e timeline.
+- Revalidar Billing/Asaas Sandbox quando as credenciais externas estiverem disponíveis.
