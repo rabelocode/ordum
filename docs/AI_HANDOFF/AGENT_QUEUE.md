@@ -1,49 +1,42 @@
 Owner: chatgpt_backend
 Status: ready_for_product_review
 Branch: fix/admin-functional-recovery
-Head: bd20d78cf84fdd71a8de9b0eb4a9848d480a3a3b
+Head: 3bb0d172e3e4ff9184c052137057cef590ab4bef
 Implemented:
-- Fluxo comercial completo operável pela interface: lead, contato, etapa, demonstração, resultado, proposta, aprovação segregada, envio, aceite, contrato, assinatura externa auditável, ativação em trial, cliente, implantação e acesso ao Integridade.
-- Demonstrações reconstruídas com visões Próximas/Hoje/Realizadas/Canceladas, agendamento, reagendamento, resultado e ações contextuais sem diálogos nativos.
-- Propostas reconstruídas com wizard Cliente → Produtos → Plano e preço → Condições → Revisão, totais visuais, validade padrão, progresso e ações válidas por estado.
-- Contratos reconstruídos com progresso real, assinatura externa explícita e ativação de cliente em trial sem chamar Billing/Asaas.
-- Leads receberam criação, registro de contato, mudança de etapa, agendamento de demo, observações e ações desktop/mobile.
-- Implantação virou fila operacional com progresso, responsável, prazo, próxima ação e encaminhamento para a configuração do produto, sem duplicar o wizard do Integridade.
-- Customer Success virou carteira por saúde; Suporte recebeu visões operacionais e separação entre mensagem externa e nota interna; Auditoria passou a usar frases humanas e detalhes técnicos recolhidos.
-- Erros técnicos conhecidos são traduzidos em orientação de negócio; autoaprovação informa a segregação de responsabilidade sem expor código/status HTTP.
-- Catálogo contratado em português agora resolve corretamente as rotas do workspace (`integridade`, `pessoas`, `talentos`).
-- Layouts mobile em cards validados para leads, demonstrações, propostas, contratos, implantação e empresa.
+- Convite do responsável do cliente integrado à página da empresa e à implantação, sem ativação antecipada: novo usuário permanece convidado até definir senha; usuário já verificado recebe acesso ativo.
+- Aceite do convite agora conclui a ativação do membership somente após a senha ser definida.
+- Suporte ganhou detalhe operacional com solicitação, conversa, notas internas, mensagens ao cliente e transições contextuais auditadas.
+- Catálogo de planos foi reconstruído com editor estruturado para produtos, preços, ciclo, trial, carência e limites; nenhuma regra comercial real foi inventada ou alterada.
+- Asaas permanece desativado, sandbox-only e fail-closed, pronto para receber as credenciais futuramente.
 Database:
-- Migration `20260811155637_commercial_product_recovery_flow.sql` aplicada oficialmente no Supabase: metadados de envio da proposta e assinatura externa do contrato, de forma aditiva.
-- Fixture comercial descartável removida integralmente; nenhum dado real foi alterado.
+- Migration `20260811170241_tenant_owner_invitation.sql` aplicada oficialmente no Supabase.
+- RPC `admin_prepare_tenant_owner_invitation` é atômica, service-role-only, SECURITY DEFINER com search_path fixo e sem EXECUTE para PUBLIC/anon/authenticated.
+- Prova transacional com rollback validou membership, papel tenant_admin e convite sem deixar resíduo.
 Tests:
-- Secret scan PASS: 338 arquivos rastreados.
-- Migration validation PASS: 31 migrations ordenadas.
+- Secret scan PASS: 341 arquivos rastreados.
+- Migration validation PASS: 32 migrations ordenadas.
 - Lint PASS; typecheck PASS; build client/server/Vercel PASS.
-- Suite completa: 183 testes, 182 PASS, 0 FAIL, 1 live comercial SKIP explícito.
-- Produto comercial: 5 testes direcionados PASS, incluindo ausência de diálogos nativos, ativação trial-only, catálogo do workspace, validade e erro humano de autoaprovação.
+- Suite completa: 186 testes, 185 PASS, 0 FAIL, 1 live comercial SKIP explícito.
+- Regressões cobertas: convite não ativo antes do aceite, preparação atômica, separação suporte interno/externo e catálogo sem JSON cru.
 Preview:
-- READY — `dpl_GKFfVUeTphk4CYSDhShbxPQ7LWft`
-- https://ordum-pfj82c5cx-ordum.vercel.app
+- READY — `dpl_9SChC2ZNufX9CtpzRkKfM4EeAmnM`
+- https://ordum-mhje7wvnl-ordum.vercel.app
 - Alias: https://ordum-git-fix-admin-functional-recovery-ordum.vercel.app
 QA:
-- Browser desktop comprovou: login Admin → criar lead → registrar contato → alterar etapa → agendar demo → registrar resultado → criar proposta com Integridade → aprovação por segundo admin → envio → aceite → contrato → aprovação → assinatura externa → ativação trial → empresa → implantação → workspace Integridade.
-- Segregação comprovada: o criador não aprovou a própria proposta; um segundo ator descartável aprovou, e o primeiro aprovou o contrato.
-- Evidência de dados antes do cleanup: leads 1; demos 1; propostas aceitas 1; contratos assinados 1; tenants em implantação 1; soluções ativas 1; onboarding_runs 1.
-- Cleanup comprovado: Auth E2E 0; platform_members E2E 0; leads 0; demos 0; propostas 0; tenants 0; planos QA 0; equipes QA 0.
-- Mobile 390x844 comprovado em leads, demos, propostas, contratos, implantação e empresa; leads usaram cards sem tabela horizontal.
-- Screenshots versionados em `artifacts/qa/product-recovery-2/01-lead-created.png` até `12-mobile-company.png`.
-- Preview final autenticado carregou a área de Leads sem erro técnico visível; deployment final registrou 0 respostas 5xx na janela inspecionada.
-- Supabase Advisors executados: Security 58 avisos (45 INFO, 13 WARN) e Performance 219 (188 INFO, 31 WARN); nenhuma alteração de RLS foi introduzida por este pacote.
+- Browser autenticado validou editor estruturado de planos, sem IDs/JSON expostos e com rótulos comerciais legíveis.
+- Browser autenticado validou Suporte: abertura do chamado, nota interna privada, resposta visível ao cliente e mudança Novo → Em triagem com motivo.
+- Browser autenticado validou Pessoas e acessos: formulário de convite do responsável com nome/e-mail e CTA de envio, sem diálogo nativo.
+- Mobile 390x844 validou página da empresa, painel de acesso e formulário de convite com ações acessíveis.
+- Fixture descartável de suporte removida: ticket 0, eventos 0, transições 0 e tenant 0.
+- Deployment inspecionado sem respostas 5xx na janela do QA.
+- Supabase Advisors: Security 58 (45 INFO, 13 WARN); Performance 218 (187 INFO, 31 WARN). A nova RPC não adicionou exposição pública.
 Blockers:
-- O catálogo real possui somente um plano ativo de teste, com nome e configuração comercial inadequados e sem dias de trial; o QA usou plano descartável e não alterou preços/regras reais. É necessária configuração comercial do catálogo pelo responsável.
-- Billing/Asaas permanece bloqueado por credenciais externas e não foi usado; ativação testada foi exclusivamente trial.
-- Assinatura eletrônica não possui provedor real; o produto registra apenas assinatura externa de forma auditável.
-- Entrada do cliente no workspace ainda depende de convite/membership; o Admin não faz impersonation silenciosa. O próximo pacote deve tornar o convite do owner uma etapa operacional da implantação.
-- Suporte possui fila e linguagem recuperadas, mas o detalhe conversacional completo ainda é um gargalo de produto.
+- Valores, nomes e regras do catálogo comercial real dependem de decisão do responsável; a interface está pronta e nenhum valor fictício foi publicado.
+- Entrega externa do e-mail de convite depende da configuração SMTP do projeto Supabase; criação, autorização e aceite no produto foram implementados e testados sem envio para destinatário real.
+- Billing/Asaas aguarda credenciais futuras por decisão do responsável; nenhuma cobrança foi executada e nenhum segredo foi alterado.
+- Assinatura eletrônica continua sem provedor; somente o registro auditável de assinatura externa está disponível.
 Suggested next package:
-- Revisão de produto do fluxo comercial e ajustes finos de densidade/nomenclatura usando as evidências versionadas.
-- Configurar catálogo comercial real (planos, produtos, trial e métodos) sem hardcode e com decisão explícita de valores.
-- Completar convite do owner/equipe diretamente pela implantação e conduzir o primeiro acesso ao wizard do Integridade.
-- Completar detalhe conversacional de Suporte com mensagens, notas, responsável e timeline.
-- Revalidar Billing/Asaas Sandbox quando as credenciais externas estiverem disponíveis.
+- Revisão visual de produto do catálogo, convite e Suporte usando o Preview publicado.
+- Definir e cadastrar planos, preços, trial e limites comerciais reais pelo novo editor.
+- Configurar SMTP transacional antes do primeiro convite externo real.
+- Quando disponível, cadastrar a API do Asaas Sandbox e executar a homologação E2E já preparada.
