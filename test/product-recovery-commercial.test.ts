@@ -36,3 +36,8 @@ test('workspace resolves contracted catalog keys into product routes',()=>{
   assert.match(workspace,/hasSolution\('pessoas'\).*modules\.push\('people'\)/);
   assert.match(workspace,/hasSolution\('talentos'\).*modules\.push\('talent'\)/);
 });
+
+test('commercial approval conflicts use a human message and proposals have a default validity',()=>{
+  assert.match(read('src/lib/userFacingError.ts'),/self_approval_forbidden[\s\S]*outra pessoa autorizada/);
+  assert.match(read('src/pages/admin/ProposalsPage.tsx'),/valid_until:defaultValidity\(\)/);
+});

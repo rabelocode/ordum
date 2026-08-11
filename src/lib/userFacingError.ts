@@ -1,6 +1,7 @@
 type ErrorPayload = { error?: unknown; code?: unknown; message?: unknown } | null | undefined;
 
 const KNOWN_ERRORS: Array<[RegExp, string]> = [
+  [/self_approval_forbidden/i, "A aprovação precisa ser realizada por outra pessoa autorizada."],
   [/proposal_invalid_transition|proposta.*aprova/i, "Esta proposta precisa ser aprovada antes de registrar o aceite."],
   [/contract.*proposal|proposta.*aceit/i, "Registre o aceite da proposta antes de gerar o contrato."],
   [/product|produto|item/i, "Inclua pelo menos um produto antes de continuar."],
