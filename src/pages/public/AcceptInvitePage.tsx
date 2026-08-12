@@ -13,10 +13,12 @@ export function AcceptInvitePage() {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [errorMessage, setErrorMessage] = useState("");
   const [hasValidSession, setHasValidSession] = useState<boolean | null>(null);
+  const [inviteContext,setInviteContext]=useState<{organization:string;role:string;expires_at?:string}|null>(null);
 
   useEffect(() => {
-    supabase.auth.getSession().then(({ data: { session } }) => {
+    supabase.auth.getSession().then(async ({ data: { session } }) => {
       setHasValidSession(!!session);
+      if(session){const response=await fetch("/api/auth/invite-context",{headers:{Authorization:`Bearer ${session.access_token}`}});if(response.ok)setInviteContext(await response.json());}
     });
 
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
@@ -128,11 +130,9 @@ export function AcceptInvitePage() {
           <div className="w-12 h-12 rounded-xl bg-[#121413] text-white font-black text-lg mx-auto mb-4 flex items-center justify-center">
             O.
           </div>
-          <h1 className="text-xl font-black text-[#202322] tracking-tight mb-1">
-            Aceitar Convite ORDUM
-          </h1>
+          <h1 className="text-xl font-black text-[#202322] tracking-tight mb-1">{inviteContext?`Você foi convidado para o Ordum Integridade da ${inviteContext.organization}`:"Configure seu acesso à Ordum"}</h1>
           <p className="text-xs text-[#626866]">
-            Defina seu nome e senha para ativar seu acesso à plataforma.
+            {inviteContext?`Função: ${inviteContext.role}. Defina sua senha para entrar diretamente no ambiente da empresa.`:"Defina seu nome e senha para ativar o acesso."}
           </p>
         </div>
 

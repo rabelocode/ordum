@@ -103,13 +103,14 @@ export function createIntegrityPublicRouter(getSupabaseAdmin: () => any) {
           .json({ error: "Canal não encontrado, pausado ou indisponível." });
       const channelRow = await db.from("integrity_channels").select("id,tenant_id,privacy_notice,confirmation_message").eq("public_slug",req.params.slug).eq("active",true).maybeSingle();
       if(channelRow.error||!channelRow.data)return res.status(404).json({error:"Canal não encontrado, pausado ou indisponível."});
-      const [departments,fields,organization]=await Promise.all([
+      const [departments,fields,organization,settings]=await Promise.all([
         db.from("integrity_departments").select("id,unit_id,name").eq("tenant_id",channelRow.data.tenant_id).eq("active",true).order("name"),
         db.from("integrity_custom_fields").select("id,field_key,label,help_text,field_type,required,options,sort_order").eq("tenant_id",channelRow.data.tenant_id).or(`channel_id.eq.${channelRow.data.id},channel_id.is.null`).eq("active",true).order("sort_order"),
         db.from("tenants").select("name").eq("id",channelRow.data.tenant_id).maybeSingle(),
+        db.from("integrity_settings").select("branding").eq("tenant_id",channelRow.data.tenant_id).maybeSingle(),
       ]);
-      if(departments.error||fields.error||organization.error)return res.status(503).json({error:"Configuração do canal temporariamente indisponível."});
-      return res.json({ channel: {...result.data,organization_name:organization.data?.name||result.data.channel_name,privacy_notice:channelRow.data.privacy_notice,confirmation_message:channelRow.data.confirmation_message,departments:departments.data||[],custom_fields:fields.data||[]} });
+      if(departments.error||fields.error||organization.error||settings.error)return res.status(503).json({error:"Configuração do canal temporariamente indisponível."});
+      return res.json({ channel: {...result.data,organization_name:settings.data?.branding?.display_name||organization.data?.name||result.data.channel_name,branding:settings.data?.branding||{},privacy_notice:channelRow.data.privacy_notice,confirmation_message:channelRow.data.confirmation_message,departments:departments.data||[],custom_fields:fields.data||[]} });
     }),
   );
 

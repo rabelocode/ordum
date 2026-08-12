@@ -18,6 +18,7 @@ import { captureClientException } from "../../lib/observability";
 type Channel = {
   channel_name: string;
   organization_name?: string;
+  branding?: { display_name?:string;primary_color?:string;institutional_message?:string;institutional_contact?:string;logo_url?:string };
   introduction?: string;
   instructions?: string;
   allows_anonymous: boolean;
@@ -334,13 +335,14 @@ export function IntegrityChannelPage({ slug }: { slug: string }) {
       <div className="mx-auto max-w-3xl space-y-7">
         <header className="text-center">
           <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-full bg-white shadow-sm">
-            <ShieldCheck className="h-8 w-8 text-[#3457D5]" />
+            {channel.branding?.logo_url?<img src={channel.branding.logo_url} alt={`Marca de ${channel.organization_name||channel.channel_name}`} className="h-12 w-12 rounded-full object-contain"/>:<ShieldCheck className="h-8 w-8" style={{color:channel.branding?.primary_color||"#3457D5"}} />}
           </div>
-          <p className="text-xs font-bold uppercase tracking-[.2em] text-[#3457D5]">Canal seguro e confidencial</p>
+          <p className="text-xs font-bold uppercase tracking-[.2em]" style={{color:channel.branding?.primary_color||"#3457D5"}}>Canal seguro e confidencial</p>
           <h1 className="mt-2 text-3xl font-bold text-[#202322]">Canal de Integridade — {channel.organization_name||channel.channel_name}</h1>
           <p className="mx-auto mt-3 max-w-2xl text-sm leading-6 text-[#626866]">
-            {channel.introduction}
+            {channel.branding?.institutional_message||channel.introduction}
           </p>
+          {channel.branding?.institutional_contact?<p className="mt-2 text-xs text-[#626866]">Contato institucional: {channel.branding.institutional_contact}</p>:null}
           <div className="mx-auto mt-5 grid max-w-2xl gap-2 text-left text-sm sm:grid-cols-2"><Trust text="Você pode fazer o relato de forma anônima."/><Trust text="A equipe pode conversar com você sem revelar sua identidade."/><Trust text="As informações são acessadas somente por pessoas autorizadas."/><Trust text="Relatar de boa-fé ajuda a construir um ambiente mais seguro."/></div>
         </header>
         <nav
@@ -353,7 +355,8 @@ export function IntegrityChannelPage({ slug }: { slug: string }) {
               setReportStep(1);
               setError("");
             }}
-            className={`rounded-lg px-4 py-3 text-sm font-semibold ${mode === "report" ? "bg-[#3457D5] text-white" : "text-[#626866]"}`}
+            style={mode === "report"?{backgroundColor:channel.branding?.primary_color||"#3457D5"}:undefined}
+            className={`rounded-lg px-4 py-3 text-sm font-semibold ${mode === "report" ? "text-white" : "text-[#626866]"}`}
           >
             Fazer um relato
           </button>
@@ -362,7 +365,8 @@ export function IntegrityChannelPage({ slug }: { slug: string }) {
               setMode("track");
               setError("");
             }}
-            className={`rounded-lg px-4 py-3 text-sm font-semibold ${mode === "track" ? "bg-[#3457D5] text-white" : "text-[#626866]"}`}
+            style={mode === "track"?{backgroundColor:channel.branding?.primary_color||"#3457D5"}:undefined}
+            className={`rounded-lg px-4 py-3 text-sm font-semibold ${mode === "track" ? "text-white" : "text-[#626866]"}`}
           >
             Acompanhar relato
           </button>

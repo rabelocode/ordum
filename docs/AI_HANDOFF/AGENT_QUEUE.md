@@ -1,16 +1,16 @@
 Owner: chatgpt_backend
 Status: ready_for_product_review
 Branch: fix/admin-functional-recovery
-Head: c5a79993d69ca2b2a2df4e8b634be0218454ff8d
+Head: cc19bdf89544200f631e42c404804b2edbf927b4
 Implemented:
-- Uma empresa agora configura e publica o Canal de Integridade, recebe relatos anônimos ou identificados, acompanha por protocolo + segredo e trata o caso até decisão, encerramento e reabertura pela interface.
-- Canal público reconstruído com linguagem de confiança, wizard em seis etapas, revisão, comprovante copiável/baixável e miniportal de acompanhamento responsivo.
-- Bug de envio antecipado ao avançar para a revisão corrigido: continuar e enviar são ações distintas.
-- Caixa de casos ganhou visões Novos, Sem responsável e SLA crítico, mantendo filtros avançados, paginação no servidor e cards mobile.
-- Decisão formal com classificação, conclusão, medidas, fundamentação privada, mensagem opcional ao denunciante e checklist de encerramento.
-- Evidências com seleção/drag-and-drop, descrição, sinalização de visibilidade e cadeia de custódia sem expor caminho de Storage.
-- Timeline não exibe chaves técnicas desconhecidas; usa mensagem operacional segura.
-- Cabeçalho público usa o nome da organização e evita título duplicado.
+- Pacote Ordum Integridade - Productization & Customer Operations concluído integralmente.
+- Gestão de Equipe de Integridade: convidar pessoas (nome, e-mail, função), reenviar convites, cancelar convite pendente, alterar papel/status, suspender, reativar, remover acesso com preservação de histórico. Papéis amigáveis (Administrador, Compliance, Investigador, Membro de Comitê) sem exibir keys internas. Proteção contra modificação/suspensão/remoção do último admin.
+- Aceite de Convite: rota pública /#/auth/accept-invite exibindo organização, papel e convidador, com conclusão de cadastro e redirecionamento direto sem intervenção manual no banco.
+- Wizard de First-Run em 6 Etapas: progresso derivado do estado real do produto (Organização, Equipe, Categorias, Prazos, Personalização, Revisão e Publicação).
+- Kit do Canal (IntegrityChannelKit): exibição de link público comercial, QR Code baixável em PNG, previsualização interativa desktop/mobile, textos para comunicação interna/intranet/e-mail.
+- Personalização do Canal & Slug: nome exibido, logotipo HTTPS, cor principal com validação de contraste WCAG, textos institucionais, avisos de privacidade e slug personalizado seguro.
+- Preferências de Notificação: gestão de notificações no sistema e por e-mail por assunto (casos, mensagens, tarefas, SLA) sem expor dados sensíveis do relato no assunto.
+- Auditoria do Cliente & Governança: log de atividades operacionais amigável ("Mariana convidou Carlos..."), estatísticas e governança de acessos por membership.
 Database:
 - Nenhuma migration ou DDL necessária neste pacote.
 - RLS, Storage privado, signed URLs, rate limit persistente e aggregate-only preservados e exercitados no E2E.

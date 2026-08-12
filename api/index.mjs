@@ -4539,6 +4539,11 @@ function routingExplanation(rule, labels = {}) {
 }
 
 // src/server/integrityRouter.ts
+var hasReadableWhiteContrast = (hex) => {
+  const values = [1, 3, 5].map((index) => Number.parseInt(hex.slice(index, index + 2), 16) / 255).map((value) => value <= 0.03928 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4);
+  const luminance = values[0] * 0.2126 + values[1] * 0.7152 + values[2] * 0.0722;
+  return 1.05 / (luminance + 0.05) >= 4.5;
+};
 var listSchema = z7.object({
   search: z7.string().trim().max(120).optional(),
   status: z7.string().max(40).optional(),
@@ -4594,7 +4599,13 @@ var settingsSchema = z7.object({
   allows_identified: z7.boolean(),
   default_sla_hours: z7.number().int().min(1).max(8760),
   automatic_acknowledgement: z7.string().trim().min(5).max(2e3),
-  branding: z7.record(z7.string(), z7.unknown()).default({}),
+  branding: z7.object({
+    display_name: z7.string().trim().max(160).nullable().optional(),
+    primary_color: z7.string().regex(/^#[0-9A-Fa-f]{6}$/).refine(hasReadableWhiteContrast, "Escolha uma cor com contraste suficiente.").default("#3457D5"),
+    institutional_message: z7.string().trim().max(1e3).nullable().optional(),
+    institutional_contact: z7.string().trim().max(200).nullable().optional(),
+    logo_url: z7.string().url().max(1e3).refine((value) => value.startsWith("https://"), "Use uma URL HTTPS.").nullable().optional()
+  }).passthrough().default({ primary_color: "#3457D5" }),
   attachment_policy: z7.record(z7.string(), z7.unknown()).default({}),
   communication_policy: z7.record(z7.string(), z7.unknown()).default({
     allow_reporter_messages: true,
@@ -4731,6 +4742,44 @@ var templateSchema = z7.object({
   body: z7.string().trim().min(2).max(1e4),
   active: z7.boolean().default(true)
 });
+var integrityTeamRoleSchema = z7.enum([
+  "tenant_admin",
+  "integrity_compliance",
+  "integrity_investigator",
+  "committee_member"
+]);
+var integrityInviteSchema = z7.object({
+  name: z7.string().trim().min(2).max(120),
+  email: z7.string().trim().email().max(254).transform((value) => value.toLowerCase()),
+  role: integrityTeamRoleSchema,
+  committee_id: z7.string().uuid().nullable().optional()
+});
+var integrityMemberUpdateSchema = z7.object({
+  role: integrityTeamRoleSchema.optional(),
+  status: z7.enum(["active", "suspended"]).optional(),
+  committee_id: z7.string().uuid().nullable().optional()
+}).refine((value) => value.role || value.status || value.committee_id !== void 0, {
+  message: "Informe uma altera\xE7\xE3o."
+});
+var notificationPreferencesSchema = z7.object({
+  in_app_enabled: z7.literal(true).default(true),
+  email_enabled: z7.boolean().default(false),
+  cases_enabled: z7.boolean().default(true),
+  messages_enabled: z7.boolean().default(true),
+  tasks_enabled: z7.boolean().default(true),
+  sla_enabled: z7.boolean().default(true)
+});
+var activityQuerySchema = z7.object({
+  from: z7.string().datetime().optional(),
+  to: z7.string().datetime().optional(),
+  type: z7.enum(["team", "settings", "channel", "case", "export"]).optional()
+});
+var integrityRoleLabel = {
+  tenant_admin: "Administrador",
+  integrity_compliance: "Compliance",
+  integrity_investigator: "Investigador",
+  committee_member: "Membro de Comit\xEA"
+};
 function createIntegrityRouter(getSupabaseAdmin2, authOverrides) {
   const router = express.Router();
   const auth = authOverrides || {
@@ -4770,6 +4819,45 @@ function createIntegrityRouter(getSupabaseAdmin2, authOverrides) {
       metadata: { tenant_id: tenantId(req), result: "success", ...metadata }
     });
     if (result.error) throw result.error;
+  }
+  const inviteRedirect = (req) => {
+    const configured = process.env.PUBLIC_APP_URL || process.env.VITE_APP_URL;
+    const origin = configured || req.headers.origin || `${req.protocol}://${req.get("host")}`;
+    return `${String(origin).replace(/\/$/, "")}/#/auth/accept-invite`;
+  };
+  async function findAuthUserByEmail(db, email) {
+    for (let page = 1; page <= 10; page += 1) {
+      const result = await db.auth.admin.listUsers({ page, perPage: 1e3 });
+      if (result.error) throw result.error;
+      const found = result.data.users.find((user) => user.email?.toLowerCase() === email);
+      if (found) return found;
+      if (result.data.users.length < 1e3) break;
+    }
+    return null;
+  }
+  async function activeTenantAdminCount(db, tenant, exceptMembershipId) {
+    const memberships = await db.from("memberships").select("id").eq("tenant_id", tenant).eq("status", "active");
+    if (memberships.error) throw memberships.error;
+    const ids = (memberships.data || []).map((item) => item.id).filter((id) => id !== exceptMembershipId);
+    if (!ids.length) return 0;
+    const roles = await db.from("membership_roles").select("membership_id,roles!inner(key,tenant_id)").in("membership_id", ids).eq("roles.tenant_id", tenant).eq("roles.key", "tenant_admin");
+    if (roles.error) throw roles.error;
+    return new Set((roles.data || []).map((item) => item.membership_id)).size;
+  }
+  async function assignIntegrityRole(db, tenant, member, requestedRole) {
+    const persistedRole = requestedRole === "committee_member" ? "integrity_investigator" : requestedRole;
+    const role = await db.from("roles").select("id,key").eq("tenant_id", tenant).eq("key", persistedRole).maybeSingle();
+    if (role.error || !role.data) throw new Error("A fun\xE7\xE3o selecionada n\xE3o est\xE1 dispon\xEDvel para esta empresa.");
+    const current = await db.from("membership_roles").select("role_id,roles!inner(key,tenant_id)").eq("membership_id", member).eq("roles.tenant_id", tenant);
+    if (current.error) throw current.error;
+    const integrityRoleIds = (current.data || []).filter((item) => ["tenant_admin", "integrity_compliance", "integrity_investigator"].includes(item.roles?.key)).map((item) => item.role_id);
+    if (integrityRoleIds.length) {
+      const removed = await db.from("membership_roles").delete().eq("membership_id", member).in("role_id", integrityRoleIds);
+      if (removed.error) throw removed.error;
+    }
+    const assigned = await db.from("membership_roles").upsert({ membership_id: member, role_id: role.data.id }, { onConflict: "membership_id,role_id" });
+    if (assigned.error) throw assigned.error;
+    return persistedRole;
   }
   async function validateRoutingReferences(db, tenant, value) {
     const membershipIds = [...new Set([
@@ -6332,6 +6420,34 @@ function createIntegrityRouter(getSupabaseAdmin2, authOverrides) {
     })
   );
   router.get(
+    "/notifications/preferences",
+    requireAny("integrity.notifications.read"),
+    asyncHandler(async (req, res) => {
+      const db = getSupabaseAdmin2();
+      const result = await db.from("integrity_notification_preferences").select("in_app_enabled,email_enabled,cases_enabled,messages_enabled,tasks_enabled,sla_enabled,updated_at").eq("tenant_id", tenantId(req)).eq("membership_id", membershipId(req)).maybeSingle();
+      if (result.error) return res.status(500).json({ error: "N\xE3o foi poss\xEDvel carregar suas prefer\xEAncias." });
+      return res.json({
+        preferences: result.data || { in_app_enabled: true, email_enabled: false, cases_enabled: true, messages_enabled: true, tasks_enabled: true, sla_enabled: true, updated_at: null },
+        email_delivery: process.env.INTEGRITY_EMAIL_PROVIDER ? "configured" : "unavailable"
+      });
+    })
+  );
+  router.put(
+    "/notifications/preferences",
+    requireAny("integrity.notifications.read"),
+    asyncHandler(async (req, res) => {
+      const parsed = notificationPreferencesSchema.safeParse(req.body);
+      if (!parsed.success) return res.status(400).json({ error: "Prefer\xEAncias inv\xE1lidas." });
+      if (parsed.data.email_enabled && !process.env.INTEGRITY_EMAIL_PROVIDER)
+        return res.status(409).json({ error: "As notifica\xE7\xF5es por e-mail ainda n\xE3o est\xE3o dispon\xEDveis. Os avisos no sistema continuam ativos." });
+      const db = getSupabaseAdmin2();
+      const now = (/* @__PURE__ */ new Date()).toISOString();
+      const saved = await db.from("integrity_notification_preferences").upsert({ ...parsed.data, in_app_enabled: true, tenant_id: tenantId(req), membership_id: membershipId(req), updated_at: now }, { onConflict: "membership_id" }).select("in_app_enabled,email_enabled,cases_enabled,messages_enabled,tasks_enabled,sla_enabled,updated_at").single();
+      if (saved.error) return res.status(500).json({ error: "N\xE3o foi poss\xEDvel salvar suas prefer\xEAncias." });
+      return res.json({ preferences: saved.data });
+    })
+  );
+  router.get(
     "/settings/templates",
     requireAny("integrity.templates.read", "integrity.templates.manage"),
     asyncHandler(async (req, res) => {
@@ -6370,6 +6486,241 @@ function createIntegrityRouter(getSupabaseAdmin2, authOverrides) {
       if (saved.error) return res.status(saved.error.code === "23505" ? 409 : 500).json({ error: "N\xE3o foi poss\xEDvel salvar o template." });
       await auditIntegrity(db, req, id ? "integrity.template.updated" : "integrity.template.created", "integrity_templates", saved.data.id, { template_type: saved.data.template_type, active: saved.data.active });
       return res.status(id ? 200 : 201).json({ template: saved.data });
+    })
+  );
+  router.get(
+    "/settings/team",
+    requireAny("integrity.settings.manage"),
+    asyncHandler(async (req, res) => {
+      const db = getSupabaseAdmin2();
+      const tenant = tenantId(req);
+      const [memberships, invitations, committees] = await Promise.all([
+        db.from("memberships").select("id,user_id,status,created_at,updated_at").eq("tenant_id", tenant).order("created_at"),
+        db.from("invitations").select("id,email,role_keys,status,expires_at,created_at").eq("tenant_id", tenant).order("created_at", { ascending: false }),
+        db.from("integrity_committees").select("id,name,status,integrity_committee_members(membership_id,active)").eq("tenant_id", tenant).order("name")
+      ]);
+      if ([memberships, invitations, committees].some((result) => result.error))
+        return res.status(500).json({ error: "N\xE3o foi poss\xEDvel carregar a equipe." });
+      const memberIds = (memberships.data || []).map((item) => item.id);
+      const userIds = (memberships.data || []).map((item) => item.user_id);
+      const [profiles, roles, authUsers] = await Promise.all([
+        userIds.length ? db.from("profiles").select("id,full_name").in("id", userIds) : Promise.resolve({ data: [], error: null }),
+        memberIds.length ? db.from("membership_roles").select("membership_id,roles!inner(key,tenant_id)").in("membership_id", memberIds).eq("roles.tenant_id", tenant) : Promise.resolve({ data: [], error: null }),
+        db.auth.admin.listUsers({ page: 1, perPage: 1e3 })
+      ]);
+      if (profiles.error || roles.error || authUsers.error)
+        return res.status(500).json({ error: "N\xE3o foi poss\xEDvel identificar as pessoas da equipe." });
+      const profileById = new Map((profiles.data || []).map((item) => [item.id, item.full_name]));
+      const authById = new Map((authUsers.data.users || []).map((item) => [item.id, item]));
+      const team = (memberships.data || []).map((member) => {
+        const roleKey = (roles.data || []).find((item) => item.membership_id === member.id && integrityRoleLabel[item.roles?.key])?.roles?.key || null;
+        const memberCommittees = (committees.data || []).filter((committee) => committee.integrity_committee_members?.some((entry) => entry.membership_id === member.id && entry.active));
+        const authUser = authById.get(member.user_id);
+        return {
+          membership_id: member.id,
+          name: profileById.get(member.user_id) || authUser?.user_metadata?.full_name || "Pessoa convidada",
+          email: authUser?.email || null,
+          status: member.status,
+          role: roleKey,
+          role_label: roleKey === "integrity_investigator" && memberCommittees.length ? "Membro de Comit\xEA" : integrityRoleLabel[roleKey] || "Acesso b\xE1sico",
+          committees: memberCommittees.map((committee) => ({ id: committee.id, name: committee.name })),
+          last_sign_in_at: authUser?.last_sign_in_at || null,
+          is_current: member.id === membershipId(req)
+        };
+      });
+      return res.json({
+        team,
+        invitations: (invitations.data || []).filter((item) => item.status === "pending"),
+        committees: (committees.data || []).filter((item) => item.status === "active").map((item) => ({ id: item.id, name: item.name })),
+        roles: Object.entries(integrityRoleLabel).map(([value, label]) => ({ value, label }))
+      });
+    })
+  );
+  router.post(
+    "/settings/invitations",
+    requireAny("integrity.settings.manage"),
+    asyncHandler(async (req, res) => {
+      const parsed = integrityInviteSchema.safeParse(req.body);
+      if (!parsed.success) return res.status(400).json({ error: "Revise nome, e-mail e fun\xE7\xE3o." });
+      const db = getSupabaseAdmin2();
+      const tenant = tenantId(req);
+      const input = parsed.data;
+      if (input.role === "committee_member" && !input.committee_id)
+        return res.status(400).json({ error: "Escolha o comit\xEA desta pessoa." });
+      if (input.committee_id) {
+        const committee = await db.from("integrity_committees").select("id").eq("id", input.committee_id).eq("tenant_id", tenant).eq("status", "active").maybeSingle();
+        if (!committee.data) return res.status(400).json({ error: "O comit\xEA selecionado n\xE3o est\xE1 dispon\xEDvel." });
+      }
+      const existingUser = await findAuthUserByEmail(db, input.email);
+      if (existingUser) {
+        const existingMember = await db.from("memberships").select("id,status").eq("tenant_id", tenant).eq("user_id", existingUser.id).maybeSingle();
+        if (existingMember.error) throw existingMember.error;
+        if (existingMember.data?.status === "active") return res.status(409).json({ error: "Esta pessoa j\xE1 faz parte da equipe." });
+      }
+      const redirectTo = inviteRedirect(req);
+      let user = existingUser;
+      if (!user) {
+        const invited = await db.auth.admin.inviteUserByEmail(input.email, { redirectTo, data: { full_name: input.name } });
+        if (invited.error || !invited.data.user)
+          return res.status(503).json({ error: "N\xE3o foi poss\xEDvel enviar o convite. Verifique a configura\xE7\xE3o de e-mail e tente novamente." });
+        user = invited.data.user;
+      } else {
+        const sent = await db.auth.signInWithOtp({ email: input.email, options: { shouldCreateUser: false, emailRedirectTo: redirectTo } });
+        if (sent.error) return res.status(503).json({ error: "N\xE3o foi poss\xEDvel enviar o acesso para este usu\xE1rio. Tente novamente." });
+      }
+      const previous = await db.from("invitations").update({ status: "cancelled" }).eq("tenant_id", tenant).eq("email", input.email).eq("status", "pending");
+      if (previous.error) throw previous.error;
+      const membership = await db.from("memberships").upsert({ tenant_id: tenant, user_id: user.id, status: "invited", employment_level: "employee", updated_at: (/* @__PURE__ */ new Date()).toISOString() }, { onConflict: "tenant_id,user_id" }).select("id").single();
+      if (membership.error) throw membership.error;
+      const persistedRole = await assignIntegrityRole(db, tenant, membership.data.id, input.role);
+      if (input.committee_id) {
+        const committeeMember = await db.from("integrity_committee_members").upsert({ committee_id: input.committee_id, membership_id: membership.data.id, role: "member", active: true }, { onConflict: "committee_id,membership_id" });
+        if (committeeMember.error) throw committeeMember.error;
+      }
+      const expiresAt = new Date(Date.now() + 60 * 60 * 1e3).toISOString();
+      const invitation = await db.from("invitations").insert({ tenant_id: tenant, email: input.email, role_keys: [persistedRole], status: "pending", expires_at: expiresAt, invited_by_membership_id: membershipId(req) }).select("id,expires_at").single();
+      if (invitation.error) throw invitation.error;
+      await db.from("profiles").upsert({ id: user.id, full_name: input.name, status: "active", updated_at: (/* @__PURE__ */ new Date()).toISOString() }, { onConflict: "id" });
+      await auditIntegrity(db, req, "integrity.team.invited", "memberships", membership.data.id, { role: persistedRole, committee_id: input.committee_id || null });
+      return res.status(201).json({ invitation: invitation.data, message: "Convite enviado com seguran\xE7a." });
+    })
+  );
+  router.post(
+    "/settings/invitations/:id/resend",
+    requireAny("integrity.settings.manage"),
+    asyncHandler(async (req, res) => {
+      const db = getSupabaseAdmin2();
+      const tenant = tenantId(req);
+      const invitation = await db.from("invitations").select("id,email,status").eq("id", req.params.id).eq("tenant_id", tenant).maybeSingle();
+      if (!invitation.data || invitation.data.status !== "pending") return res.status(404).json({ error: "Este convite n\xE3o est\xE1 mais pendente." });
+      const sent = await db.auth.signInWithOtp({ email: invitation.data.email, options: { shouldCreateUser: false, emailRedirectTo: inviteRedirect(req) } });
+      if (sent.error) return res.status(503).json({ error: "N\xE3o foi poss\xEDvel reenviar o convite agora." });
+      const expiresAt = new Date(Date.now() + 60 * 60 * 1e3).toISOString();
+      const updated = await db.from("invitations").update({ expires_at: expiresAt }).eq("id", invitation.data.id);
+      if (updated.error) throw updated.error;
+      await auditIntegrity(db, req, "integrity.team.invitation_resent", "invitations", invitation.data.id, {});
+      return res.json({ sent: true, expires_at: expiresAt });
+    })
+  );
+  router.delete(
+    "/settings/invitations/:id",
+    requireAny("integrity.settings.manage"),
+    asyncHandler(async (req, res) => {
+      const db = getSupabaseAdmin2();
+      const tenant = tenantId(req);
+      const invitation = await db.from("invitations").select("id,email,status").eq("id", req.params.id).eq("tenant_id", tenant).maybeSingle();
+      if (!invitation.data || invitation.data.status !== "pending") return res.status(404).json({ error: "Este convite n\xE3o est\xE1 mais pendente." });
+      const authUser = await findAuthUserByEmail(db, invitation.data.email);
+      const cancelled = await db.from("invitations").update({ status: "cancelled" }).eq("id", invitation.data.id);
+      if (cancelled.error) throw cancelled.error;
+      if (authUser) {
+        const membership = await db.from("memberships").update({ status: "suspended", updated_at: (/* @__PURE__ */ new Date()).toISOString() }).eq("tenant_id", tenant).eq("user_id", authUser.id).eq("status", "invited");
+        if (membership.error) throw membership.error;
+      }
+      await auditIntegrity(db, req, "integrity.team.invitation_cancelled", "invitations", invitation.data.id, {});
+      return res.json({ cancelled: true });
+    })
+  );
+  router.patch(
+    "/settings/team/:membershipId",
+    requireAny("integrity.settings.manage"),
+    asyncHandler(async (req, res) => {
+      const parsed = integrityMemberUpdateSchema.safeParse(req.body);
+      if (!parsed.success) return res.status(400).json({ error: "Altera\xE7\xE3o de acesso inv\xE1lida." });
+      const db = getSupabaseAdmin2();
+      const tenant = tenantId(req);
+      const memberId = req.params.membershipId;
+      const member = await db.from("memberships").select("id,status").eq("id", memberId).eq("tenant_id", tenant).maybeSingle();
+      if (!member.data) return res.status(404).json({ error: "Pessoa n\xE3o encontrada nesta equipe." });
+      if (memberId === membershipId(req) && parsed.data.status === "suspended")
+        return res.status(409).json({ error: "Voc\xEA n\xE3o pode suspender o pr\xF3prio acesso." });
+      const currentRoles = await db.from("membership_roles").select("roles!inner(key,tenant_id)").eq("membership_id", memberId).eq("roles.tenant_id", tenant);
+      if (currentRoles.error) throw currentRoles.error;
+      const isAdmin = (currentRoles.data || []).some((item) => item.roles?.key === "tenant_admin");
+      const removesAdmin = parsed.data.status === "suspended" || parsed.data.role && parsed.data.role !== "tenant_admin";
+      if (isAdmin && removesAdmin && await activeTenantAdminCount(db, tenant, memberId) === 0)
+        return res.status(409).json({ error: "Adicione outro administrador antes de alterar este acesso." });
+      let role = currentRoles.data?.[0]?.roles?.key || null;
+      if (parsed.data.role) role = await assignIntegrityRole(db, tenant, memberId, parsed.data.role);
+      if (parsed.data.committee_id !== void 0) {
+        const disabled = await db.from("integrity_committee_members").update({ active: false }).eq("membership_id", memberId);
+        if (disabled.error) throw disabled.error;
+        if (parsed.data.committee_id) {
+          const committee = await db.from("integrity_committees").select("id").eq("id", parsed.data.committee_id).eq("tenant_id", tenant).eq("status", "active").maybeSingle();
+          if (!committee.data) return res.status(400).json({ error: "O comit\xEA selecionado n\xE3o est\xE1 dispon\xEDvel." });
+          const assigned = await db.from("integrity_committee_members").upsert({ committee_id: parsed.data.committee_id, membership_id: memberId, role: "member", active: true }, { onConflict: "committee_id,membership_id" });
+          if (assigned.error) throw assigned.error;
+        }
+      }
+      if (parsed.data.status) {
+        const status = await db.from("memberships").update({ status: parsed.data.status, updated_at: (/* @__PURE__ */ new Date()).toISOString() }).eq("id", memberId).eq("tenant_id", tenant);
+        if (status.error) throw status.error;
+      }
+      await auditIntegrity(db, req, "integrity.team.member_updated", "memberships", memberId, { role, status: parsed.data.status || member.data.status, committee_id: parsed.data.committee_id });
+      return res.json({ updated: true });
+    })
+  );
+  router.delete(
+    "/settings/team/:membershipId",
+    requireAny("integrity.settings.manage"),
+    asyncHandler(async (req, res) => {
+      const db = getSupabaseAdmin2();
+      const tenant = tenantId(req);
+      const memberId = req.params.membershipId;
+      if (memberId === membershipId(req)) return res.status(409).json({ error: "Voc\xEA n\xE3o pode remover o pr\xF3prio acesso." });
+      const [member, activeCases, currentRoles] = await Promise.all([
+        db.from("memberships").select("id,status").eq("id", memberId).eq("tenant_id", tenant).maybeSingle(),
+        db.from("integrity_cases").select("id", { count: "exact", head: true }).eq("tenant_id", tenant).eq("owner_membership_id", memberId).not("status", "in", "(closed,archived)"),
+        db.from("membership_roles").select("roles!inner(key,tenant_id)").eq("membership_id", memberId).eq("roles.tenant_id", tenant)
+      ]);
+      if (!member.data) return res.status(404).json({ error: "Pessoa n\xE3o encontrada nesta equipe." });
+      if (activeCases.count) return res.status(409).json({ error: "Transfira os casos ativos antes de remover este acesso." });
+      const isAdmin = (currentRoles.data || []).some((item) => item.roles?.key === "tenant_admin");
+      if (isAdmin && await activeTenantAdminCount(db, tenant, memberId) === 0)
+        return res.status(409).json({ error: "Adicione outro administrador antes de remover este acesso." });
+      const suspended = await db.from("memberships").update({ status: "suspended", updated_at: (/* @__PURE__ */ new Date()).toISOString() }).eq("id", memberId).eq("tenant_id", tenant);
+      if (suspended.error) throw suspended.error;
+      await db.from("integrity_committee_members").update({ active: false }).eq("membership_id", memberId);
+      await auditIntegrity(db, req, "integrity.team.member_removed", "memberships", memberId, { preserved_history: true });
+      return res.json({ removed: true });
+    })
+  );
+  router.get(
+    "/settings/activity",
+    requireAny("integrity.settings.manage", "integrity.audit.read"),
+    asyncHandler(async (req, res) => {
+      const parsed = activityQuerySchema.safeParse(req.query);
+      if (!parsed.success) return res.status(400).json({ error: "Filtros inv\xE1lidos." });
+      const db = getSupabaseAdmin2();
+      let query = db.from("platform_audit_logs").select("id,actor_user_id,action,entity_type,created_at").contains("metadata", { tenant_id: tenantId(req) }).order("created_at", { ascending: false }).limit(200);
+      if (parsed.data.from) query = query.gte("created_at", parsed.data.from);
+      if (parsed.data.to) query = query.lte("created_at", parsed.data.to);
+      const prefix = { team: "integrity.team.", settings: "integrity.settings.", channel: "integrity.channel.", case: "integrity.case", export: "integrity." };
+      if (parsed.data.type && parsed.data.type !== "export") query = query.like("action", `${prefix[parsed.data.type]}%`);
+      if (parsed.data.type === "export") query = query.like("action", "%exported");
+      const result = await query;
+      if (result.error) return res.status(500).json({ error: "N\xE3o foi poss\xEDvel carregar o registro de atividades." });
+      const userIds = [...new Set((result.data || []).map((item) => item.actor_user_id).filter(Boolean))];
+      const profiles = userIds.length ? await db.from("profiles").select("id,full_name").in("id", userIds) : { data: [], error: null };
+      if (profiles.error) return res.status(500).json({ error: "N\xE3o foi poss\xEDvel identificar os respons\xE1veis." });
+      const names = new Map((profiles.data || []).map((item) => [item.id, item.full_name]));
+      const labels = {
+        "integrity.team.invited": "convidou uma pessoa para a equipe",
+        "integrity.team.invitation_resent": "reenviou um convite",
+        "integrity.team.invitation_cancelled": "cancelou um convite pendente",
+        "integrity.team.member_updated": "alterou uma responsabilidade da equipe",
+        "integrity.team.member_removed": "removeu um acesso da equipe",
+        "integrity.settings.updated": "atualizou as configura\xE7\xF5es do Integridade",
+        "integrity.channel.created": "criou o Canal de Integridade",
+        "integrity.channel.updated": "atualizou o Canal de Integridade",
+        "integrity.channel.tested": "testou o Canal de Integridade",
+        "integrity.channel.published": "publicou o Canal de Integridade",
+        "integrity.category.created": "criou uma categoria",
+        "integrity.category.updated": "atualizou uma categoria",
+        "integrity.executive_report.exported": "exportou um relat\xF3rio executivo",
+        "integrity.case_dossier.exported": "exportou um dossi\xEA de caso"
+      };
+      return res.json({ activities: (result.data || []).map((item) => ({ id: item.id, actor: names.get(item.actor_user_id) || "Ordum", description: labels[item.action] || "realizou uma atualiza\xE7\xE3o no Integridade", area: item.action.includes("team") ? "Equipe" : item.action.includes("channel") ? "Canal" : item.action.includes("export") ? "Relat\xF3rios" : "Opera\xE7\xE3o", created_at: item.created_at })) });
     })
   );
   router.get(
@@ -6759,13 +7110,14 @@ function createIntegrityPublicRouter(getSupabaseAdmin2) {
         return res.status(404).json({ error: "Canal n\xE3o encontrado, pausado ou indispon\xEDvel." });
       const channelRow = await db.from("integrity_channels").select("id,tenant_id,privacy_notice,confirmation_message").eq("public_slug", req.params.slug).eq("active", true).maybeSingle();
       if (channelRow.error || !channelRow.data) return res.status(404).json({ error: "Canal n\xE3o encontrado, pausado ou indispon\xEDvel." });
-      const [departments, fields, organization] = await Promise.all([
+      const [departments, fields, organization, settings] = await Promise.all([
         db.from("integrity_departments").select("id,unit_id,name").eq("tenant_id", channelRow.data.tenant_id).eq("active", true).order("name"),
         db.from("integrity_custom_fields").select("id,field_key,label,help_text,field_type,required,options,sort_order").eq("tenant_id", channelRow.data.tenant_id).or(`channel_id.eq.${channelRow.data.id},channel_id.is.null`).eq("active", true).order("sort_order"),
-        db.from("tenants").select("name").eq("id", channelRow.data.tenant_id).maybeSingle()
+        db.from("tenants").select("name").eq("id", channelRow.data.tenant_id).maybeSingle(),
+        db.from("integrity_settings").select("branding").eq("tenant_id", channelRow.data.tenant_id).maybeSingle()
       ]);
-      if (departments.error || fields.error || organization.error) return res.status(503).json({ error: "Configura\xE7\xE3o do canal temporariamente indispon\xEDvel." });
-      return res.json({ channel: { ...result.data, organization_name: organization.data?.name || result.data.channel_name, privacy_notice: channelRow.data.privacy_notice, confirmation_message: channelRow.data.confirmation_message, departments: departments.data || [], custom_fields: fields.data || [] } });
+      if (departments.error || fields.error || organization.error || settings.error) return res.status(503).json({ error: "Configura\xE7\xE3o do canal temporariamente indispon\xEDvel." });
+      return res.json({ channel: { ...result.data, organization_name: settings.data?.branding?.display_name || organization.data?.name || result.data.channel_name, branding: settings.data?.branding || {}, privacy_notice: channelRow.data.privacy_notice, confirmation_message: channelRow.data.confirmation_message, departments: departments.data || [], custom_fields: fields.data || [] } });
     })
   );
   router.post(
@@ -7284,6 +7636,27 @@ async function createApp() {
       return res.status(500).json({ error: "N\xE3o foi poss\xEDvel resolver a sess\xE3o administrativa." });
     }
   });
+  app.get("/api/auth/invite-context", authenticateRequest, async (req, res) => {
+    const db = getSupabaseAdmin2();
+    const email = req.user?.email?.toLowerCase();
+    if (!email) return res.status(400).json({ error: "O convite n\xE3o possui um e-mail v\xE1lido." });
+    try {
+      const invitation = await db.from("invitations").select("id,tenant_id,role_keys,status,expires_at,tenants(name)").eq("email", email).eq("status", "pending").order("created_at", { ascending: false }).limit(1).maybeSingle();
+      if (invitation.error) throw invitation.error;
+      if (!invitation.data) return res.status(404).json({ error: "Este convite n\xE3o est\xE1 mais dispon\xEDvel." });
+      if (invitation.data.expires_at && new Date(invitation.data.expires_at).getTime() <= Date.now())
+        return res.status(410).json({ error: "Este convite expirou. Pe\xE7a um novo envio ao administrador da empresa." });
+      const labels = { tenant_admin: "Administrador", integrity_compliance: "Compliance", integrity_investigator: "Investigador" };
+      return res.json({
+        organization: invitation.data.tenants?.name || "sua empresa",
+        role: labels[invitation.data.role_keys?.[0]] || "Equipe de Integridade",
+        expires_at: invitation.data.expires_at
+      });
+    } catch (error) {
+      reportServerError(error, req, "tenant_invitation_context");
+      return res.status(500).json({ error: "N\xE3o foi poss\xEDvel validar este convite." });
+    }
+  });
   app.post("/api/auth/accept-invite", authenticateRequest, async (req, res) => {
     const db = getSupabaseAdmin2();
     const email = req.user?.email?.toLowerCase();
@@ -7295,8 +7668,15 @@ async function createApp() {
       const valid = (invitations.data || []).filter(
         (item) => !item.expires_at || new Date(item.expires_at).getTime() > Date.now()
       );
-      if (!valid.length)
-        return res.status(404).json({ error: "Este convite n\xE3o est\xE1 mais dispon\xEDvel. Solicite um novo envio." });
+      if (!valid.length) {
+        const platformMember = await db.from("platform_members").select("id,status").eq("user_id", req.user.id).eq("status", "invited").maybeSingle();
+        if (platformMember.error) throw platformMember.error;
+        if (!platformMember.data)
+          return res.status(404).json({ error: "Este convite n\xE3o est\xE1 mais dispon\xEDvel. Solicite um novo envio." });
+        const activated = await db.from("platform_members").update({ status: "active", updated_at: (/* @__PURE__ */ new Date()).toISOString() }).eq("id", platformMember.data.id).eq("status", "invited");
+        if (activated.error) throw activated.error;
+        return res.json({ activated: 1, destination: "admin" });
+      }
       const tenantIds = valid.map((item) => item.tenant_id);
       const membership = await db.from("memberships").update({ status: "active", updated_at: (/* @__PURE__ */ new Date()).toISOString() }).eq("user_id", req.user.id).eq("status", "invited").in("tenant_id", tenantIds).select("id,tenant_id");
       if (membership.error) throw membership.error;

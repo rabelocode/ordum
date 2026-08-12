@@ -273,6 +273,30 @@ export async function createApp() {
     }
   });
 
+  app.get("/api/auth/invite-context", authenticateRequest, async (req: any, res) => {
+    const db = getSupabaseAdmin();
+    const email = req.user?.email?.toLowerCase();
+    if (!email) return res.status(400).json({ error: "O convite não possui um e-mail válido." });
+    try {
+      const invitation = await db.from("invitations")
+        .select("id,tenant_id,role_keys,status,expires_at,tenants(name)")
+        .eq("email", email).eq("status", "pending").order("created_at", { ascending: false }).limit(1).maybeSingle();
+      if (invitation.error) throw invitation.error;
+      if (!invitation.data) return res.status(404).json({ error: "Este convite não está mais disponível." });
+      if (invitation.data.expires_at && new Date(invitation.data.expires_at).getTime() <= Date.now())
+        return res.status(410).json({ error: "Este convite expirou. Peça um novo envio ao administrador da empresa." });
+      const labels: Record<string,string> = { tenant_admin:"Administrador",integrity_compliance:"Compliance",integrity_investigator:"Investigador" };
+      return res.json({
+        organization: (invitation.data.tenants as any)?.name || "sua empresa",
+        role: labels[invitation.data.role_keys?.[0]] || "Equipe de Integridade",
+        expires_at: invitation.data.expires_at,
+      });
+    } catch (error: any) {
+      reportServerError(error, req, "tenant_invitation_context");
+      return res.status(500).json({ error: "Não foi possível validar este convite." });
+    }
+  });
+
   app.post("/api/auth/accept-invite", authenticateRequest, async (req: any, res) => {
     const db = getSupabaseAdmin();
     const email = req.user?.email?.toLowerCase();
@@ -288,8 +312,15 @@ export async function createApp() {
       const valid = (invitations.data || []).filter(
         (item: any) => !item.expires_at || new Date(item.expires_at).getTime() > Date.now(),
       );
-      if (!valid.length)
-        return res.status(404).json({ error: "Este convite não está mais disponível. Solicite um novo envio." });
+      if (!valid.length) {
+        const platformMember = await db.from("platform_members").select("id,status").eq("user_id", req.user.id).eq("status", "invited").maybeSingle();
+        if (platformMember.error) throw platformMember.error;
+        if (!platformMember.data)
+          return res.status(404).json({ error: "Este convite não está mais disponível. Solicite um novo envio." });
+        const activated = await db.from("platform_members").update({ status: "active", updated_at: new Date().toISOString() }).eq("id", platformMember.data.id).eq("status", "invited");
+        if (activated.error) throw activated.error;
+        return res.json({ activated: 1, destination: "admin" });
+      }
       const tenantIds = valid.map((item: any) => item.tenant_id);
       const membership = await db
         .from("memberships")
