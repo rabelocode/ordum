@@ -42,12 +42,17 @@ export default function App() {
       const hash = window.location.hash;
       const search = window.location.search;
       const href = window.location.href;
-      
+      const lowerHref = href.toLowerCase();
+      const lowerHash = hash.toLowerCase();
+      const lowerSearch = search.toLowerCase();
+
       // Checar se a URL contém um callback do Supabase Auth (invite, recovery, access_token, token_hash, code, error)
-      const isInviteFlow = href.includes("accept-invite") || 
-                           href.includes("convite") || 
-                           hash.includes("type=invite") || 
-                           search.includes("type=invite");
+      const isInviteFlow = lowerHref.includes("accept-invite") || 
+                           lowerHref.includes("convite") || 
+                           lowerHash.includes("type=invite") || 
+                           lowerSearch.includes("type=invite") ||
+                           lowerHash.includes("invite") ||
+                           lowerHash.includes("access_token=");
 
       if (isInviteFlow) {
         setCurrentRoute("/auth/accept-invite");
