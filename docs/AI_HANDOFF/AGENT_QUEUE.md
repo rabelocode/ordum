@@ -1,7 +1,7 @@
 Owner: chatgpt_backend
 Status: ready_for_product_review
 Branch: fix/admin-functional-recovery
-Head: 9c3c93e6406cf8012255a980fa0b4947c02c304e
+Head: 12dcdbb8ca1c272a8faad5666db48eb3aefbc450
 Implemented:
 - Pacote Ordum Integridade - Productization & Customer Operations concluído integralmente.
 - Gestão de Equipe de Integridade: convidar pessoas (nome, e-mail, função), reenviar convites, cancelar convite pendente, alterar papel/status, suspender, reativar, remover acesso com preservação de histórico. Papéis amigáveis (Administrador, Compliance, Investigador, Membro de Comitê) sem exibir keys internas. Proteção contra modificação/suspensão/remoção do último admin.
