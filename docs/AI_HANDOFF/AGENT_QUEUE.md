@@ -1,7 +1,7 @@
 Owner: chatgpt_backend
 Status: ready_for_product_review
 Branch: fix/admin-functional-recovery
-Head: 274127aa27935d19ab6d5acdd3ddef5a63cd43d1
+Head: 9abad891eee294906cae317be031cb74e95b057a
 Frontend Product Acceptance:
 - Admin aprovado: SIM
 - Integridade aprovado: SIM
