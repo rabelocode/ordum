@@ -21,7 +21,7 @@ const ConsultantsPage = lazy(() => import("./pages/admin/ConsultantsPage").then(
 const ContractsPage = lazy(() => import("./pages/admin/ContractsPage").then(m => ({ default: m.ContractsPage })));
 const TeamsPage = lazy(() => import("./pages/admin/TeamsPage").then(m => ({ default: m.TeamsPage })));
 const TeamDetailPage = lazy(() => import("./pages/admin/TeamDetailPage").then(m => ({ default: m.TeamDetailPage })));
-const PlaceholderAdminPage = lazy(() => import("./pages/admin/PlaceholderAdminPage").then(m => ({ default: m.PlaceholderAdminPage })));
+const PlatformSettingsPage = lazy(() => import("./pages/admin/PlatformSettingsPage").then(m => ({ default: m.PlatformSettingsPage })));
 const LeadsPage = lazy(() => import("./pages/admin/LeadsPage").then(m => ({ default: m.LeadsPage })));
 const AuditPage = lazy(() => import("./pages/admin/AuditPage").then(m => ({ default: m.AuditPage })));
 const SystemHealthPage = lazy(() => import("./pages/admin/SystemHealthPage").then(m => ({ default: m.SystemHealthPage })));
@@ -200,13 +200,13 @@ export default function App() {
       } else if (pathname === "/admin/acessos") {
         adminContent = <AccessControlPage />;
       } else if (
+        pathname === "/admin/configuracoes" ||
         pathname === "/admin/desempenho" ||
         pathname === "/admin/solucoes" ||
         pathname === "/admin/deployments" ||
-        pathname === "/admin/configuracoes" ||
         pathname === "/admin/engenharia"
       ) {
-        adminContent = <PlaceholderAdminPage title={pathname} />;
+        adminContent = <PlatformSettingsPage />;
       }
 
       return (

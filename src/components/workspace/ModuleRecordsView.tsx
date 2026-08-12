@@ -55,7 +55,7 @@ export function ModuleRecordsView({ module, tenantId, onBack }: { module: Module
       <section className="rounded-3xl border bg-white p-6 shadow-sm sm:p-8" style={{ borderColor: `${config.color}55` }}>
         <div className="flex items-center gap-4">
           <div className="flex h-14 w-14 items-center justify-center rounded-2xl" style={{ color: config.color, backgroundColor: config.light }}>{icon(module)}</div>
-          <div><h1 className="text-2xl font-black text-[#202322]">{config.name}</h1><p className="mt-1 text-sm text-[#626866]">Registros reais, limitados a 50 e filtrados no banco pelo tenant e pelas policies de RLS.</p></div>
+          <div><h1 className="text-2xl font-black text-[#202322]">{config.name}</h1><div className="mt-1 text-sm text-[#626866]">Listagem dos últimos registros cadastrados para a sua empresa.</div></div>
         </div>
       </section>
       <section className="rounded-2xl border border-[#DDD8CF] bg-white p-5 shadow-sm">
