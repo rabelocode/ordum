@@ -1,7 +1,7 @@
 Owner: chatgpt_backend
 Status: ready_for_product_review
 Branch: fix/admin-functional-recovery
-Head: pending_commit
+Head: ee5cb37fad70ee8c69d40dfebd20e9142223be17
 Implemented:
 - Hotfix P0 Admin: Membros e Convites (Separação de Membros e Equipes no Admin).
   - Item de menu dedicado "Membros" (#/admin/membros). Tabela com Nome, E-mail, Função, Vínculo, Equipes, Status humano ("Convite pendente", "Ativo", "Suspenso") e Último Acesso.
