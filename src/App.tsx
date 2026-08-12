@@ -40,23 +40,46 @@ export default function App() {
   useEffect(() => {
     const handleHashChange = () => {
       const hash = window.location.hash;
+      const search = window.location.search;
+      const href = window.location.href;
       
+      // Checar se a URL contém um callback do Supabase Auth (invite, recovery, access_token, token_hash, code, error)
+      const isInviteFlow = href.includes("accept-invite") || 
+                           href.includes("convite") || 
+                           hash.includes("type=invite") || 
+                           search.includes("type=invite");
+
+      if (isInviteFlow) {
+        setCurrentRoute("/auth/accept-invite");
+        return;
+      }
+
       // If the hash represents an internal route (starts with #/)
       if (hash.startsWith("#/")) {
-        setCurrentRoute(hash.replace("#", ""));
+        const routePath = hash.replace("#", "");
+        if (routePath.startsWith("/auth/accept-invite") || routePath.startsWith("/convite/aceitar")) {
+          setCurrentRoute("/auth/accept-invite");
+        } else {
+          setCurrentRoute(routePath);
+        }
         window.scrollTo(0, 0);
       } else if (hash === "" || hash === "#") {
         setCurrentRoute("/");
         window.scrollTo(0, 0);
       } else {
-        // It is an anchor like #solucoes
-        // Don't change route, just let the browser scroll (or handle smooth scrolling manually if needed)
-        // Ensure route is at root for public site anchors
-        if (currentRoute !== "/") {
-            setCurrentRoute("/");
+        // Tratar tokens no fragment do Supabase sem cair na Home se contiver tokens de auth
+        if (hash.includes("access_token=") || hash.includes("error=")) {
+          if (hash.includes("type=invite") || hash.includes("invite")) {
+            setCurrentRoute("/auth/accept-invite");
+            return;
+          }
         }
         
-        // Let the browser handle the jump to id, or we do it smoothly:
+        // Anchor scroll para o site público
+        if (currentRoute !== "/") {
+          setCurrentRoute("/");
+        }
+        
         const id = hash.replace("#", "");
         const element = document.getElementById(id);
         if (element) {
@@ -68,7 +91,6 @@ export default function App() {
     // Initial check
     handleHashChange();
     
-    // We need to wait a tick for initial anchor scrolling to work if the element hasn't mounted
     if (window.location.hash && !window.location.hash.startsWith("#/")) {
       setTimeout(() => {
         const id = window.location.hash.replace("#", "");
@@ -95,7 +117,7 @@ export default function App() {
     if (pathname === "/auth/reset-password") {
       return <ResetPasswordPage />;
     }
-    if (pathname === "/auth/accept-invite") {
+    if (pathname === "/auth/accept-invite" || pathname === "/convite/aceitar") {
       return <AcceptInvitePage />;
     }
     if (pathname === "/select-organization") {
@@ -140,7 +162,7 @@ export default function App() {
       } else if (pathname.startsWith("/admin/equipes/")) {
         const teamId = pathname.split("/")[3];
         adminContent = <TeamDetailPage teamId={teamId} />;
-      } else if (pathname === "/admin/consultores") {
+      } else if (pathname === "/admin/membros" || pathname === "/admin/consultores" || pathname === "/admin/pessoas") {
         adminContent = <ConsultantsPage />;
       } else if (pathname === "/admin/leads") {
         adminContent = <LeadsPage />;

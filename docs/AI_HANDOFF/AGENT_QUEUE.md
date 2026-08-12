@@ -1,8 +1,14 @@
 Owner: chatgpt_backend
 Status: ready_for_product_review
 Branch: fix/admin-functional-recovery
-Head: 12dcdbb8ca1c272a8faad5666db48eb3aefbc450
+Head: pending_commit
 Implemented:
+- Hotfix P0 Admin: Membros e Convites (Separação de Membros e Equipes no Admin).
+  - Item de menu dedicado "Membros" (#/admin/membros). Tabela com Nome, E-mail, Função, Vínculo, Equipes, Status humano ("Convite pendente", "Ativo", "Suspenso") e Último Acesso.
+  - Botão "Adicionar pessoa" com modal para convidar membros sem a obrigatoriedade de atribuir a uma equipe inicial.
+  - Botão "Reenviar convite" com o endpoint POST /api/admin/staff/:id/resend-invite que re-notifica o usuário por e-mail, renova a validade e auditoria.
+  - Correção da causa raiz do link de convite do Supabase Auth no HashRouter (evitando queda silenciosa na Home) e parser resiliente em App.tsx.
+  - Rota de aceite amigável /#/auth/accept-invite com interface personalizada Ordum e mensagens humanas de erro (Convite expirado, cancelado ou já utilizado).
 - Pacote Ordum Integridade - Productization & Customer Operations concluído integralmente.
 - Gestão de Equipe de Integridade: convidar pessoas (nome, e-mail, função), reenviar convites, cancelar convite pendente, alterar papel/status, suspender, reativar, remover acesso com preservação de histórico. Papéis amigáveis (Administrador, Compliance, Investigador, Membro de Comitê) sem exibir keys internas. Proteção contra modificação/suspensão/remoção do último admin.
 - Aceite de Convite: rota pública /#/auth/accept-invite exibindo organização, papel e convidador, com conclusão de cadastro e redirecionamento direto sem intervenção manual no banco.

@@ -13,16 +13,74 @@ export function AcceptInvitePage() {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [errorMessage, setErrorMessage] = useState("");
   const [hasValidSession, setHasValidSession] = useState<boolean | null>(null);
-  const [inviteContext,setInviteContext]=useState<{organization:string;role:string;expires_at?:string}|null>(null);
+  const [userEmail, setUserEmail] = useState<string>("");
+  const [inviteContext, setInviteContext] = useState<{ organization?: string; role?: string; expires_at?: string } | null>(null);
 
   useEffect(() => {
-    supabase.auth.getSession().then(async ({ data: { session } }) => {
-      setHasValidSession(!!session);
-      if(session){const response=await fetch("/api/auth/invite-context",{headers:{Authorization:`Bearer ${session.access_token}`}});if(response.ok)setInviteContext(await response.json());}
-    });
+    // Tentar processar a sessão ou callback de autenticação do Supabase
+    const initInviteSession = async () => {
+      try {
+        // Tentar obter a sessão atual do Supabase
+        const { data: { session }, error: sessionError } = await supabase.auth.getSession();
+        
+        if (sessionError) {
+          console.warn("Aviso ao obter sessão do Supabase:", sessionError.message);
+        }
 
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
-      setHasValidSession(!!session);
+        if (session) {
+          setHasValidSession(true);
+          setUserEmail(session.user?.email || "");
+          if (session.user?.user_metadata?.full_name) {
+            setFullName(session.user.user_metadata.full_name);
+          }
+
+          // Buscar contexto do convite
+          try {
+            const response = await fetch("/api/auth/invite-context", {
+              headers: { Authorization: `Bearer ${session.access_token}` },
+            });
+            if (response.ok) {
+              setInviteContext(await response.json());
+            }
+          } catch (e) {
+            // Silencioso se não houver contexto adicional
+          }
+        } else {
+          // Checar se existem parâmetros de erro ou hash no Supabase
+          const hash = window.location.hash;
+          const search = window.location.search;
+          if (hash.includes("error=") || search.includes("error=")) {
+            setHasValidSession(false);
+            setErrorMessage("Este link de convite é inválido ou já expirou. Solicite um novo envio ao seu administrador.");
+          } else {
+            // Aguardar um instante para o listener onAuthStateChange processar o hash se o Supabase estive trocando tokens
+            setTimeout(async () => {
+              const { data: { session: retrySession } } = await supabase.auth.getSession();
+              if (retrySession) {
+                setHasValidSession(true);
+                setUserEmail(retrySession.user?.email || "");
+              } else {
+                setHasValidSession(false);
+              }
+            }, 800);
+          }
+        }
+      } catch (err: any) {
+        captureClientException(err, { operation: "invite_init" });
+        setHasValidSession(false);
+      }
+    };
+
+    void initInviteSession();
+
+    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (_event, session) => {
+      if (session) {
+        setHasValidSession(true);
+        setUserEmail(session.user?.email || "");
+        if (session.user?.user_metadata?.full_name && !fullName) {
+          setFullName(session.user.user_metadata.full_name);
+        }
+      }
     });
 
     return () => subscription.unsubscribe();
@@ -91,7 +149,7 @@ export function AcceptInvitePage() {
       }
     } catch (err: any) {
       captureClientException(err, { operation: 'invite_acceptance' });
-      setErrorMessage(err.message || "Erro ao concluir cadastro. O convite pode estar expirado.");
+      setErrorMessage(err.message || "Erro ao concluir cadastro. O convite pode estar expirado ou já ter sido utilizado.");
     } finally {
       setIsSubmitting(false);
     }
@@ -104,17 +162,17 @@ export function AcceptInvitePage() {
   if (hasValidSession === false) {
     return (
       <div className="min-h-screen bg-[#F6F5F2] flex flex-col items-center justify-center p-4">
-        <div className="bg-white p-8 rounded-2xl shadow-sm border border-[#DDD8CF]/60 max-w-md w-full text-center">
-          <div className="w-14 h-14 bg-red-50 text-red-500 rounded-2xl flex items-center justify-center mx-auto mb-6">
+        <div className="bg-white p-8 md:p-10 rounded-2xl shadow-sm border border-[#DDD8CF]/60 max-w-md w-full text-center">
+          <div className="w-14 h-14 bg-amber-50 text-amber-600 rounded-2xl flex items-center justify-center mx-auto mb-6">
             <AlertCircle className="w-7 h-7" />
           </div>
-          <h1 className="text-xl font-bold text-[#202322] mb-3">Convite Inválido ou Expirado</h1>
+          <h1 className="text-xl font-black text-[#202322] mb-3">Convite Inválido ou Expirado</h1>
           <p className="text-xs text-[#626866] mb-8 leading-relaxed">
-            Este link de convite é inválido ou já foi utilizado. Solicite um novo convite ao seu administrador.
+            {errorMessage || "Este link de convite é inválido, foi cancelado ou já expirou. Solicite um novo envio ao seu administrador."}
           </p>
           <a
             href="#/login"
-            className="inline-flex items-center justify-center w-full h-12 bg-[#121413] hover:bg-[#202322] text-white text-sm font-bold rounded-xl transition-colors"
+            className="inline-flex items-center justify-center w-full h-12 bg-[#121413] hover:bg-[#202322] text-white text-xs font-bold rounded-xl transition-colors"
           >
             Ir para o Login
           </a>
@@ -130,10 +188,21 @@ export function AcceptInvitePage() {
           <div className="w-12 h-12 rounded-xl bg-[#121413] text-white font-black text-lg mx-auto mb-4 flex items-center justify-center">
             O.
           </div>
-          <h1 className="text-xl font-black text-[#202322] tracking-tight mb-1">{inviteContext?`Você foi convidado para o Ordum Integridade da ${inviteContext.organization}`:"Configure seu acesso à Ordum"}</h1>
-          <p className="text-xs text-[#626866]">
-            {inviteContext?`Função: ${inviteContext.role}. Defina sua senha para entrar diretamente no ambiente da empresa.`:"Defina seu nome e senha para ativar o acesso."}
+          <h1 className="text-xl font-black text-[#202322] tracking-tight mb-2">
+            {inviteContext?.organization
+              ? `Você foi convidado para o Ordum Integridade da ${inviteContext.organization}`
+              : "Bem-vindo à Ordum"}
+          </h1>
+          <p className="text-xs text-[#626866] leading-relaxed">
+            {inviteContext?.role
+              ? `Função: ${inviteContext.role}. Defina seu nome e senha para acessar o sistema.`
+              : "Você foi convidado para acessar a plataforma Ordum. Defina seus dados de acesso."}
           </p>
+          {userEmail && (
+            <div className="mt-3 inline-block px-3 py-1 bg-[#F6F5F2] rounded-lg text-xs font-mono font-medium text-[#202322]">
+              {userEmail}
+            </div>
+          )}
         </div>
 
         {errorMessage && (
@@ -206,7 +275,7 @@ export function AcceptInvitePage() {
               </span>
             ) : (
               <span className="flex items-center justify-center gap-2">
-                Concluir Cadastro <ArrowRight className="w-4 h-4" />
+                Criar Minha Conta <ArrowRight className="w-4 h-4" />
               </span>
             )}
           </Button>

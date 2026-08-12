@@ -195,6 +195,60 @@ export function createAdminOtherRouter(getSupabaseAdmin: any, _old_requirePlatfo
     }
   });
 
+  // POST /api/admin/staff/:id/resend-invite
+  router.post('/staff/:id/resend-invite', authenticateRequest, resolvePlatformContext, requirePlatformPermission(['platform.staff.manage', 'platform.staff.invite_sales']), async (req: any, res: any) => {
+    try {
+      const memberId = req.params.id;
+      const db = getSupabaseAdmin();
+      const { data: member, error: memErr } = await db
+        .from('platform_members')
+        .select('*, platform_roles(key)')
+        .eq('id', memberId)
+        .single();
+
+      if (memErr || !member) {
+        return res.status(404).json({ error: 'Membro não encontrado.' });
+      }
+
+      const { data: usersData } = await db.auth.admin.listUsers();
+      const user = usersData?.users?.find((u: any) => u.id === member.user_id);
+      if (!user || !user.email) {
+        return res.status(400).json({ error: 'E-mail do membro não localizado.' });
+      }
+
+      const configuredUrl = process.env.PUBLIC_APP_URL || process.env.APP_URL || process.env.VITE_APP_URL;
+      const origin = configuredUrl || req.headers.origin || `${req.protocol}://${req.get('host')}`;
+      const redirectTo = `${String(origin).replace(/\/$/, '')}/#/auth/accept-invite`;
+
+      const { error: inviteErr } = await db.auth.admin.inviteUserByEmail(user.email, { redirectTo });
+      if (inviteErr) {
+        const sent = await db.auth.signInWithOtp({
+          email: user.email,
+          options: { shouldCreateUser: false, emailRedirectTo: redirectTo }
+        });
+        if (sent.error) {
+          return res.status(500).json({ error: 'Não foi possível reenviar o convite por e-mail.' });
+        }
+      }
+
+      await db.from('platform_members').update({ status: 'invited', updated_at: new Date().toISOString() }).eq('id', memberId);
+
+      await db.from('platform_audit_logs').insert({
+        actor_user_id: req.user.id,
+        action: 'platform.member.invitation_resent',
+        entity_type: 'platform_members',
+        entity_id: memberId,
+        severity: 'info',
+        metadata: { email: user.email }
+      });
+
+      return res.json({ success: true, message: `Novo convite enviado para ${user.email}.` });
+    } catch (e: any) {
+      reportServerError(e, req, 'platform_member_resend_invite');
+      return res.status(500).json({ error: 'Não foi possível reenviar o convite.' });
+    }
+  });
+
   // PATCH /api/admin/staff/:id (Update member role/relationship/teams)
   const updateStaffSchema = z.object({
     role_key: z.string().optional(),

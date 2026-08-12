@@ -3228,6 +3228,47 @@ function createAdminOtherRouter(getSupabaseAdmin2, _old_requirePlatformAuth) {
       res.status(500).json({ error: "N\xE3o foi poss\xEDvel concluir o convite." });
     }
   });
+  router.post("/staff/:id/resend-invite", authenticateRequest, resolvePlatformContext, requirePlatformPermission(["platform.staff.manage", "platform.staff.invite_sales"]), async (req, res) => {
+    try {
+      const memberId = req.params.id;
+      const db = getSupabaseAdmin2();
+      const { data: member, error: memErr } = await db.from("platform_members").select("*, platform_roles(key)").eq("id", memberId).single();
+      if (memErr || !member) {
+        return res.status(404).json({ error: "Membro n\xE3o encontrado." });
+      }
+      const { data: usersData } = await db.auth.admin.listUsers();
+      const user = usersData?.users?.find((u) => u.id === member.user_id);
+      if (!user || !user.email) {
+        return res.status(400).json({ error: "E-mail do membro n\xE3o localizado." });
+      }
+      const configuredUrl = process.env.PUBLIC_APP_URL || process.env.APP_URL || process.env.VITE_APP_URL;
+      const origin = configuredUrl || req.headers.origin || `${req.protocol}://${req.get("host")}`;
+      const redirectTo = `${String(origin).replace(/\/$/, "")}/#/auth/accept-invite`;
+      const { error: inviteErr } = await db.auth.admin.inviteUserByEmail(user.email, { redirectTo });
+      if (inviteErr) {
+        const sent = await db.auth.signInWithOtp({
+          email: user.email,
+          options: { shouldCreateUser: false, emailRedirectTo: redirectTo }
+        });
+        if (sent.error) {
+          return res.status(500).json({ error: "N\xE3o foi poss\xEDvel reenviar o convite por e-mail." });
+        }
+      }
+      await db.from("platform_members").update({ status: "invited", updated_at: (/* @__PURE__ */ new Date()).toISOString() }).eq("id", memberId);
+      await db.from("platform_audit_logs").insert({
+        actor_user_id: req.user.id,
+        action: "platform.member.invitation_resent",
+        entity_type: "platform_members",
+        entity_id: memberId,
+        severity: "info",
+        metadata: { email: user.email }
+      });
+      return res.json({ success: true, message: `Novo convite enviado para ${user.email}.` });
+    } catch (e) {
+      reportServerError(e, req, "platform_member_resend_invite");
+      return res.status(500).json({ error: "N\xE3o foi poss\xEDvel reenviar o convite." });
+    }
+  });
   const updateStaffSchema = z3.object({
     role_key: z3.string().optional(),
     relationship_type: z3.string().optional(),

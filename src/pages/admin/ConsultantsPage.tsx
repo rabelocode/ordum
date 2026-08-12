@@ -259,6 +259,26 @@ export function ConsultantsPage() {
     catch(err:any){setActionError(err.message||'Falha ao encerrar sessões.');}finally{setActionLoadingId(null);}
   };
 
+  const handleResendInvite = async (memberId: string) => {
+    if (!session) return;
+    setActionLoadingId(memberId);
+    setActionError('');
+    try {
+      const res = await fetch(`/api/admin/staff/${memberId}/resend-invite`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${session.access_token}` }
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Erro ao reenviar convite.');
+      setActionSuccess(data.message || 'Novo convite enviado com sucesso por e-mail!');
+      await loadStaffAndTeams();
+    } catch (err: any) {
+      setActionError(err.message || 'Erro ao reenviar convite.');
+    } finally {
+      setActionLoadingId(null);
+    }
+  };
+
   const filteredMembers = members.filter(m => {
     const search = searchTerm.toLowerCase();
     const name = m.user?.user_metadata?.full_name?.toLowerCase() || '';
@@ -283,9 +303,9 @@ export function ConsultantsPage() {
       {/* Page Header */}
       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
         <div>
-          <h1 className="text-2xl font-bold text-[#202322]">Equipe ORDUM</h1>
+          <h1 className="text-2xl font-bold text-[#202322]">Pessoas da Ordum</h1>
           <p className="text-[#626866] mt-1 text-xs">
-            Gerenciamento global de colaboradores internos, diretores, gerentes e consultores comerciais.
+            Gerenciamento global de pessoas com acesso administrativo ou operacional à plataforma Ordum.
           </p>
         </div>
         <Button 
@@ -293,7 +313,7 @@ export function ConsultantsPage() {
           className="w-full sm:w-auto gap-2 bg-[#121413] hover:bg-[#202322] text-white text-xs font-bold"
         >
           <UserPlus className="w-4 h-4" />
-          <span>Convidar Colaborador</span>
+          <span>Adicionar pessoa</span>
         </Button>
       </div>
 
@@ -428,7 +448,7 @@ export function ConsultantsPage() {
                             </span>
                           ) : isInvited ? (
                             <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-[10px] font-bold bg-amber-100 text-amber-800">
-                              <Mail className="w-3 h-3" /> Convidado
+                              <Mail className="w-3 h-3" /> Convite pendente
                             </span>
                           ) : (
                             <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-[10px] font-bold bg-green-100 text-green-800">
@@ -449,10 +469,20 @@ export function ConsultantsPage() {
                         {/* Actions */}
                         <td className="px-6 py-4 text-right">
                           <div className="flex items-center justify-end gap-2">
+                            {isInvited && (
+                              <button
+                                onClick={() => handleResendInvite(member.id)}
+                                disabled={actionLoadingId === member.id}
+                                className="px-2.5 py-1 text-[11px] font-bold bg-amber-50 text-amber-800 hover:bg-amber-100 rounded-lg transition-colors cursor-pointer"
+                                title="Reenviar convite por e-mail"
+                              >
+                                {actionLoadingId === member.id ? 'Reenviando...' : 'Reenviar convite'}
+                              </button>
+                            )}
                             {platformRole?.key==='admin'&&<button onClick={()=>setPendingAction({type:'sessions',id:member.id})} disabled={actionLoadingId===member.id} className="px-2.5 py-1 text-[11px] font-bold bg-amber-50 text-amber-800 rounded-lg" title="Encerrar sessões">Sessões</button>}
                             <button
                               onClick={() => handleOpenEditModal(member)}
-                              className="p-1.5 text-gray-500 hover:text-[#202322] hover:bg-gray-100 rounded-lg transition-colors"
+                              className="p-1.5 text-gray-500 hover:text-[#202322] hover:bg-[#F6F5F2] rounded-lg transition-colors"
                               title="Editar Função / Vínculo"
                             >
                               <Edit3 className="w-4 h-4" />
