@@ -1,41 +1,46 @@
 Owner: chatgpt_backend
 Status: ready_for_product_review
 Branch: fix/admin-functional-recovery
-Head: a7a3424a443fd37753b71a528ed5ddf4511acaf9
-Headline: Admin + Integridade prontos para demonstração piloto.
+Head: 0a7be7730b213d4bc17f19c5eb2ccf84dfd074c1
+Headline: Release Candidate 1 — protocolo humano homologado; Admin + Integridade preservados.
+
+Database sync:
+- `20260814175625_integrity_human_protocol` e `20260814175716_integrity_human_protocol_random_source_fix` constam no histórico remoto e agora no Git.
+- A definição local final reproduz `public.submit_integrity_report_v2`; remoto confirmado como `SECURITY DEFINER`, `search_path=pg_catalog, public, extensions` e EXECUTE apenas para `service_role`.
+- Nenhuma migration foi reaplicada no Supabase.
+
+Protocol:
+- Novos relatos: `INT-AAAA-000000`, ano `America/Sao_Paulo`, seis dígitos criptograficamente aleatórios, retry limitado e unique constraint como autoridade final.
+- `ORD-*` preservado; acompanhamento continua exigindo protocolo + código secreto bcrypt.
+- Protocolo idêntico em report/case, ciclo completo, busca e exportações.
+
+E2E:
+- Integridade RC no Preview: `integrity_e2e_1786732596294_2746f970`, protocolo `INT-2026-815606`.
+- Browser mobile: envio, comprovante, tracking e complemento; desktop/mobile: caixa, busca integral/parcial e detalhe.
+- Compliance: investigação até encerramento/reabertura; CSV individual, CSV de casos e PDF preservaram protocolo e filename seguro.
+- Fixture legacy `ORD-*` acompanhada com protocolo + segredo.
+- Admin aggregate-only e negativos RLS/cross-tenant preservados.
+- Admin smoke: `ui-mstadow8`, login → dashboard → lead → empresa → implantação → Integridade.
+- Cleanup: `residualTenants=0`, `residualAuth=0`.
 
 Preview:
-- READY — `dpl_6TWAepzjNQQ7ujuMHS3HF46CXaGW`
-- https://ordum-4sdezq3z7-ordum.vercel.app
+- READY — `dpl_7KtEXYrRT7yHiAf1Nes6YVgLGoPM`
+- Imutável: https://ordum-6ok10c7t5-ordum.vercel.app
+- Alias: https://ordum-git-fix-admin-functional-recovery-ordum.vercel.app
+- Logs HTTP 5xx no smoke: 0.
 
-Telas polidas:
-- Admin: home orientada a prioridades, lead/demo/proposta/contrato, Customer 360 e implantação.
-- Integridade: home operacional, caixa e detalhe do caso, investigação, relatórios, canal público e comprovante/acompanhamento mobile.
-- Hierarquia visual, microcopy, estados vazios, total da proposta, próxima ação e mensagens de erro foram revisados sem criar dados fictícios.
-
-Simulação das 4 personas:
-- Vendedor Ordum: equipe → lead → contato → demo → proposta → aprovação por outro usuário → contrato → ativação → cliente → implantação, integralmente pela UI (`ui-mst8hneq`).
-- Administrador do cliente: configuração, estrutura Matriz — Goiânia / Unidade — Anápolis, canal e publicação comprovados no fluxo live.
-- Denunciante: relato anônimo mobile → protocolo/segredo → acompanhamento e complemento.
-- Compliance: triagem → roteamento → investigação → tarefas → comunicação/evidência → decisão → encerramento/reabertura (`integrity_e2e_1786729419844_dd249e0d`).
-
-Evidências:
-- Screenshots comerciais desktop/mobile: `tmp/pilot-ready/`.
-- Cleanup: `residualTenants=0`, `residualAuth=0`.
-- Suite: 203 PASS, 0 FAIL, 1 live comercial SKIP explícito; build, lint, typecheck e secret scan PASS.
-- Preview: nenhum log HTTP 5xx encontrado após o QA.
+Checks:
+- Secret scan PASS; 36 migrations locais válidas; lint/typecheck PASS; build PASS.
+- 209 testes PASS, 0 FAIL, 1 live comercial SKIP explícito.
+- 6 testes focados cobrem formato, fonte não sequencial, retry, sincronização report/case, segredo e grants.
+- Security Advisor: nenhum alerta novo de protocolo; INFO/WARN legados mantidos sem limpeza fora de escopo.
 
 Backend Requests:
-- BR-001 continua pendente: Supabase Auth `/invite` retorna 429 até existir SMTP transacional configurado. Callback já validado; nenhum workaround frontend.
-- BR-002 continua não bloqueante: runner sem `CRON_SECRET`.
-- BR-003 não bloqueante: protocolo humano `INT-AAAA-000000` requer geração backend compatível com o modelo seguro atual.
+- BR-001 pendente: SMTP transacional para remover o rate limit externo de convites.
+- BR-002 pendente não bloqueante: runner sem `CRON_SECRET` e cron diário no plano atual.
+- BR-003 RESOLVIDO e homologado.
+- BR-004 novo, não bloqueante: `20260811231343_integrity_customer_operations` existe no Git, mas não no histórico/schema remoto; requer reconciliação oficial do backend.
 
-Problemas encontrados e corrigidos:
-- Home do Admin ainda parecia painel de métricas; prioridades foram condensadas numa fila de ação.
-- Customer 360 mostrava estado de trial como status principal; agora prioriza a situação operacional do cliente.
-- Próxima ação do caso ficava abaixo de dados secundários; foi promovida no detalhe.
-- Relatórios começavam com oito KPIs equivalentes; agora destacam quatro indicadores e resumem os demais.
-- Confirmação pública e upload exibiam linguagem genérica/inglesa; agora usam copy humana em português.
-
-Blockers:
-- Entrega real de convite por e-mail depende exclusivamente do SMTP externo descrito em BR-001; não bloqueia a demonstração com contas já provisionadas.
+Regressions:
+- Nenhum 5xx, erro de console, duplicidade, divergência report/case, vazamento de segredo, quebra legacy ou acesso confidencial pelo Admin Global encontrado.
+- `PlaceholderAdminPage.tsx` removido após confirmar ausência total de imports/uso.
