@@ -1,19 +1,41 @@
 Owner: chatgpt_backend
-Status: ready_for_backend_sync
+Status: ready_for_product_review
 Branch: fix/admin-functional-recovery
-Head: 106f9af829635ad27a07d829a1292a5ba467bdaf
+Head: a7a3424a443fd37753b71a528ed5ddf4511acaf9
+Headline: Admin + Integridade prontos para demonstração piloto.
+
 Preview:
-- READY — `dpl_Eko8oZryK5pen8LNfsL27EDaTxdj`
-- https://ordum-8jdzmlhqq-ordum.vercel.app
-Product acceptance:
-- Admin: PASS — fluxo browser equipe → lead → contato → demo → proposta → aprovação → contrato → cliente → implantação; CS, aliases e mobile 390x844 validados (`ui-mst51yyl`).
-- Integridade: PASS — canal público, acompanhamento, operação interna, RBAC, Storage e aggregate-only validados (`integrity_e2e_1786722809183_acc307fc`); cleanup com `residualTenants=0` e `residualAuth=0`.
-- Confirmação de conta: FAIL somente na entrega do e-mail — Supabase Auth respondeu 429. Callback controlado no Preview final: `email_confirmed=true`, membro `active`, sessão persistente após refresh, logout/login PASS, mobile PASS e cleanup PASS (`invite-mst5ethp`).
-Checks:
-- Secret scan PASS; 34 migrations PASS; lint/typecheck PASS; 203 testes PASS, 0 FAIL, 1 live comercial SKIP explícito; build PASS.
-- Preview: HTTP 5xx = 0 no aceite e nenhum log 5xx no deployment.
+- READY — `dpl_6TWAepzjNQQ7ujuMHS3HF46CXaGW`
+- https://ordum-4sdezq3z7-ordum.vercel.app
+
+Telas polidas:
+- Admin: home orientada a prioridades, lead/demo/proposta/contrato, Customer 360 e implantação.
+- Integridade: home operacional, caixa e detalhe do caso, investigação, relatórios, canal público e comprovante/acompanhamento mobile.
+- Hierarquia visual, microcopy, estados vazios, total da proposta, próxima ação e mensagens de erro foram revisados sem criar dados fictícios.
+
+Simulação das 4 personas:
+- Vendedor Ordum: equipe → lead → contato → demo → proposta → aprovação por outro usuário → contrato → ativação → cliente → implantação, integralmente pela UI (`ui-mst8hneq`).
+- Administrador do cliente: configuração, estrutura Matriz — Goiânia / Unidade — Anápolis, canal e publicação comprovados no fluxo live.
+- Denunciante: relato anônimo mobile → protocolo/segredo → acompanhamento e complemento.
+- Compliance: triagem → roteamento → investigação → tarefas → comunicação/evidência → decisão → encerramento/reabertura (`integrity_e2e_1786729419844_dd249e0d`).
+
+Evidências:
+- Screenshots comerciais desktop/mobile: `tmp/pilot-ready/`.
+- Cleanup: `residualTenants=0`, `residualAuth=0`.
+- Suite: 203 PASS, 0 FAIL, 1 live comercial SKIP explícito; build, lint, typecheck e secret scan PASS.
+- Preview: nenhum log HTTP 5xx encontrado após o QA.
+
 Backend Requests:
-- BR-001 — BLOQUEANTE: configurar SMTP transacional/limite do Supabase Auth e homologar a entrega real do convite.
-- BR-002 — NÃO BLOQUEANTE: runner sem `CRON_SECRET`; plano atual aceita cron diário.
+- BR-001 continua pendente: Supabase Auth `/invite` retorna 429 até existir SMTP transacional configurado. Callback já validado; nenhum workaround frontend.
+- BR-002 continua não bloqueante: runner sem `CRON_SECRET`.
+- BR-003 não bloqueante: protocolo humano `INT-AAAA-000000` requer geração backend compatível com o modelo seguro atual.
+
+Problemas encontrados e corrigidos:
+- Home do Admin ainda parecia painel de métricas; prioridades foram condensadas numa fila de ação.
+- Customer 360 mostrava estado de trial como status principal; agora prioriza a situação operacional do cliente.
+- Próxima ação do caso ficava abaixo de dados secundários; foi promovida no detalhe.
+- Relatórios começavam com oito KPIs equivalentes; agora destacam quatro indicadores e resumem os demais.
+- Confirmação pública e upload exibiam linguagem genérica/inglesa; agora usam copy humana em português.
+
 Blockers:
-- Entrega real do e-mail de convite depende de configuração externa do Supabase Auth (BR-001).
+- Entrega real de convite por e-mail depende exclusivamente do SMTP externo descrito em BR-001; não bloqueia a demonstração com contas já provisionadas.
