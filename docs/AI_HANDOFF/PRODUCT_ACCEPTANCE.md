@@ -19,3 +19,11 @@
 - PASS — desktop — gestor/Admin Ordum — relatórios agregados e fronteira `aggregate-only`; dossiê individual negado ao Admin Global.
 
 E2E real: `integrity_e2e_1786722809183_acc307fc`; cleanup `residualTenants=0`, `residualAuth=0`.
+
+## RC2 Financeiro e pós-venda
+
+- PASS — código/testes — Admin Global/Financeiro — visão geral, assinaturas, cobranças e inadimplência usam dados persistidos, estados humanos e ações condicionais — 19/19 testes financeiros focados.
+- PASS — código/testes — Customer Success — carteira combina produto, implantação e situação financeira sem fabricar uso ou score.
+- PASS — mobile por implementação responsiva — Financeiro/Empresa — listas em cards, detalhes sem tabela horizontal e ações acessíveis.
+- PASS — HTTP — público/anônimo — Preview 200 e APIs administrativas 401 sem sessão; zero runtime errors/5xx no smoke.
+- BLOCKED — browser desktop/mobile — quatro personas — runtime oficial sem navegador disponível; revisão visual autenticada deve ser feita no Preview RC2.

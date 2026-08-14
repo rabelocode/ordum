@@ -1,46 +1,52 @@
 Owner: chatgpt_backend
 Status: ready_for_product_review
 Branch: fix/admin-functional-recovery
-Head: 0a7be7730b213d4bc17f19c5eb2ccf84dfd074c1
-Headline: Release Candidate 1 — protocolo humano homologado; Admin + Integridade preservados.
-
-Database sync:
-- `20260814175625_integrity_human_protocol` e `20260814175716_integrity_human_protocol_random_source_fix` constam no histórico remoto e agora no Git.
-- A definição local final reproduz `public.submit_integrity_report_v2`; remoto confirmado como `SECURITY DEFINER`, `search_path=pg_catalog, public, extensions` e EXECUTE apenas para `service_role`.
-- Nenhuma migration foi reaplicada no Supabase.
-
-Protocol:
-- Novos relatos: `INT-AAAA-000000`, ano `America/Sao_Paulo`, seis dígitos criptograficamente aleatórios, retry limitado e unique constraint como autoridade final.
-- `ORD-*` preservado; acompanhamento continua exigindo protocolo + código secreto bcrypt.
-- Protocolo idêntico em report/case, ciclo completo, busca e exportações.
-
-E2E:
-- Integridade RC no Preview: `integrity_e2e_1786732596294_2746f970`, protocolo `INT-2026-815606`.
-- Browser mobile: envio, comprovante, tracking e complemento; desktop/mobile: caixa, busca integral/parcial e detalhe.
-- Compliance: investigação até encerramento/reabertura; CSV individual, CSV de casos e PDF preservaram protocolo e filename seguro.
-- Fixture legacy `ORD-*` acompanhada com protocolo + segredo.
-- Admin aggregate-only e negativos RLS/cross-tenant preservados.
-- Admin smoke: `ui-mstadow8`, login → dashboard → lead → empresa → implantação → Integridade.
-- Cleanup: `residualTenants=0`, `residualAuth=0`.
+Head: 6549b388586f752d527b47f4715dbe1cc3fe2879
+Headline: RC2 — Admin comercial, financeiro e pós-venda implementados; Integridade preservado.
 
 Preview:
-- READY — `dpl_7KtEXYrRT7yHiAf1Nes6YVgLGoPM`
-- Imutável: https://ordum-6ok10c7t5-ordum.vercel.app
+- READY — `dpl_4wHW32PAbLGPZN1ArWzNGJijDrKj`
+- Imutável: https://ordum-dn9any6qt-ordum.vercel.app
 - Alias: https://ordum-git-fix-admin-functional-recovery-ordum.vercel.app
-- Logs HTTP 5xx no smoke: 0.
+- Root HTTP 200; rotas administrativas recusam acesso anônimo com 401; runtime errors/HTTP 5xx no smoke: 0.
+
+BR-004:
+- RESOLVIDO pelo conector oficial Supabase; migration remota/local `20260814191358_integrity_customer_operations`.
+- `integrity_notification_preferences`: RLS ativo, nenhuma policy Data API, `PUBLIC`/`anon`/`authenticated` sem acesso e CRUD somente `service_role` para a API.
+
+Admin Financeiro:
+- Visão geral limitada a MRR ativo, receita prevista, recebido e atraso, calculados de assinaturas/cobranças persistidas; ausência de dados usa `—`.
+- Assinaturas, Cobranças e Inadimplência possuem navegação, busca, filtros, cards mobile, detalhes humanos, histórico e ações condicionais.
+- Contrato, assinatura e pagamento permanecem estados distintos; não existe ação manual de “marcar como pago”.
+- Falha/ausência do provider mantém dados locais acessíveis e bloqueia ações externas com mensagem humana.
+
+Planos, Customer 360 e Customer Success:
+- Planos apresentam produto, preço, ciclo, trial e limites em linguagem comercial; versionamento permanece interno e contratos antigos preservados.
+- Empresa → Financeiro mostra plano, mensalidade, assinatura, próxima cobrança, último pagamento/atraso e CTA contextual.
+- Carteira de CS mostra produtos, implantação e situação financeira sem score opaco ou métricas inventadas.
+
+Asaas Sandbox:
+- Sandbox-only/fail-closed preservado; produção não foi habilitada.
+- Adapter, idempotência, eventos fora de ordem, chargeback, cancelamento e conciliação permanecem cobertos.
+- BR-005: `ASAAS_API_KEY` e `ASAAS_WEBHOOK_TOKEN` indisponíveis; homologação externa real continua pendente sem bloquear o Financeiro local.
 
 Checks:
-- Secret scan PASS; 36 migrations locais válidas; lint/typecheck PASS; build PASS.
-- 209 testes PASS, 0 FAIL, 1 live comercial SKIP explícito.
-- 6 testes focados cobrem formato, fonte não sequencial, retry, sincronização report/case, segredo e grants.
-- Security Advisor: nenhum alerta novo de protocolo; INFO/WARN legados mantidos sem limpeza fora de escopo.
+- Secret scan PASS; 36 migrations válidas; lint/typecheck/build PASS.
+- 214 testes: 213 PASS, 0 FAIL, 1 live comercial SKIP explícito.
+- Foco financeiro: 19/19 PASS após correção do CTA de cancelamento no detalhe.
+- Security Advisor: nenhum risco novo; `integrity_notification_preferences` gera apenas INFO esperado por ser server-only. Warnings legados não foram alterados fora do escopo.
 
-Backend Requests:
-- BR-001 pendente: SMTP transacional para remover o rate limit externo de convites.
-- BR-002 pendente não bloqueante: runner sem `CRON_SECRET` e cron diário no plano atual.
-- BR-003 RESOLVIDO e homologado.
-- BR-004 novo, não bloqueante: `20260811231343_integrity_customer_operations` existe no Git, mas não no histórico/schema remoto; requer reconciliação oficial do backend.
+Personas e mobile:
+- Contratos de vendedor, financeiro, CS, Admin Global e isolamento do Integridade preservados pela suíte relevante.
+- Layout financeiro usa listas/cards a partir do mobile e não depende de tabela horizontal.
+- QA visual autenticado das quatro personas NÃO executado nesta sessão: o runtime oficial do navegador não disponibilizou instância. Requer revisão visual no Preview; nenhuma fixture foi criada, portanto nenhum dado/resíduo foi deixado.
 
-Regressions:
-- Nenhum 5xx, erro de console, duplicidade, divergência report/case, vazamento de segredo, quebra legacy ou acesso confidencial pelo Admin Global encontrado.
-- `PlaceholderAdminPage.tsx` removido após confirmar ausência total de imports/uso.
+Integridade smoke:
+- Suítes de protocolo, tracking, RBAC, aggregate-only e fluxo operacional permaneceram verdes.
+- Root do Preview e boundaries autenticadas responderam sem 5xx; smoke visual não foi repetido pela indisponibilidade do navegador.
+
+Blockers reais:
+- BR-001: SMTP transacional externo.
+- BR-002: cron intradiário/runner, não bloqueante.
+- BR-005: credenciais Asaas Sandbox para homologação externa.
+- Revisão visual autenticada RC2 no Preview.
