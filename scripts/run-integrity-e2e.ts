@@ -155,6 +155,7 @@ async function runBrowserQa(scenarios: Array<{ name: string; user: FixtureUser; 
         if (scenario.name === "tenant_admin_desktop") {
           await page.getByRole("button", { name: "Relatórios", exact: true }).click();
           await page.getByRole("heading", { name: "Visão executiva do programa", exact: true }).waitFor();
+          await page.getByText("Relatos recebidos", { exact: true }).waitFor();
           await page.screenshot({ path: `${PILOT_READY_DIR}/integrity-reports.png`, fullPage: true });
         }
       } else if (await page.getByRole("button", { name: "Configurações" }).count()) {
@@ -353,7 +354,7 @@ export async function runIntegrityE2E(): Promise<Evidence> {
     const workspace = (path: string, options?: RequestInit, user = adminA, tenant = tenantA.id) => request(`/api/workspace/integrity${path}`, options, user.token, tenant);
     const publicApi = (path: string, options?: RequestInit) => request(`/api/public/integrity${path}`, options);
 
-    expect(await workspace("/settings", { method: "PUT", body: JSON.stringify({ introduction: "Canal seguro para o teste funcional descartável da Ordum.", instructions: "Descreva os fatos com clareza.", allows_anonymous: true, allows_identified: true, default_sla_hours: 12, treatment_sla_hours: 48, alert_lead_hours: 6, stale_case_hours: 72, automatic_acknowledgement: "Seu relato foi recebido com segurança.", branding: { accent: "#3457D5" }, attachment_policy: { enabled: true, max_files: 3, max_size_mb: 2 }, communication_policy: { allow_reporter_messages: true, allow_case_messages: true }, routing_rules: [], retention_days: 365, evidence_retention_days: 730, message_retention_days: 365, post_closure_action: "archive", anonymization_enabled: false }) }), 200, "settings");
+    expect(await workspace("/settings", { method: "PUT", body: JSON.stringify({ introduction: "Este é um espaço seguro para relatar situações que contrariem nossos valores, políticas ou a legislação.", instructions: "Conte o que aconteceu com suas palavras. Inclua apenas as informações que considerar importantes.", allows_anonymous: true, allows_identified: true, default_sla_hours: 12, treatment_sla_hours: 48, alert_lead_hours: 6, stale_case_hours: 72, automatic_acknowledgement: "Seu relato foi recebido com segurança.", branding: { display_name: "Grupo Horizonte", primary_color: "#3457D5", institutional_message: "Fale com segurança. Sua manifestação será tratada com confidencialidade por pessoas autorizadas." }, attachment_policy: { enabled: true, max_files: 3, max_size_mb: 2 }, communication_policy: { allow_reporter_messages: true, allow_case_messages: true }, routing_rules: [], retention_days: 365, evidence_retention_days: 730, message_retention_days: 365, post_closure_action: "archive", anonymization_enabled: false }) }), 200, "settings");
     const template = expect(await workspace("/settings/templates", { method: "POST", body: JSON.stringify({ template_type: "task", name: "Validar evidência", title: "Validar evidência recebida", body: "Conferir autenticidade, origem e integridade do arquivo antes da conclusão.", active: true }) }), 201, "task template").template;
     expect(await workspace("/settings/templates", { method: "POST", body: JSON.stringify({ template_type: "reporter_message", name: "Atualização segura", body: "Seu relato recebeu uma atualização. Acesse o canal com protocolo e chave.", active: true }) }), 201, "reporter template");
     expect(await workspace("/settings/templates", { method: "POST", body: JSON.stringify({ template_type: "information_request", name: "Solicitar complemento", body: "Precisamos de informações adicionais. Responda pelo acompanhamento seguro.", active: true }) }), 201, "information request template");
@@ -371,7 +372,7 @@ export async function runIntegrityE2E(): Promise<Evidence> {
     const preview = expect(await workspace("/settings/routing/preview", { method: "POST", body: JSON.stringify({ category_id: category.id, unit_id: unit.id, department_id: department.id, severity:"high", reporter_mode:"anonymous", has_conflict:false }) }), 200, "routing preview");
     if (preview.selected?.id !== routing.id || preview.deterministic !== true) throw new Error("preview de roteamento não determinístico");
     const channelSlug = `canal-${suffix}`;
-    expect(await workspace("/settings/channels", { method: "POST", body: JSON.stringify({ name: "Canal E2E", public_title: "Canal de Integridade", public_slug: channelSlug, active: false, allows_anonymous: true, allows_identified: true, privacy_notice:"Os dados são tratados conforme a política interna do tenant.", confirmation_message:"Relato registrado com segurança." }) }), 201, "channel");
+    expect(await workspace("/settings/channels", { method: "POST", body: JSON.stringify({ name: "Canal principal", public_title: "Canal de Integridade", public_slug: channelSlug, active: false, allows_anonymous: true, allows_identified: true, privacy_notice:"Use este canal de boa-fé. Você pode permanecer anônimo e acompanhar a manifestação com seu protocolo e código de acesso.", confirmation_message:"Seu relato foi recebido com segurança." }) }), 201, "channel");
     expect(await workspace("/settings/custom-fields", { method: "POST", body: JSON.stringify({ field_key:"local_detalhado",label:"Local detalhado",field_type:"short_text",required:true,options:[],active:true,sort_order:1 }) }), 201, "custom field");
     expect(await publicApi(`/channels/${channelSlug}`), 404, "unpublished channel denied");
     const channelTest = expect(await workspace("/settings/channel-test", { method: "POST", body: "{}" }), 200, "channel readiness test");
@@ -388,7 +389,7 @@ export async function runIntegrityE2E(): Promise<Evidence> {
     evidence.reportHttp = 201;
     const report = value(await db.from("integrity_reports").select("id,reporter_mode").eq("protocol", submitted.protocol).single(), "report stored");
     const customStored=value(await db.from("integrity_report_custom_values").select("text_value").eq("report_id",report.id).single(),"custom value");
-    if(customStored.text_value!=="Sala de reunião E2E")throw new Error("campo tipado não persistido");
+    if(customStored.text_value!=="Sala de reuniões da matriz")throw new Error("campo tipado não persistido");
     const secret = value(await db.from("integrity_report_secrets").select("secret_hash").eq("report_id", report.id).single(), "secret stored");
     if (!secret.secret_hash || secret.secret_hash === submitted.access_secret) throw new Error("segredo não foi armazenado como hash");
     const identified = expect(await publicApi("/reports", { method: "POST", body: JSON.stringify({ ...reportBody, subject: "Relato identificado descartável", reporter_mode: "identified", identity: { name: "Pessoa E2E", email: `${runId}@ordum-test.internal` } }) }), 201, "identified report");
