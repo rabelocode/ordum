@@ -8,6 +8,7 @@ const SECRET = process.env.SUPABASE_SECRET_KEY || process.env.SUPABASE_SERVICE_R
 const APP_URL = (process.env.APP_URL || "https://ordum-git-fix-admin-functional-recovery-ordum.vercel.app").replace(/\/$/, "");
 const PUBLISHABLE = process.env.VITE_SUPABASE_PUBLISHABLE_KEY || process.env.SUPABASE_PUBLISHABLE_KEY || "";
 const CRON_SECRET = process.env.CRON_SECRET || "";
+const PILOT_READY_DIR = "tmp/pilot-ready";
 
 type Evidence = Record<string, string | number | boolean>;
 type FixtureUser = { id: string; email: string; password: string; token: string; membershipId: string };
@@ -42,10 +43,10 @@ async function request(path: string, options: RequestInit = {}, token?: string, 
   return { status: response.status, body, headers: response.headers };
 }
 
-async function createUser(db: SupabaseClient, runId: string, suffix: string, tenantId: string, roleId: string): Promise<FixtureUser> {
+async function createUser(db: SupabaseClient, runId: string, suffix: string, tenantId: string, roleId: string, fullName?: string): Promise<FixtureUser> {
   const password = `Ordum#${crypto.randomBytes(18).toString("base64url")}`;
   const email = `${runId}_${suffix}@ordum-test.internal`;
-  const auth = value(await db.auth.admin.createUser({ email, password, email_confirm: true, user_metadata: { runId } }), `auth ${suffix}`).user;
+  const auth = value(await db.auth.admin.createUser({ email, password, email_confirm: true, user_metadata: { runId, full_name: fullName } }), `auth ${suffix}`).user;
   const membership = value(await db.from("memberships").insert({ tenant_id: tenantId, user_id: auth.id, status: "active" }).select("id").single(), `membership ${suffix}`);
   value(await db.from("membership_roles").insert({ membership_id: membership.id, role_id: roleId }).select().single(), `membership role ${suffix}`);
   const signed = value(await createClient(SUPABASE_URL, PUBLISHABLE).auth.signInWithPassword({ email, password }), `login ${suffix}`);
@@ -94,7 +95,7 @@ async function cleanup(db: SupabaseClient, runId: string, tenantIds: string[], u
 async function runBrowserQa(scenarios: Array<{ name: string; user: FixtureUser; expectedCase: boolean; mobile?: boolean; settings?: boolean }>, subject: string) {
   const browser = await chromium.launch({ headless: true });
   const failures: string[] = [];
-  await mkdir("tmp/product-recovery", { recursive: true });
+  await mkdir(PILOT_READY_DIR, { recursive: true });
   try {
     for (const scenario of scenarios) {
       const context = await browser.newContext({ viewport: scenario.mobile ? { width: 390, height: 844 } : { width: 1440, height: 1000 }, acceptDownloads: true });
@@ -109,6 +110,9 @@ async function runBrowserQa(scenarios: Array<{ name: string; user: FixtureUser; 
       await page.evaluate(() => { window.location.hash = "#/workspace/integridade"; });
       await page.reload({ waitUntil: "networkidle" });
       await page.getByRole("heading", { name: "Ordum Integridade", exact: true }).waitFor();
+      if (scenario.name === "tenant_admin_desktop") {
+        await page.screenshot({ path: `${PILOT_READY_DIR}/integrity-home.png`, fullPage: true });
+      }
       const casesButton = page.locator('nav[aria-label] button').filter({ hasText: "Casos" });
       try { await casesButton.click({ timeout: 15000 }); } catch (error) { const visible=(await page.locator("body").innerText()).replace(/\s+/g," ").slice(0,600); throw new Error(`${scenario.name}: navegação de casos indisponível (${visible}); ${String(error)}`); }
       if (scenario.expectedCase) {
@@ -123,13 +127,17 @@ async function runBrowserQa(scenarios: Array<{ name: string; user: FixtureUser; 
           await exportButton.click();
           await exportButton.waitFor({ state: "visible" });
         }
-        await page.screenshot({ path: `tmp/product-recovery/${scenario.name}-cases.png`, fullPage: true });
+        await page.screenshot({ path: `${PILOT_READY_DIR}/${scenario.name}-cases.png`, fullPage: true });
         await page.getByText(subject, { exact: true }).filter({ visible: true }).first().click();
         await page.getByRole("heading", { name: subject, exact: true }).waitFor();
         for (const tabName of ["Visão geral", "Investigação", "Comunicação", "Evidências", "Histórico"]) {
           await page.getByRole("button", { name: tabName, exact: true }).waitFor();
         }
-        await page.screenshot({ path: `tmp/product-recovery/${scenario.name}-case-detail.png`, fullPage: true });
+        await page.screenshot({ path: `${PILOT_READY_DIR}/${scenario.name}-case-detail.png`, fullPage: true });
+        if (scenario.name === "tenant_admin_desktop") {
+          await page.getByRole("button", { name: "Investigação", exact: true }).click();
+          await page.screenshot({ path: `${PILOT_READY_DIR}/integrity-investigation-workspace.png`, fullPage: true });
+        }
       } else {
         await page.getByText(/Nenhum caso nesta visão/).waitFor();
       }
@@ -143,7 +151,12 @@ async function runBrowserQa(scenarios: Array<{ name: string; user: FixtureUser; 
         await page.getByText(/etapas · 100%/).waitFor();
         await page.getByRole("button", { name: "Testar canal" }).click();
         await page.getByText(/Teste concluído/).waitFor();
-        await page.screenshot({ path: `tmp/product-recovery/${scenario.name}-settings.png`, fullPage: true });
+        await page.screenshot({ path: `${PILOT_READY_DIR}/${scenario.name}-settings.png`, fullPage: true });
+        if (scenario.name === "tenant_admin_desktop") {
+          await page.getByRole("button", { name: "Relatórios", exact: true }).click();
+          await page.getByRole("heading", { name: "Visão executiva do programa", exact: true }).waitFor();
+          await page.screenshot({ path: `${PILOT_READY_DIR}/integrity-reports.png`, fullPage: true });
+        }
       } else if (await page.getByRole("button", { name: "Configurações" }).count()) {
         failures.push(`${scenario.name}: configurações expostas sem permissão`);
       }
@@ -214,7 +227,7 @@ async function runInternalUiFlow(user: FixtureUser, subject: string) {
     await page.getByText("Decisão registrada e caso encerrado.", { exact: true }).waitFor();
     await page.getByPlaceholder("Motivo, quando necessário").fill("Nova informação recebida após o encerramento.");
     await transition("Reabrir caso");
-    await page.screenshot({ path:"tmp/product-recovery/integrity-complete-ui-flow.png", fullPage:true });
+    await page.screenshot({ path:`${PILOT_READY_DIR}/integrity-investigation.png`, fullPage:true });
     await context.close();
   } finally { await browser.close(); }
   if (failures.length) throw new Error(`internal UI flow: ${failures.join("; ")}`);
@@ -230,10 +243,10 @@ async function runAdminProductQa(user:FixtureUser,tenantId:string,tenantName:str
     await page.goto(`${APP_URL}/#/login`,{waitUntil:"networkidle"});await page.locator('input[type="email"]').fill(user.email);await page.locator('input[type="password"]').fill(user.password);await page.locator('button[type="submit"]').click();await page.waitForURL(/#\/(workspace|admin)/,{timeout:20000});
     await page.evaluate(()=>{window.location.hash="#/admin";});await page.reload({waitUntil:"networkidle"});await page.getByRole("heading",{name:"Veja o que precisa da sua atenção."}).waitFor();
     for(const label of ["Comercial","Clientes","Financeiro","Operação","Administração"])await page.getByText(new RegExp(`^${label}$`,"i")).first().waitFor();
-    await page.screenshot({path:"tmp/product-recovery/admin-dashboard.png",fullPage:true});
+    await page.screenshot({path:`${PILOT_READY_DIR}/admin-dashboard.png`,fullPage:true});
     await page.evaluate(id=>{window.location.hash=`#/admin/empresas/${id}`;},tenantId);await page.reload({waitUntil:"networkidle"});await page.getByRole("heading",{name:tenantName,exact:true}).waitFor();await page.getByRole("button",{name:"Resumo",exact:true}).waitFor();await page.getByRole("button",{name:"Produtos",exact:true}).click();await page.getByRole("heading",{name:"Produtos contratados"}).waitFor();
     const visible=(await page.locator("body").innerText()).toLowerCase();for(const forbidden of ["tenant_id","membership","entitlement","control plane","aggregate_only","correlation id","uuid","service_role"])if(visible.includes(forbidden))failures.push(`empresa expôs termo técnico: ${forbidden}`);
-    await page.screenshot({path:"tmp/product-recovery/admin-company-products.png",fullPage:true});await context.close();
+    await page.screenshot({path:`${PILOT_READY_DIR}/admin-company-products.png`,fullPage:true});await context.close();
   }finally{await browser.close();}
   if(failures.length)throw new Error(`admin product QA: ${failures.join("; ")}`);
 }
@@ -268,17 +281,17 @@ async function runPublicMobileQa(channelSlug: string, protocol: string, secret: 
     const submitReport = page.locator('form button[type="submit"]', { hasText: "Enviar relato" });
     if (await submitReport.count() !== 1) throw new Error(`CTA final do relato ausente: ${(await page.locator("body").innerText()).replace(/\s+/g," ").slice(0,900)}`);
     await submitReport.click();
-    await page.getByRole("heading", { name: "Relato recebido", exact: true }).waitFor();
-    await page.getByRole("button", { name: "Copiar dados", exact: true }).waitFor();
+    await page.getByRole("heading", { name: "Relato enviado com sucesso", exact: true }).waitFor();
+    await page.getByRole("button", { name: "Copiar informações", exact: true }).waitFor();
     await page.getByRole("button", { name: "Baixar comprovante", exact: true }).waitFor();
-    await page.screenshot({ path: "tmp/product-recovery/public-report-receipt-mobile.png", fullPage: true });
+    await page.screenshot({ path: `${PILOT_READY_DIR}/public-report-receipt-mobile.png`, fullPage: true });
     await page.getByRole("button", { name: "Acompanhar agora", exact: true }).click();
     await page.getByRole("button", { name: "Consultar", exact: true }).click();
     await page.getByRole("heading", { name: "Seu relato", exact: true }).waitFor();
     await page.getByLabel("Complementar informações").fill("Complemento enviado pela interface pública descartável.");
     await page.getByRole("button", { name: "Enviar mensagem", exact: true }).click();
     await page.getByText("Complemento enviado pela interface pública descartável.", { exact: true }).waitFor();
-    await page.screenshot({ path: "tmp/product-recovery/public-tracking-mobile.png", fullPage: true });
+    await page.screenshot({ path: `${PILOT_READY_DIR}/public-tracking-mobile.png`, fullPage: true });
     await page.goto(`${APP_URL}/#/canal/${channelSlug}`, { waitUntil: "networkidle" });
     await page.getByRole("button", { name: "Acompanhar relato", exact: true }).click();
     await page.getByLabel("Protocolo").fill(protocol);
@@ -287,6 +300,12 @@ async function runPublicMobileQa(channelSlug: string, protocol: string, secret: 
     await page.getByText(protocol, { exact: true }).waitFor();
     await page.getByText("Recebido", { exact: true }).waitFor();
     await context.close();
+    const desktop = await browser.newContext({ viewport: { width: 1440, height: 1000 } });
+    const channelPage = await desktop.newPage();
+    await channelPage.goto(`${APP_URL}/#/canal/${channelSlug}`, { waitUntil: "networkidle" });
+    await channelPage.getByRole("heading", { name: /Canal de Integridade/ }).waitFor();
+    await channelPage.screenshot({ path: `${PILOT_READY_DIR}/public-channel-desktop.png`, fullPage: true });
+    await desktop.close();
   } finally {
     await browser.close();
   }
@@ -310,8 +329,8 @@ export async function runIntegrityE2E(): Promise<Evidence> {
   let primaryError: unknown;
   try {
     const suffix = crypto.randomBytes(4).toString("hex");
-    const tenantA = value(await db.from("tenants").insert({ name: `Integrity E2E A ${suffix}`, slug: `e2e-integrity-${suffix}-a`, status: "trial", settings: { e2e_run_id: runId } }).select("id").single(), "tenant A");
-    const tenantB = value(await db.from("tenants").insert({ name: `Integrity E2E B ${suffix}`, slug: `e2e-integrity-${suffix}-b`, status: "trial", settings: { e2e_run_id: runId } }).select("id").single(), "tenant B");
+    const tenantA = value(await db.from("tenants").insert({ name: `Grupo Horizonte ${suffix}`, slug: `e2e-integrity-${suffix}-a`, status: "trial", settings: { e2e_run_id: runId } }).select("id").single(), "tenant A");
+    const tenantB = value(await db.from("tenants").insert({ name: `Empresa Isolada ${suffix}`, slug: `e2e-integrity-${suffix}-b`, status: "trial", settings: { e2e_run_id: runId } }).select("id").single(), "tenant B");
     tenantIds.push(tenantA.id, tenantB.id);
     const solution = value(await db.from("solutions").select("id").eq("key", "integridade").single(), "solution integrity");
     value(await db.from("tenant_solutions").insert([{ tenant_id: tenantA.id, solution_id: solution.id, status: "active" }, { tenant_id: tenantB.id, solution_id: solution.id, status: "active" }]).select(), "tenant solutions");
@@ -320,12 +339,12 @@ export async function runIntegrityE2E(): Promise<Evidence> {
     const investigatorRole = value(await db.from("roles").select("id").eq("tenant_id", tenantA.id).eq("key", "integrity_investigator").single(), "investigator role");
     const complianceRole = value(await db.from("roles").select("id").eq("tenant_id", tenantA.id).eq("key", "integrity_compliance").single(), "compliance role");
     const emptyRole = value(await db.from("roles").insert({ tenant_id: tenantA.id, key: "e2e_no_access", name: "Sem acesso" }).select("id").single(), "empty role");
-    const adminA = await createUser(db, runId, "admin_a", tenantA.id, roleA.id);
-    const adminB = await createUser(db, runId, "admin_b", tenantB.id, roleB.id);
-    const blocked = await createUser(db, runId, "blocked", tenantA.id, emptyRole.id);
-    const assignedInvestigator = await createUser(db, runId, "investigator_assigned", tenantA.id, investigatorRole.id);
-    const unassignedInvestigator = await createUser(db, runId, "investigator_unassigned", tenantA.id, investigatorRole.id);
-    const compliance = await createUser(db, runId, "compliance", tenantA.id, complianceRole.id);
+    const adminA = await createUser(db, runId, "admin_a", tenantA.id, roleA.id, "Helena Duarte");
+    const adminB = await createUser(db, runId, "admin_b", tenantB.id, roleB.id, "Paula Ribeiro");
+    const blocked = await createUser(db, runId, "blocked", tenantA.id, emptyRole.id, "Usuário sem acesso");
+    const assignedInvestigator = await createUser(db, runId, "investigator_assigned", tenantA.id, investigatorRole.id, "Carlos Menezes");
+    const unassignedInvestigator = await createUser(db, runId, "investigator_unassigned", tenantA.id, investigatorRole.id, "Bruno Tavares");
+    const compliance = await createUser(db, runId, "compliance", tenantA.id, complianceRole.id, "Mariana Almeida");
     userIds.push(adminA.id, adminB.id, blocked.id, assignedInvestigator.id, unassignedInvestigator.id, compliance.id);
     const platformRole = value(await db.from("platform_roles").select("id").eq("key", "admin").single(), "platform admin role");
     value(await db.from("platform_members").insert({ user_id: adminA.id, role_id: platformRole.id, status: "active", relationship_type: "partner" }).select("id").single(), "platform fixture");
@@ -341,8 +360,8 @@ export async function runIntegrityE2E(): Promise<Evidence> {
     const investigatorTemplates = expect(await workspace("/settings/templates", {}, assignedInvestigator), 200, "investigator templates").templates;
     if (!investigatorTemplates.some((item: any) => item.id === template.id)) throw new Error("template tenant-scoped não disponível ao investigador");
     const category = expect(await workspace("/settings/categories", { method: "POST", body: JSON.stringify({ name: "Assédio", slug: `assedio-${suffix}`, default_risk_level: "high", sla_hours: 12, active: true }) }), 201, "category").category;
-    const unit = expect(await workspace("/settings/units", { method: "POST", body: JSON.stringify({ name: "Matriz Piloto", code: `U-${suffix}`, is_headquarters:true, responsible_membership_id:adminA.membershipId, active: true }) }), 201, "unit").unit;
-    const branch = expect(await workspace("/settings/units", { method: "POST", body: JSON.stringify({ name: "Filial Sul", code: `F-${suffix}`, active: true }) }), 201, "branch").unit;
+    const unit = expect(await workspace("/settings/units", { method: "POST", body: JSON.stringify({ name: "Matriz — Goiânia", code: `U-${suffix}`, is_headquarters:true, responsible_membership_id:adminA.membershipId, active: true }) }), 201, "unit").unit;
+    const branch = expect(await workspace("/settings/units", { method: "POST", body: JSON.stringify({ name: "Unidade — Anápolis", code: `F-${suffix}`, active: true }) }), 201, "branch").unit;
     const department = expect(await workspace("/settings/departments", { method: "POST", body: JSON.stringify({ unit_id: unit.id, name: "Operações", code: `OP-${suffix}`, responsible_membership_id: assignedInvestigator.membershipId, active: true }) }), 201, "department").department;
     expect(await workspace("/settings/departments", { method: "POST", body: JSON.stringify({ unit_id: branch.id, name: "Administrativo", code: `ADM-${suffix}`, active: true }) }), 201, "branch department");
     const committee = expect(await workspace("/settings/committees", { method: "POST", body: JSON.stringify({ name: "Comitê de Ética", member_ids: [assignedInvestigator.membershipId], active: true }) }), 201, "committee").committee;
@@ -363,7 +382,7 @@ export async function runIntegrityE2E(): Promise<Evidence> {
     const channel = expect(await publicApi(`/channels/${channelSlug}`), 200, "public channel").channel;
     if (!channel.categories?.length || !channel.units?.length || !channel.departments?.length || !channel.custom_fields?.length || !channel.privacy_notice || !channel.confirmation_message) throw new Error("canal sem estrutura/campos/textos configurados");
 
-    const reportBody = { channel_slug: channelSlug, category_slug: category.slug, reporter_mode: "anonymous", subject: "Relato funcional descartável", description: "Descrição detalhada suficiente para validar o fluxo operacional completo sem dados reais.", occurred_at: new Date().toISOString().slice(0, 10), unit_id: unit.id, department_id: department.id, custom_fields: { local_detalhado: "Sala de reunião E2E" } };
+    const reportBody = { channel_slug: channelSlug, category_slug: category.slug, reporter_mode: "anonymous", subject: "Possível conflito de interesses em contratação", description: "Relato fictício para validar o fluxo operacional completo do cenário piloto, sem dados de pessoas ou clientes reais.", occurred_at: new Date().toISOString().slice(0, 10), unit_id: unit.id, department_id: department.id, custom_fields: { local_detalhado: "Sala de reuniões da matriz" } };
     const submitted = expect(await publicApi("/reports", { method: "POST", body: JSON.stringify(reportBody) }), 201, "anonymous report");
     if (!submitted.protocol || !submitted.access_secret || submitted.access_secret.length < 24) throw new Error("protocolo/segredo ausente");
     evidence.reportHttp = 201;
@@ -420,7 +439,7 @@ export async function runIntegrityE2E(): Promise<Evidence> {
       { name: "investigator_unassigned_desktop", user: unassignedInvestigator, expectedCase: false },
     ], reportBody.subject);
     await runInternalUiFlow(compliance,"Relato enviado integralmente pela interface");
-    await runAdminProductQa(adminA,tenantA.id,`Integrity E2E A ${suffix}`);
+    await runAdminProductQa(adminA,tenantA.id,`Grupo Horizonte ${suffix}`);
     evidence.browserQa = true;
     evidence.internalUiFlow = true;
     evidence.adminProductQa = true;

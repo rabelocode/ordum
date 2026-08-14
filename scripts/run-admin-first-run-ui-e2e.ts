@@ -18,11 +18,11 @@ const runId = `ui-${Date.now().toString(36)}`;
 const password = `Qa!${randomBytes(18).toString("base64url")}`;
 const creatorEmail = `admin.${runId}@e2e.ordum.invalid`;
 const approverEmail = `approver.${runId}@e2e.ordum.invalid`;
-const company = `Empresa Piloto ${runId}`;
-const teamName = `Comercial ${runId}`;
-const planName = `Integridade Piloto ${runId}`;
+const company = `Grupo Horizonte ${runId}`;
+const teamName = `Equipe Comercial ${runId}`;
+const planName = `Ordum Integridade Piloto ${runId}`;
 const planCode = `integridade-${runId}`;
-const artifacts = `tmp/qa-package3/${runId}`;
+const artifacts = "tmp/pilot-ready";
 await mkdir(artifacts, { recursive: true });
 const ids: {
   users: string[];
@@ -265,8 +265,8 @@ async function cleanup() {
 let browser;
 let failure: unknown;
 try {
-  const creatorMember = await createOperator(creatorEmail, "Admin QA");
-  const approverMember = await createOperator(approverEmail, "Aprovador QA");
+  const creatorMember = await createOperator(creatorEmail, "Mariana Almeida");
+  const approverMember = await createOperator(approverEmail, "Rafael Nogueira");
   browser = await chromium.launch({ headless: true });
   const creator = await browser.newContext({
     viewport: { width: 1440, height: 1000 },
@@ -275,6 +275,7 @@ try {
   page.on("console", (message) => { if (message.type() === "error") console.log(`BROWSER_CONSOLE=${message.text()}`); });
   page.on("response", (response) => { if (response.status() >= 400) console.log(`BROWSER_HTTP=${response.status()} ${response.url()}`); });
   await login(page, creatorEmail);
+  await shot(page, "admin-dashboard");
   await page.goto(`${base}/#/admin/equipes`, { waitUntil: "networkidle" });
   await shot(page, "00-teams-loaded");
   console.log(`TEAMS_PAGE=${page.url()} BODY=${(await page.locator("body").innerText()).slice(0, 1200)}`);
@@ -343,7 +344,7 @@ try {
   ids.plan = plan.data.id;
   await page.goto(`${base}/#/admin/leads`, { waitUntil: "networkidle" });
   await page.getByRole("button", { name: "Novo lead" }).click();
-  await page.getByLabel("Contato").fill(`Contato ${runId}`);
+  await page.getByLabel("Contato").fill("Fernanda Costa");
   await page.getByLabel("Empresa").fill(company);
   await page.getByLabel("E-mail").fill(`contato.${runId}@example.com`);
   await page.getByLabel("Equipe responsável").selectOption({ label: teamName });
@@ -356,7 +357,7 @@ try {
     .single();
   if (lead.error) throw lead.error;
   ids.lead = lead.data.id;
-  await shot(page, "03-lead-created");
+  await shot(page, "admin-lead");
   const leadRow = page.locator("tr").filter({ hasText: company });
   await leadRow.getByRole("button", { name: "Registrar contato" }).click();
   await page.getByLabel(/Assunto/).fill("Primeiro contato realizado");
@@ -381,6 +382,7 @@ try {
   await page.getByLabel(/Próxima ação/).fill("Preparar proposta");
   await page.getByRole("button", { name: "Salvar" }).click();
   await page.getByText(/Resultado registrado/).waitFor();
+  await shot(page, "admin-demo");
   await page.getByRole("button", { name: "Realizadas" }).click();
   await page.locator("article").filter({ hasText: company }).getByRole("link", { name: "Criar proposta" }).click();
   await page.getByText("Etapa 1 de 4").waitFor();
@@ -399,7 +401,7 @@ try {
     .single();
   if (proposal.error) throw proposal.error;
   ids.proposal = proposal.data.id;
-  await shot(page, "04-proposal-awaiting-approval");
+  await shot(page, "admin-proposal-awaiting-approval");
   const approver = await browser.newContext({
     viewport: { width: 1440, height: 1000 },
   });
@@ -415,7 +417,7 @@ try {
     .fill("Condições revisadas por segunda pessoa");
   await approvalPage.getByRole("button", { name: "Confirmar" }).click();
   await approvalPage.getByText("Proposta aprovada.").waitFor();
-  await shot(approvalPage, "05-proposal-approved");
+  await shot(approvalPage, "admin-proposal-approved");
   await page.goto(`${base}/#/admin/propostas`, { waitUntil: "networkidle" });
   await page.reload({ waitUntil: "networkidle" });
   await page.getByRole("button", { name: "Prontas para enviar" }).click();
@@ -471,6 +473,7 @@ try {
   await page.getByLabel("Observação").fill("Assinatura externa conferida");
   await page.getByRole("button", { name: "Confirmar" }).click();
   await page.getByText(/Assinatura externa registrada/).waitFor();
+  await shot(page, "admin-contract");
   await page.getByRole("button", { name: "Ativar cliente" }).click();
   await page
     .getByRole("button", { name: /Ativar e iniciar implantação/ })
@@ -478,18 +481,23 @@ try {
   await page.waitForURL(/#\/admin\/empresas\//, { timeout: 30000 });
   ids.tenant = page.url().split("/").pop();
   await page.getByText(planName).first().waitFor({ timeout: 30000 });
-  await shot(page, "06-client-activated");
+  await shot(page, "admin-company");
+  await page.goto(`${base}/#/admin/onboarding?tenant=${ids.tenant}`, { waitUntil: "networkidle" });
+  await page.getByText(company).first().waitFor({ timeout: 30000 });
+  await shot(page, "admin-onboarding");
+  await page.goto(`${base}/#/admin/empresas/${ids.tenant}`, { waitUntil: "networkidle" });
+  await page.getByRole("heading", { name: company, exact: true }).waitFor({ timeout: 30000 });
   await page.setViewportSize({ width: 390, height: 844 });
   await page.reload({ waitUntil: "networkidle" });
-  await shot(page, "07-client-mobile");
+  await shot(page, "admin-company-mobile");
   await page.goto(`${base}/#/admin/onboarding?tenant=${ids.tenant}`, {
     waitUntil: "networkidle",
   });
   await page.getByText(company).first().waitFor({ timeout: 30000 });
-  await shot(page, "08-onboarding-mobile");
+  await shot(page, "admin-onboarding-mobile");
   await page.goto(`${base}/#/admin/customer-success`, { waitUntil: "domcontentloaded" });
   await page.getByRole("heading", { name: "Customer Success", exact: true }).waitFor({ timeout: 20000 });
-  await shot(page, "09-customer-success-mobile");
+  await shot(page, "admin-customer-success-mobile");
   for (const [legacy, expected] of [
     ["desempenho", "customer-success"],
     ["solucoes", "planos"],
