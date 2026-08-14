@@ -270,6 +270,7 @@ function AdminLayoutInner({ children, currentPath }: { children: React.ReactNode
       <main className="flex-1 flex flex-col min-w-0 overflow-hidden">
         <header className="bg-white border-b border-[#DDD8CF]/40 h-16 flex items-center px-4 md:px-8 flex-shrink-0 gap-4">
           <button 
+            aria-label="Abrir menu"
             className="md:hidden p-2 -ml-2 text-gray-600 hover:text-[#202322] hover:bg-gray-100 rounded-lg transition-colors focus:outline-none focus:ring-2 focus:ring-[#B66E45]"
             onClick={() => setIsMobileMenuOpen(true)}
           >
