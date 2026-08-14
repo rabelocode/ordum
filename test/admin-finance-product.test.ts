@@ -22,6 +22,8 @@ test('Financeiro keeps activation, subscription and payment states distinct', ()
   assert.match(page, /pending_payment: 'Pagamento pendente'/);
   assert.match(page, /received: 'Pago'/);
   assert.match(page, /overdue: 'Vencido'/);
+  assert.match(page, /effectiveSubscriptionStatus/);
+  assert.match(page, /tenant_billing_state\?\.access_status/);
   assert.doesNotMatch(page, /Marcar como pago/);
   assert.match(page, /if \(selected\) return <>[\s\S]*ActionDialog/);
 });

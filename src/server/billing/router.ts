@@ -729,10 +729,10 @@ export function createBillingRouters(getSupabaseAdmin: () => any) {
     const { page, pageSize, from, to } = parsePagination(req.query);
     if (contractIds && !contractIds.length) return res.json({ subscriptions: pageResult([], 0, page, pageSize), payments: pageResult([], 0, page, pageSize) });
     let subscriptions = db.from('billing_subscriptions')
-      .select('*, billing_customers(name,email,tax_id_last4), commercial_contracts(contract_number,customer_name,team_id,owner_platform_member_id,plan_id,billing_plans(name),billing_status_history(id,to_status,reason,created_at))', { count: 'exact' })
+      .select('*, billing_customers(name,email,tax_id_last4), tenants(tenant_billing_state(access_status)), commercial_contracts(contract_number,customer_name,team_id,owner_platform_member_id,plan_id,billing_plans(name),billing_status_history(id,to_status,reason,created_at))', { count: 'exact' })
       .order('created_at', { ascending: false }).range(from, to);
     let payments = db.from('billing_payments')
-      .select('*, commercial_contracts(contract_number,customer_name,team_id,owner_platform_member_id,plan_id,billing_plans(name),billing_status_history(id,to_status,reason,created_at))', { count: 'exact' })
+      .select('*, tenants(tenant_billing_state(access_status)), commercial_contracts(contract_number,customer_name,team_id,owner_platform_member_id,plan_id,billing_plans(name),billing_status_history(id,to_status,reason,created_at))', { count: 'exact' })
       .order('created_at', { ascending: false }).range(from, to);
     if (contractIds) { subscriptions = subscriptions.in('contract_id', contractIds); payments = payments.in('contract_id', contractIds); }
     if (typeof req.query.tenant === 'string' && req.query.tenant) {
