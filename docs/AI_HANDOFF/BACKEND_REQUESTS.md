@@ -32,8 +32,19 @@ Evidência: RC smoke `integrity_e2e_1786732034217_731021a1` validou geração pe
 ## BR-004
 
 Tela: Integridade → Preferências de notificações
-Problema: a migration local `20260811231343_integrity_customer_operations` não consta no histórico remoto e a tabela `integrity_notification_preferences` não existe no banco em 14/08/2026.
-Contrato necessário: reconciliar oficialmente essa migration pelo fluxo do Supabase, sem inserção manual no histórico e sem reaplicar os dois patches do protocolo.
+Problema: RESOLVIDO em 14/08/2026.
+Contrato necessário: a DDL local ausente foi aplicada pelo conector oficial do Supabase como `20260814191358_integrity_customer_operations`; o arquivo local foi alinhado ao timestamp remoto, sem inserção manual no histórico e sem reaplicar patches anteriores.
 Permissão: backend/Supabase da Ordum.
 Bloqueante: NÃO
+Frontend pronto: SIM
+
+Evidência: `integrity_notification_preferences` existe com RLS habilitado; `PUBLIC`, `anon` e `authenticated` não possuem acesso direto; `service_role` possui o CRUD necessário para a API server-side. O Advisor registra apenas o INFO esperado de tabela server-only sem policy pública.
+
+## BR-005
+
+Tela: Administração → Saúde do sistema → Integração financeira
+Problema: a homologação externa do Asaas Sandbox permanece indisponível porque `ASAAS_API_KEY` e `ASAAS_WEBHOOK_TOKEN` não estão disponíveis no ambiente atual; `BILLING_ENABLED` permanece desligado por segurança.
+Contrato necessário: cadastrar as credenciais Sandbox diretamente no ambiente seguro da Vercel, validar o webhook `/api/webhooks/asaas` e executar o roteiro de homologação de `docs/ORDUM_08_BILLING_ASAAS.md`.
+Permissão: configuração administrativa Vercel/Asaas Sandbox.
+Bloqueante: NÃO para o produto financeiro local; SIM apenas para operações externas e homologação Asaas real.
 Frontend pronto: SIM

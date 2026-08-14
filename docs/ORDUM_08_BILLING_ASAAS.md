@@ -8,6 +8,8 @@ A integração usa a API v3 do Asaas exclusivamente no Sandbox. `BILLING_ENABLED
 
 No ciclo do piloto, o adapter foi exercitado com transporte isolado para criação de cliente, assinatura, consulta de cobrança e cancelamento. Confirmação, evento duplicado, fora de ordem e conciliação permanecem cobertos por testes de domínio/SQL. A homologação contra a API Sandbox real continua bloqueada enquanto `ASAAS_API_KEY` e `ASAAS_WEBHOOK_TOKEN` não estiverem cadastradas.
 
+No Admin RC2, a operação financeira usa linguagem de negócio e separa contrato, assinatura e pagamento. A visão geral apresenta no máximo quatro indicadores reais; assinaturas, cobranças e inadimplência possuem filas próprias; detalhes de infraestrutura permanecem em Saúde do sistema. Quando o provider está indisponível, os dados locais continuam consultáveis e ações externas ficam fail-closed, sem permitir marcação manual de pagamento.
+
 Referências vigentes: [autenticação](https://docs.asaas.com/docs/autentica%C3%A7%C3%A3o-1), [assinaturas](https://docs.asaas.com/docs/assinaturas), [webhooks](https://docs.asaas.com/docs/sobre-os-webhooks), [eventos de cobrança](https://docs.asaas.com/docs/webhook-para-cobrancas) e [eventos de assinatura](https://docs.asaas.com/docs/eventos-para-assinaturas).
 
 ## Variáveis server-side

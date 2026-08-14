@@ -679,28 +679,47 @@ export function createBillingRouters(getSupabaseAdmin: () => any) {
     const contractIds = await scopedContractIds(db, req.platformContext);
     if (contractIds && !contractIds.length) return res.json({
       configuration: publicBillingHealth(), counts: { plans: 0, activeSubscriptions: 0, overduePayments: 0, failedWebhooks: 0 },
-      lastWebhook: null, lastReconciliation: null,
+      metrics: { activeMrrCents: 0, expectedCents: 0, receivedCents: 0, overdueCents: 0 },
+      attention: { overduePayments: 0, contractsAwaitingStart: 0, subscriptionsWithSyncIssue: 0 },
+      hasFinancialData: false,
     });
-    let subscriptionQuery = db.from('billing_subscriptions').select('*', { count: 'exact', head: true }).eq('status', 'active');
-    let overdueQuery = db.from('billing_payments').select('*', { count: 'exact', head: true }).eq('status', 'overdue');
+    const periodStart = new Date(); periodStart.setDate(1); periodStart.setHours(0, 0, 0, 0);
+    const periodEnd = new Date(periodStart); periodEnd.setMonth(periodEnd.getMonth() + 1);
+    let subscriptionQuery = db.from('billing_subscriptions').select('id,amount_cents,cycle,status,next_due_date,contract_id');
+    let paymentQuery = db.from('billing_payments').select('id,amount_cents,status,due_date,received_at,confirmed_at,contract_id');
+    let contractsQuery = db.from('commercial_contracts').select('id,status,external_signature_status,tenant_id').in('status', ['approved', 'pending_payment', 'active']);
     if (contractIds) {
       subscriptionQuery = subscriptionQuery.in('contract_id', contractIds);
-      overdueQuery = overdueQuery.in('contract_id', contractIds);
+      paymentQuery = paymentQuery.in('contract_id', contractIds);
+      contractsQuery = contractsQuery.in('id', contractIds);
     }
     const isAdmin = req.platformContext.role?.key === 'admin';
-    const [plans, subscriptions, overdue, failures, lastWebhook, lastReconciliation] = await Promise.all([
+    const [plans, subscriptions, payments, contracts, failures, reconciliation] = await Promise.all([
       db.from('billing_plans').select('*', { count: 'exact', head: true }).eq('active', true),
       subscriptionQuery,
-      overdueQuery,
+      paymentQuery,
+      contractsQuery,
       isAdmin ? db.from('billing_webhook_events').select('*', { count: 'exact', head: true }).eq('status', 'failed') : Promise.resolve({ count: 0 }),
-      isAdmin ? db.from('billing_webhook_events').select('event_type,status,received_at').order('received_at', { ascending: false }).limit(1).maybeSingle() : Promise.resolve({ data: null }),
-      isAdmin ? db.from('billing_reconciliation_runs').select('*').order('started_at', { ascending: false }).limit(1).maybeSingle() : Promise.resolve({ data: null }),
+      isAdmin ? db.from('billing_reconciliation_items').select('*', { count: 'exact', head: true }).in('status', ['open', 'pending_review']) : Promise.resolve({ count: 0 }),
     ]);
+    for (const result of [plans, subscriptions, payments, contracts]) if (result.error) return res.status(500).json({ error: 'Não foi possível calcular a visão financeira.' });
+    const subscriptionRows = subscriptions.data || [];
+    const paymentRows = payments.data || [];
+    const activeRows = subscriptionRows.filter((item: any) => item.status === 'active');
+    const overdueRows = paymentRows.filter((item: any) => item.status === 'overdue');
+    const inCurrentPeriod = (value?: string | null) => Boolean(value && new Date(value) >= periodStart && new Date(value) < periodEnd);
+    const activeMrrCents = activeRows.reduce((total: number, item: any) => total + (item.cycle === 'yearly' ? Math.round(Number(item.amount_cents || 0) / 12) : Number(item.amount_cents || 0)), 0);
+    const expectedCents = paymentRows.filter((item: any) => inCurrentPeriod(item.due_date)).reduce((total: number, item: any) => total + Number(item.amount_cents || 0), 0);
+    const receivedCents = paymentRows.filter((item: any) => ['received', 'confirmed', 'paid'].includes(item.status) && inCurrentPeriod(item.received_at || item.confirmed_at)).reduce((total: number, item: any) => total + Number(item.amount_cents || 0), 0);
+    const overdueCents = overdueRows.reduce((total: number, item: any) => total + Number(item.amount_cents || 0), 0);
+    const subscribedContracts = new Set(subscriptionRows.map((item: any) => item.contract_id));
+    const contractsAwaitingStart = (contracts.data || []).filter((item: any) => item.status === 'approved' && item.external_signature_status === 'signed' && !subscribedContracts.has(item.id)).length;
     return res.json({
       configuration: publicBillingHealth(),
-      counts: { plans: plans.count || 0, activeSubscriptions: subscriptions.count || 0, overduePayments: overdue.count || 0, failedWebhooks: failures.count || 0 },
-      lastWebhook: lastWebhook.data || null,
-      lastReconciliation: lastReconciliation.data || null,
+      counts: { plans: plans.count || 0, activeSubscriptions: activeRows.length, overduePayments: overdueRows.length, failedWebhooks: failures.count || 0 },
+      metrics: { activeMrrCents, expectedCents, receivedCents, overdueCents },
+      attention: { overduePayments: overdueRows.length, contractsAwaitingStart, subscriptionsWithSyncIssue: Number(failures.count || 0) + Number(reconciliation.count || 0) },
+      hasFinancialData: subscriptionRows.length > 0 || paymentRows.length > 0,
     });
   });
 
@@ -710,12 +729,18 @@ export function createBillingRouters(getSupabaseAdmin: () => any) {
     const { page, pageSize, from, to } = parsePagination(req.query);
     if (contractIds && !contractIds.length) return res.json({ subscriptions: pageResult([], 0, page, pageSize), payments: pageResult([], 0, page, pageSize) });
     let subscriptions = db.from('billing_subscriptions')
-      .select('*, billing_customers(name,email,tax_id_last4), commercial_contracts(contract_number,customer_name,team_id,owner_platform_member_id)', { count: 'exact' })
+      .select('*, billing_customers(name,email,tax_id_last4), commercial_contracts(contract_number,customer_name,team_id,owner_platform_member_id,plan_id,billing_plans(name),billing_status_history(id,to_status,reason,created_at))', { count: 'exact' })
       .order('created_at', { ascending: false }).range(from, to);
     let payments = db.from('billing_payments')
-      .select('*, commercial_contracts(contract_number,customer_name,team_id,owner_platform_member_id)', { count: 'exact' })
+      .select('*, commercial_contracts(contract_number,customer_name,team_id,owner_platform_member_id,plan_id,billing_plans(name),billing_status_history(id,to_status,reason,created_at))', { count: 'exact' })
       .order('created_at', { ascending: false }).range(from, to);
     if (contractIds) { subscriptions = subscriptions.in('contract_id', contractIds); payments = payments.in('contract_id', contractIds); }
+    if (typeof req.query.tenant === 'string' && req.query.tenant) {
+      const allowedTenants = contractIds === null || (await db.from('commercial_contracts').select('tenant_id').in('id', contractIds)).data?.some((item: any) => item.tenant_id === req.query.tenant);
+      if (!allowedTenants) return res.status(403).json({ error: 'Cliente fora da sua carteira.' });
+      subscriptions = subscriptions.eq('tenant_id', req.query.tenant);
+      payments = payments.eq('tenant_id', req.query.tenant);
+    }
     if (typeof req.query.status === 'string' && req.query.status) { subscriptions = subscriptions.eq('status', req.query.status); payments = payments.eq('status', req.query.status); }
     const [subscriptionResult, paymentResult] = await Promise.all([subscriptions, payments]);
     if (subscriptionResult.error || paymentResult.error) return res.status(500).json({ error: subscriptionResult.error?.message || paymentResult.error?.message });

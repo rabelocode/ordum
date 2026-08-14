@@ -14,7 +14,7 @@ const MODULES: Record<string, {
   orderField: string;
 }> = {
   onboarding: { table: 'onboarding_runs', select: '*, tenants(id,name,lifecycle_status), onboarding_items(*)', permission: 'platform.onboarding.read', tenantField: 'tenant_id', ownerField: 'owner_platform_member_id', orderField: 'created_at' },
-  success: { table: 'customer_success_accounts', select: '*, tenants(id,name,lifecycle_status,risk_level)', permission: 'platform.success.read', tenantField: 'tenant_id', ownerField: 'manager_platform_member_id', orderField: 'updated_at' },
+  success: { table: 'customer_success_accounts', select: '*, tenants(id,name,lifecycle_status,risk_level,tenant_billing_state(access_status,paid_through,grace_ends_at),tenant_solutions(status,solutions(name)),onboarding_runs(status,progress_percent,due_at))', permission: 'platform.success.read', tenantField: 'tenant_id', ownerField: 'manager_platform_member_id', orderField: 'updated_at' },
   support: { table: 'support_tickets', select: '*, tenants(id,name), solutions(id,key,name)', permission: 'platform.support.read', tenantField: 'tenant_id', teamField: 'team_id', ownerField: 'owner_platform_member_id', orderField: 'created_at' },
   privacy: { table: 'lgpd_requests', select: 'id,request_number,tenant_id,request_type,status,data_subject_reference,legal_hold,retention_until,due_at,owner_platform_member_id,reason,result_summary,excludes_integrity_data,created_at,updated_at,completed_at,tenants(id,name)', permission: 'platform.privacy.read', tenantField: 'tenant_id', ownerField: 'owner_platform_member_id', orderField: 'created_at' },
   targets: { table: 'sales_targets', select: '*', permission: 'platform.targets.read', teamField: 'team_id', ownerField: 'platform_member_id', orderField: 'period_start' },

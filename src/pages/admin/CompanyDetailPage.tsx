@@ -561,40 +561,7 @@ export function CompanyDetailPage({ tenantId }: { tenantId: string }) {
           )}
 
           {activeTab === "financial" && (
-            <div className="space-y-3">
-              <h2 className="text-lg font-bold">
-                Contrato, assinatura e pagamentos
-              </h2>
-              <div className="rounded-xl bg-gray-50 border p-4">
-                <div>
-                  Situação financeira:{" "}
-                  <strong>
-                    {billingAccessLabel(tenant.tenant_billing_state?.access_status)}
-                  </strong>
-                </div>
-                <div className="text-sm text-gray-500">
-                  Pago até: {tenant.tenant_billing_state?.paid_through || "—"} ·
-                  carência até:{" "}
-                  {tenant.tenant_billing_state?.grace_ends_at || "—"}
-                </div>
-              </div>
-              {contracts.map((contract: any) => (
-                <div key={contract.id} className="rounded-xl border p-4">
-                  <strong>
-                    Contrato #{contract.contract_number} · {contractStatusLabel(contract.status)}
-                  </strong>
-                  <div className="text-sm text-gray-500">
-                    {Array.isArray(contract.billing_subscriptions)
-                      ? contract.billing_subscriptions.length
-                      : contract.billing_subscriptions
-                        ? 1
-                        : 0}{" "}
-                    assinatura · {contract.billing_payments?.length || 0}{" "}
-                    pagamentos
-                  </div>
-                </div>
-              ))}
-            </div>
+            <CompanyFinancialSummary tenant={tenant} contracts={contracts} />
           )}
 
           {activeTab === "audit" && (
@@ -700,6 +667,32 @@ export function CompanyDetailPage({ tenantId }: { tenantId: string }) {
       )}
     </div>
   );
+}
+
+function CompanyFinancialSummary({tenant,contracts}:{tenant:any;contracts:any[]}){
+  const contract=contracts?.[0];
+  const subscriptions=contract ? (Array.isArray(contract.billing_subscriptions)?contract.billing_subscriptions:contract.billing_subscriptions?[contract.billing_subscriptions]:[]) : [];
+  const subscription=subscriptions[0];
+  const payments=(contracts||[]).flatMap((item:any)=>item.billing_payments||[]);
+  const overdue=payments.find((item:any)=>item.status==='overdue');
+  const paid=payments.find((item:any)=>['received','confirmed','paid'].includes(item.status));
+  const paidAt=paid?.received_at||paid?.confirmed_at;
+  const nextAction=overdue?'Revisar cobrança vencida':subscription?'Revisar assinatura':contract?'Acompanhar formalização':'Nenhuma ação financeira pendente';
+  return <div className="space-y-6">
+    <div><h2 className="text-xl font-black">Situação financeira</h2><p className="mt-1 text-sm text-[#626866]">Plano, cobranças e pendências deste cliente em um só lugar.</p></div>
+    <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+      <BusinessMetric label="Plano" value={contract?.billing_plans?.name||'A definir'}/>
+      <BusinessMetric label="Mensalidade" value={subscription?formatMoney(subscription.cycle==='yearly'?Math.round(subscription.amount_cents/12):subscription.amount_cents):contract?.amount_cents?formatMoney(contract.amount_cents):'—'}/>
+      <BusinessMetric label="Assinatura" value={billingAccessLabel(tenant.tenant_billing_state?.access_status||subscription?.status)}/>
+      <BusinessMetric label="Próxima cobrança" value={subscription?.next_due_date?new Date(`${subscription.next_due_date}T12:00:00`).toLocaleDateString('pt-BR'):'A definir'}/>
+    </div>
+    <section className={`rounded-2xl p-5 ${overdue?'border border-red-200 bg-red-50':'bg-[#202322] text-white'}`}>
+      <div className="text-xs font-bold uppercase tracking-wide opacity-70">Próxima ação</div><div className="mt-2 text-lg font-black">{nextAction}</div>
+      {overdue?<p className="mt-1 text-sm text-red-800">Há {formatMoney(overdue.amount_cents)} em atraso desde {overdue.due_date?new Date(`${overdue.due_date}T12:00:00`).toLocaleDateString('pt-BR'):'o vencimento'}.</p>:paidAt?<p className="mt-1 text-sm text-white/70">Último pagamento confirmado em {new Date(paidAt).toLocaleDateString('pt-BR')}.</p>:<p className="mt-1 text-sm text-white/70">Nenhum pagamento confirmado foi registrado para este cliente.</p>}
+      {contract?<a href={`#/admin/financeiro?view=${overdue?'overdue':'subscriptions'}&tenant=${tenant.id}`} className={`mt-4 inline-flex rounded-xl px-4 py-2.5 text-sm font-bold ${overdue?'bg-red-700 text-white':'bg-white text-[#202322]'}`}>{overdue?'Ver cobrança vencida':'Abrir Financeiro'}</a>:null}
+    </section>
+    {contracts?.length?<div className="divide-y divide-[#EEEAE3] overflow-hidden rounded-2xl bg-white ring-1 ring-[#DDD8CF]/70">{contracts.map((item:any)=><div key={item.id} className="grid gap-3 p-5 sm:grid-cols-[1.3fr_1fr_1fr]"><div><strong>Contrato {item.contract_number}</strong><p className="text-sm text-[#626866]">{item.billing_plans?.name||'Plano a definir'}</p></div><div><span className="text-xs font-bold uppercase text-[#777D7A]">Situação</span><p className="mt-1 text-sm font-bold">{contractStatusLabel(item.status)}</p></div><div><span className="text-xs font-bold uppercase text-[#777D7A]">Valor contratado</span><p className="mt-1 text-sm font-bold">{formatMoney(item.amount_cents)}</p></div></div>)}</div>:<div className="rounded-2xl border border-dashed border-[#DDD8CF] p-8 text-center"><h3 className="font-black">Nenhum contrato financeiro vinculado</h3><p className="mt-1 text-sm text-[#626866]">Quando a contratação for formalizada, o plano e as cobranças aparecerão aqui.</p></div>}
+  </div>;
 }
 
 function BusinessMetric({label,value}:{label:string;value:React.ReactNode}){return <div className="rounded-2xl bg-[#F6F5F2] p-5"><div className="text-xs font-bold uppercase tracking-wide text-[#777D7A]">{label}</div><div className="mt-2 text-lg font-black text-[#202322]">{value||"—"}</div></div>}

@@ -309,7 +309,7 @@ export function createAdminClientsRouter(getSupabaseAdmin: any) {
         const { data, error } = await getSupabaseAdmin()
           .from("tenants")
           .select(
-            "*, tenant_solutions(solution_id, status, solutions(key,name)), platform_client_assignments(*, platform_teams(name), platform_members(user_id, platform_roles(key, name))), tenant_domains(*), departments(*), memberships(id,user_id,status,employment_level,joined_at), tenant_billing_state(*), commercial_contracts(*, billing_subscriptions(*), billing_payments(*))",
+            "*, tenant_solutions(solution_id, status, solutions(key,name)), platform_client_assignments(*, platform_teams(name), platform_members(user_id, platform_roles(key, name))), tenant_domains(*), departments(*), memberships(id,user_id,status,employment_level,joined_at), tenant_billing_state(*), commercial_contracts(*, billing_plans(name), billing_subscriptions(*), billing_payments(*))",
           )
           .eq("id", clientId)
           .single();

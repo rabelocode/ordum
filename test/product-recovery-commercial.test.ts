@@ -92,7 +92,7 @@ test('support separates customer communication from internal notes',()=>{
 test('catalog editor keeps prices user-defined and hides raw configuration',()=>{
   const plans=read('src/pages/admin/PlansPage.tsx');
   assert.match(plans,/Planos e preços/);
-  assert.match(plans,/Criar nova versão/);
+  assert.match(plans,/Editar condições/);
   assert.match(plans,/Definir na contratação/);
   assert.match(plans,/Limites por produto/);
   assert.doesNotMatch(plans,/Limites globais \(JSON\)|JSON por ID/);
