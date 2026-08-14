@@ -62,6 +62,7 @@ async function setup() {
     value(await db.from("platform_lead_assignments").insert({ lead_id: lead.id, team_id: team.id, owner_platform_member_id: sales.memberId, assigned_by_user_id: admin.userId }).select(), `lead assignment ${index}`);
     const tenant = value(await db.from("tenants").insert({ name: item.name, slug: `horizonte-${index}-${runId}`, status: item.status, lifecycle_status: item.lifecycle, risk_level: item.risk, onboarding_status: index === 0 ? "completed" : "in_progress", trial_ends_at: index === 1 ? new Date(Date.now() + 14 * 86400000).toISOString() : null, success_manager_platform_member_id: cs.memberId, settings: { e2e_run_id: runId } }).select("id").single(), `tenant ${index}`);
     ids.tenants.push(tenant.id);
+    value(await db.from("platform_client_assignments").insert({ tenant_id: tenant.id, team_id: team.id, owner_platform_member_id: cs.memberId, assignment_type: "commercial", status: "active", assigned_by_user_id: admin.userId }).select(), `client assignment ${index}`);
     value(await db.from("tenant_solutions").insert({ tenant_id: tenant.id, solution_id: solution.id, status: "active" }).select(), `tenant solution ${index}`);
     const proposal = value(await db.from("commercial_proposals").insert({ lead_id: lead.id, plan_id: plan.id, team_id: team.id, owner_platform_member_id: sales.memberId, status: index === 0 ? "pending_approval" : "approved", amount_cents: 199000, currency: "BRL", cycle: "monthly", billing_type: "BOLETO", valid_until: new Date(Date.now() + 15 * 86400000).toISOString().slice(0, 10), notes: "Condições comerciais revisadas para o cenário piloto.", created_by_user_id: sales.userId }).select("id").single(), `proposal ${index}`);
     ids.proposals.push(proposal.id);
@@ -113,10 +114,10 @@ async function runVisualQa(browser: Browser) {
   const errors: string[] = [];
   const desktop = await browser.newContext({ viewport: { width: 1440, height: 1000 } });
   const admin = await desktop.newPage(); observe(admin, errors); await login(admin, "admin");
-  await admin.goto(`${base}/#/admin`, { waitUntil: "networkidle" }); await admin.getByText("Precisa da sua atenção", { exact: true }).first().waitFor(); await shot(admin, "01-admin-dashboard");
-  await admin.goto(`${base}/#/admin/leads`, { waitUntil: "networkidle" }); await admin.getByText("Grupo Horizonte", { exact: true }).filter({ visible: true }).first().waitFor(); await shot(admin, "02-lead");
-  await admin.goto(`${base}/#/admin/propostas`, { waitUntil: "networkidle" }); await admin.getByRole("button").filter({ hasText: "Grupo Horizonte" }).first().click(); await admin.getByText("Preparação", { exact: true }).first().waitFor(); await shot(admin, "03-proposal");
-  await admin.goto(`${base}/#/admin/empresas/${ids.tenants[0]}`, { waitUntil: "networkidle" }); await admin.getByRole("heading", { name: "Grupo Horizonte", exact: true }).waitFor(); await shot(admin, "04-company");
+  await gotoHash(admin, "#/admin"); await admin.getByText("Precisa da sua atenção", { exact: true }).first().waitFor(); await shot(admin, "01-admin-dashboard");
+  await gotoHash(admin, "#/admin/leads"); await admin.getByText("Grupo Horizonte", { exact: true }).filter({ visible: true }).first().waitFor(); await shot(admin, "02-lead");
+  await gotoHash(admin, "#/admin/propostas"); await admin.getByRole("button").filter({ hasText: "Grupo Horizonte" }).first().click(); await admin.getByText("Preparação", { exact: true }).first().waitFor(); await shot(admin, "03-proposal");
+  await gotoHash(admin, `#/admin/empresas/${ids.tenants[0]}`); await admin.getByRole("heading", { name: "Grupo Horizonte", exact: true }).waitFor(); await shot(admin, "04-company");
 
   const financeContext = await browser.newContext({ viewport: { width: 1440, height: 1000 } });
   const finance = await financeContext.newPage(); observe(finance, errors); await login(finance, "financeiro");
@@ -125,7 +126,7 @@ async function runVisualQa(browser: Browser) {
   catch { await shot(finance, "debug-finance-error"); throw new Error(`Financeiro não carregou: ${(await finance.locator("body").innerText()).replace(/\s+/g, " ").slice(0, 1200)}`); }
   await shot(finance, "05-finance-overview");
   await finance.getByRole("button", { name: "Assinaturas", exact: true }).click(); await finance.getByText("Grupo Horizonte", { exact: true }).filter({ visible: true }).first().waitFor(); await finance.getByText("Em período de teste", { exact: true }).filter({ visible: true }).waitFor(); await finance.getByText("Em atraso", { exact: true }).filter({ visible: true }).waitFor(); await shot(finance, "06-subscriptions");
-  await finance.getByRole("button", { name: "Cobranças", exact: true }).click(); await finance.getByPlaceholder("Buscar cliente").fill("Horizonte Serviços"); await finance.getByText("Horizonte Serviços", { exact: true }).first().click(); await finance.getByText(/dias? em atraso|Atraso/).first().waitFor(); await shot(finance, "07-charge");
+  await finance.getByRole("button", { name: "Cobranças", exact: true }).click(); await finance.getByPlaceholder("Buscar cliente", { exact: true }).fill("Horizonte Serviços"); await finance.getByText("Horizonte Serviços", { exact: true }).first().click(); await finance.getByText(/dias? em atraso|Atraso/).first().waitFor(); await shot(finance, "07-charge");
   const csContext = await browser.newContext({ viewport: { width: 1440, height: 1000 } });
   const cs = await csContext.newPage(); observe(cs, errors); await login(cs, "cs"); await gotoHash(cs, "#/admin/customer-success"); await cs.getByRole("heading", { name: "Customer Success", exact: true }).waitFor(); await cs.getByText("Horizonte Serviços", { exact: true }).waitFor(); await shot(cs, "08-customer-success");
 
@@ -134,7 +135,7 @@ async function runVisualQa(browser: Browser) {
   await gotoHash(mobilePage, "#/admin"); await assertNoOverflow(mobilePage, "dashboard mobile"); await shot(mobilePage, "15-admin-dashboard-mobile");
   await gotoHash(mobilePage, `#/admin/empresas/${ids.tenants[0]}`); await mobilePage.getByRole("heading", { name: "Grupo Horizonte", exact: true }).waitFor(); await assertNoOverflow(mobilePage, "company mobile"); await shot(mobilePage, "16-company-mobile");
   await gotoHash(mobilePage, "#/admin/financeiro"); await mobilePage.getByRole("heading", { name: "Gestão financeira", exact: true }).waitFor(); await assertNoOverflow(mobilePage, "finance mobile"); await shot(mobilePage, "17-finance-mobile");
-  await mobilePage.getByRole("button", { name: "Cobranças", exact: true }).click(); await mobilePage.getByPlaceholder("Buscar cliente").fill("Horizonte Serviços"); await mobilePage.getByText("Horizonte Serviços", { exact: true }).first().click(); await assertNoOverflow(mobilePage, "charge mobile"); await shot(mobilePage, "18-charge-mobile");
+  await mobilePage.getByRole("button", { name: "Cobranças", exact: true }).click(); await mobilePage.getByPlaceholder("Buscar cliente", { exact: true }).fill("Horizonte Serviços"); await mobilePage.getByText("Horizonte Serviços", { exact: true }).first().click(); await assertNoOverflow(mobilePage, "charge mobile"); await shot(mobilePage, "18-charge-mobile");
 
   for (const context of [desktop, financeContext, csContext, mobile]) await context.close();
   if (errors.length) throw new Error(`browser QA: ${errors.join("; ")}`);

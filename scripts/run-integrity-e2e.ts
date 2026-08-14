@@ -122,6 +122,7 @@ async function runBrowserQa(scenarios: Array<{ name: string; user: FixtureUser; 
         await search.fill(protocol.slice(-6));
         await page.getByText(subject, { exact: true }).filter({ visible: true }).first().waitFor({ timeout: 15000 });
         await search.clear();
+        await page.locator(".animate-pulse").first().waitFor({ state: "hidden", timeout: 15000 }).catch(() => undefined);
         try {
           await page.getByText(subject, { exact: true }).filter({ visible: true }).first().waitFor({ timeout: 15000 });
         } catch {
@@ -269,6 +270,7 @@ async function runPublicMobileQa(channelSlug: string, protocol: string, secret: 
     page.on("response", (response) => { const url=new URL(response.url()); if(url.origin===new URL(APP_URL).origin&&response.status() >= 500) failures.push(`HTTP ${response.status()} ${url.pathname}`); });
     await page.goto(`${APP_URL}/#/canal/${channelSlug}`, { waitUntil: "networkidle" });
     await page.getByRole("heading", { name: /Canal de Integridade/ }).waitFor();
+    await page.screenshot({ path: `${PILOT_READY_DIR}/public-channel-mobile.png`, fullPage: true });
     const overflow = await page.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth + 1);
     if (overflow) failures.push("overflow horizontal no canal mobile");
     await page.getByRole("button", { name: "Fazer um relato", exact: true }).click();
@@ -317,6 +319,12 @@ async function runPublicMobileQa(channelSlug: string, protocol: string, secret: 
     await channelPage.goto(`${APP_URL}/#/canal/${channelSlug}`, { waitUntil: "networkidle" });
     await channelPage.getByRole("heading", { name: /Canal de Integridade/ }).waitFor();
     await channelPage.screenshot({ path: `${PILOT_READY_DIR}/public-channel-desktop.png`, fullPage: true });
+    await channelPage.getByRole("button", { name: "Acompanhar relato", exact: true }).click();
+    await channelPage.getByLabel("Protocolo").fill(protocol);
+    await channelPage.getByLabel("Chave de acompanhamento").fill(secret);
+    await channelPage.getByRole("button", { name: "Consultar", exact: true }).click();
+    await channelPage.getByRole("heading", { name: "Seu relato", exact: true }).waitFor();
+    await channelPage.screenshot({ path: `${PILOT_READY_DIR}/public-tracking-desktop.png`, fullPage: true });
     await desktop.close();
   } finally {
     await browser.close();

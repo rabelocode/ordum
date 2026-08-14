@@ -734,14 +734,17 @@ export function IntegrityChannelPage({ slug }: { slug: string }) {
                     </form>
                     {channel.attachment_policy?.enabled && (
                       <div className="rounded-xl border border-dashed p-4">
-                        <label className="text-sm font-bold">
-                          Complementar com evidência
+                        <p className="text-sm font-bold">Complementar com evidência</p>
+                        <label className="mt-3 flex cursor-pointer items-center justify-between gap-3 rounded-xl border border-dashed border-[#C8C2B7] bg-[#F9F8F5] px-4 py-3 text-sm transition hover:border-[#3457D5]">
+                          <span className="min-w-0 truncate">{attachment?.name || "Selecionar arquivo"}</span>
+                          <span className="shrink-0 font-bold text-[#3457D5]">Escolher</span>
                           <input
+                            aria-label="Selecionar nova evidência"
                             type="file"
                             onChange={(event) =>
                               setAttachment(event.target.files?.[0] || null)
                             }
-                            className="mt-2 block w-full text-sm"
+                            className="sr-only"
                           />
                         </label>
                         <Button
