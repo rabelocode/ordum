@@ -7,7 +7,7 @@
 - PASS — mobile 390x844 — admin — Empresa e Produtos sem termos técnicos — `06-client-activated.png`, `07-client-mobile.png`.
 - PASS — mobile 390x844 — admin — Implantação filtrada para o cliente e CTA de próxima ação — `08-onboarding-mobile.png`.
 - PASS — mobile 390x844 — admin — Customer Success e aliases antigos redirecionados para áreas coerentes — `09-customer-success-mobile.png`.
-- FAIL — mobile 390x844 — novo membro — entrega do e-mail bloqueada por rate limit externo (BR-001); callback controlado confirmou e-mail, ativou acesso, persistiu refresh e permitiu logout/login — `tmp/product-acceptance/invite-mst4zja0/`.
+- FAIL — mobile 390x844 — novo membro — entrega do e-mail bloqueada por rate limit externo (BR-001); no Preview final, callback controlado confirmou e-mail, ativou acesso, persistiu refresh e permitiu logout/login — `tmp/product-acceptance/invite-mst5ethp/`.
 
 ## Integridade
 
