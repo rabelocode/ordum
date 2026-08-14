@@ -36,7 +36,7 @@
     },
     {
       "path": "/api/internal/integrity/run",
-      "schedule": "*/30 * * * *"
+      "schedule": "47 6 * * *"
     }
   ]
 }
