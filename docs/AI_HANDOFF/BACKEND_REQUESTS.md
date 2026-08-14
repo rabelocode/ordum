@@ -21,8 +21,19 @@ Frontend pronto: SIM
 ## BR-003
 
 Tela: Integridade → Casos e acompanhamento público
-Problema: os protocolos atuais usam o formato legado `ORD-` seguido de caracteres aleatórios; a experiência piloto pede numeração humana e consistente por ano.
-Contrato necessário: gerar protocolos públicos não enumeráveis no formato visual `INT-AAAA-000000`, preservando unicidade, consulta por protocolo + código de acesso e compatibilidade dos relatos existentes.
+Problema: RESOLVIDO em 14/08/2026.
+Contrato necessário: migrations `20260814175625_integrity_human_protocol` e `20260814175716_integrity_human_protocol_random_source_fix`; novos protocolos usam `INT-AAAA-000000`, fonte criptográfica não sequencial, retry limitado e ano `America/Sao_Paulo`. Protocolos `ORD-*`, protocolo + código de acesso e bcrypt foram preservados.
 Permissão: backend do Ordum Integridade.
+Bloqueante: NÃO
+Frontend pronto: SIM
+
+Evidência: RC smoke `integrity_e2e_1786732034217_731021a1` validou geração pelo browser, sincronização report/case, tracking novo e legacy, busca, investigação e exportações; cleanup zerou tenants e usuários Auth.
+
+## BR-004
+
+Tela: Integridade → Preferências de notificações
+Problema: a migration local `20260811231343_integrity_customer_operations` não consta no histórico remoto e a tabela `integrity_notification_preferences` não existe no banco em 14/08/2026.
+Contrato necessário: reconciliar oficialmente essa migration pelo fluxo do Supabase, sem inserção manual no histórico e sem reaplicar os dois patches do protocolo.
+Permissão: backend/Supabase da Ordum.
 Bloqueante: NÃO
 Frontend pronto: SIM

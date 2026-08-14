@@ -24,7 +24,7 @@ const adminRouter = readFileSync(
 describe("Ordum Integridade Core Phase 4", () => {
   it("1. public submission creates an original report", () =>
     assert.match(migration, /insert into public\.integrity_reports\(/i));
-  it("2. protocol is generated from cryptographic UUID entropy", () =>
+  it("2. legacy migration generated the historical ORD protocol", () =>
     assert.match(
       migration,
       /v_protocol := 'ORD-'\|\|upper\(substr\(replace\(gen_random_uuid/i,

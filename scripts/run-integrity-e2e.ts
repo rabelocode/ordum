@@ -92,7 +92,7 @@ async function cleanup(db: SupabaseClient, runId: string, tenantIds: string[], u
   if (errors.length) throw new Error(errors.join("; "));
 }
 
-async function runBrowserQa(scenarios: Array<{ name: string; user: FixtureUser; expectedCase: boolean; mobile?: boolean; settings?: boolean }>, subject: string) {
+async function runBrowserQa(scenarios: Array<{ name: string; user: FixtureUser; expectedCase: boolean; mobile?: boolean; settings?: boolean }>, subject: string, protocol: string) {
   const browser = await chromium.launch({ headless: true });
   const failures: string[] = [];
   await mkdir(PILOT_READY_DIR, { recursive: true });
@@ -116,6 +116,12 @@ async function runBrowserQa(scenarios: Array<{ name: string; user: FixtureUser; 
       const casesButton = page.locator('nav[aria-label] button').filter({ hasText: "Casos" });
       try { await casesButton.click({ timeout: 15000 }); } catch (error) { const visible=(await page.locator("body").innerText()).replace(/\s+/g," ").slice(0,600); throw new Error(`${scenario.name}: navegação de casos indisponível (${visible}); ${String(error)}`); }
       if (scenario.expectedCase) {
+        const search = page.getByPlaceholder("Buscar por protocolo ou assunto");
+        await search.fill(protocol);
+        await page.getByText(subject, { exact: true }).filter({ visible: true }).first().waitFor({ timeout: 15000 });
+        await search.fill(protocol.slice(-6));
+        await page.getByText(subject, { exact: true }).filter({ visible: true }).first().waitFor({ timeout: 15000 });
+        await search.clear();
         try {
           await page.getByText(subject, { exact: true }).filter({ visible: true }).first().waitFor({ timeout: 15000 });
         } catch {
@@ -252,9 +258,10 @@ async function runAdminProductQa(user:FixtureUser,tenantId:string,tenantName:str
   if(failures.length)throw new Error(`admin product QA: ${failures.join("; ")}`);
 }
 
-async function runPublicMobileQa(channelSlug: string, protocol: string, secret: string) {
+async function runPublicMobileQa(channelSlug: string, protocol: string, secret: string): Promise<string> {
   const browser = await chromium.launch({ headless: true });
   const failures: string[] = [];
+  let receiptProtocol = "";
   try {
     const context = await browser.newContext({ viewport: { width: 390, height: 844 } });
     const page = await context.newPage();
@@ -283,12 +290,16 @@ async function runPublicMobileQa(channelSlug: string, protocol: string, secret: 
     if (await submitReport.count() !== 1) throw new Error(`CTA final do relato ausente: ${(await page.locator("body").innerText()).replace(/\s+/g," ").slice(0,900)}`);
     await submitReport.click();
     await page.getByRole("heading", { name: "Relato enviado com sucesso", exact: true }).waitFor();
+    receiptProtocol = (await page.locator("text=/^INT-[0-9]{4}-[0-9]{6}$/").first().textContent())?.trim() || "";
+    const expectedYear = new Intl.DateTimeFormat("en", { year: "numeric", timeZone: "America/Sao_Paulo" }).format(new Date());
+    if (!new RegExp(`^INT-${expectedYear}-[0-9]{6}$`).test(receiptProtocol)) throw new Error(`protocolo humano inválido no comprovante: ${receiptProtocol}`);
     await page.getByRole("button", { name: "Copiar informações", exact: true }).waitFor();
     await page.getByRole("button", { name: "Baixar comprovante", exact: true }).waitFor();
     await page.screenshot({ path: `${PILOT_READY_DIR}/public-report-receipt-mobile.png`, fullPage: true });
     await page.getByRole("button", { name: "Acompanhar agora", exact: true }).click();
     await page.getByRole("button", { name: "Consultar", exact: true }).click();
     await page.getByRole("heading", { name: "Seu relato", exact: true }).waitFor();
+    if (await page.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth + 1)) failures.push("overflow horizontal no acompanhamento mobile");
     await page.getByLabel("Complementar informações").fill("Complemento enviado pela interface pública descartável.");
     await page.getByRole("button", { name: "Enviar mensagem", exact: true }).click();
     await page.getByText("Complemento enviado pela interface pública descartável.", { exact: true }).waitFor();
@@ -311,6 +322,7 @@ async function runPublicMobileQa(channelSlug: string, protocol: string, secret: 
     await browser.close();
   }
   if (failures.length) throw new Error(`public mobile QA: ${failures.join("; ")}`);
+  return receiptProtocol;
 }
 
 export async function runIntegrityE2E(): Promise<Evidence> {
@@ -386,6 +398,8 @@ export async function runIntegrityE2E(): Promise<Evidence> {
     const reportBody = { channel_slug: channelSlug, category_slug: category.slug, reporter_mode: "anonymous", subject: "Possível conflito de interesses em contratação", description: "Relato fictício para validar o fluxo operacional completo do cenário piloto, sem dados de pessoas ou clientes reais.", occurred_at: new Date().toISOString().slice(0, 10), unit_id: unit.id, department_id: department.id, custom_fields: { local_detalhado: "Sala de reuniões da matriz" } };
     const submitted = expect(await publicApi("/reports", { method: "POST", body: JSON.stringify(reportBody) }), 201, "anonymous report");
     if (!submitted.protocol || !submitted.access_secret || submitted.access_secret.length < 24) throw new Error("protocolo/segredo ausente");
+    const expectedProtocolYear = new Intl.DateTimeFormat("en", { year: "numeric", timeZone: "America/Sao_Paulo" }).format(new Date());
+    if (!new RegExp(`^INT-${expectedProtocolYear}-[0-9]{6}$`).test(submitted.protocol)) throw new Error(`formato de protocolo inválido: ${submitted.protocol}`);
     evidence.reportHttp = 201;
     const report = value(await db.from("integrity_reports").select("id,reporter_mode").eq("protocol", submitted.protocol).single(), "report stored");
     const customStored=value(await db.from("integrity_report_custom_values").select("text_value").eq("report_id",report.id).single(),"custom value");
@@ -393,15 +407,22 @@ export async function runIntegrityE2E(): Promise<Evidence> {
     const secret = value(await db.from("integrity_report_secrets").select("secret_hash").eq("report_id", report.id).single(), "secret stored");
     if (!secret.secret_hash || secret.secret_hash === submitted.access_secret) throw new Error("segredo não foi armazenado como hash");
     const identified = expect(await publicApi("/reports", { method: "POST", body: JSON.stringify({ ...reportBody, subject: "Relato identificado descartável", reporter_mode: "identified", identity: { name: "Pessoa E2E", email: `${runId}@ordum-test.internal` } }) }), 201, "identified report");
+    if (!new RegExp(`^INT-${expectedProtocolYear}-[0-9]{6}$`).test(identified.protocol) || identified.protocol === submitted.protocol) throw new Error("protocolos novos inválidos ou duplicados");
     const identifiedReport = value(await db.from("integrity_reports").select("id").eq("protocol", identified.protocol).single(), "identified stored");
     const identityCount = await db.from("integrity_report_identities").select("report_id").eq("report_id", identifiedReport.id);
     if (identityCount.error || identityCount.data?.length !== 1) throw new Error(`identidade separada não persistida: ${identityCount.error?.message || `count=${identityCount.data?.length}`}`);
+    const legacyProtocol = `ORD-${crypto.randomBytes(6).toString("hex").toUpperCase()}`;
+    value(await db.from("integrity_reports").update({ protocol: legacyProtocol }).eq("id", identifiedReport.id).select("id").single(), "legacy report fixture");
+    value(await db.from("integrity_cases").update({ protocol: legacyProtocol }).eq("report_id", identifiedReport.id).select("id").single(), "legacy case fixture");
+    const legacyTracking = expect(await publicApi("/track", { method: "POST", body: JSON.stringify({ protocol: legacyProtocol, secret: identified.access_secret }) }), 200, "legacy tracking").tracking;
+    if (legacyTracking.protocol !== legacyProtocol) throw new Error("compatibilidade do protocolo legacy não preservada");
     expect(await publicApi("/track", { method: "POST", body: JSON.stringify({ protocol: submitted.protocol, secret: "x".repeat(24) }) }), 404, "wrong secret");
     const tracked = expect(await publicApi("/track", { method: "POST", body: JSON.stringify({ protocol: submitted.protocol, secret: submitted.access_secret }) }), 200, "valid tracking").tracking;
     if (!tracked) throw new Error("tracking vazio");
-    await runPublicMobileQa(channelSlug, submitted.protocol, submitted.access_secret);
+    const browserSubmittedProtocol = await runPublicMobileQa(channelSlug, submitted.protocol, submitted.access_secret);
     evidence.publicMobileQa = true;
-    const caseRow = value(await db.from("integrity_cases").select("id,status,lock_version,owner_membership_id,committee_id,first_response_due_at,treatment_due_at").eq("report_id", report.id).single(), "case created");
+    const caseRow = value(await db.from("integrity_cases").select("id,protocol,status,lock_version,owner_membership_id,committee_id,first_response_due_at,treatment_due_at").eq("report_id", report.id).single(), "case created");
+    if (caseRow.protocol !== submitted.protocol) throw new Error("protocolo divergiu entre relato e caso");
     if (caseRow.owner_membership_id !== assignedInvestigator.membershipId || caseRow.committee_id !== committee.id) throw new Error("roteamento automático não aplicado");
     evidence.routing = true;
     expect(await workspace(`/cases/${caseRow.id}`, {}, adminB, tenantB.id), 404, "cross tenant case");
@@ -433,17 +454,57 @@ export async function runIntegrityE2E(): Promise<Evidence> {
     expect(await workspace(`/cases/${caseRow.id}/collaborators/${collaborator.id}`, { method: "DELETE", body: JSON.stringify({ reason: "Participação temporária encerrada" }) }), 200, "remove collaborator");
     expect(await workspace(`/cases/${caseRow.id}`, {}, unassignedInvestigator, tenantA.id), 404, "removed collaborator denied");
     evidence.collaboratorScope = true;
-    await runBrowserQa([
-      { name: "tenant_admin_desktop", user: adminA, expectedCase: true, settings: true },
-      { name: "compliance_desktop", user: compliance, expectedCase: true, settings: true },
-      { name: "investigator_assigned_mobile", user: assignedInvestigator, expectedCase: true, mobile: true },
-      { name: "investigator_unassigned_desktop", user: unassignedInvestigator, expectedCase: false },
-    ], reportBody.subject);
+    console.log("[integrity-e2e] protocolo, tracking e RLS validados");
+    const browserScenarios = process.env.RC_PROTOCOL_SMOKE === "1"
+      ? [
+          { name: "compliance_desktop", user: compliance, expectedCase: true },
+          { name: "investigator_assigned_mobile", user: assignedInvestigator, expectedCase: true, mobile: true },
+        ]
+      : [
+          { name: "tenant_admin_desktop", user: adminA, expectedCase: true, settings: true },
+          { name: "compliance_desktop", user: compliance, expectedCase: true, settings: true },
+          { name: "investigator_assigned_mobile", user: assignedInvestigator, expectedCase: true, mobile: true },
+          { name: "investigator_unassigned_desktop", user: unassignedInvestigator, expectedCase: false },
+        ];
+    await runBrowserQa(browserScenarios, reportBody.subject, submitted.protocol);
+    console.log("[integrity-e2e] caixa e detalhe validados no navegador");
     await runInternalUiFlow(compliance,"Relato enviado integralmente pela interface");
+    console.log("[integrity-e2e] investigação completa validada no navegador");
     await runAdminProductQa(adminA,tenantA.id,"Grupo Horizonte");
+    console.log("[integrity-e2e] Admin aggregate-only validado no navegador");
     evidence.browserQa = true;
     evidence.internalUiFlow = true;
     evidence.adminProductQa = true;
+    if (process.env.RC_PROTOCOL_SMOKE === "1") {
+      const browserReport = value(await db.from("integrity_reports").select("id,protocol").eq("tenant_id", tenantA.id).eq("protocol", browserSubmittedProtocol).single(), "browser report stored");
+      const browserCase = value(await db.from("integrity_cases").select("id,protocol,status").eq("report_id", browserReport.id).single(), "browser case stored");
+      if (browserCase.protocol !== browserSubmittedProtocol || browserCase.status !== "reopened") throw new Error("protocolo do browser não foi preservado durante a investigação");
+      const fullSearch = expect(await workspace(`/cases?search=${encodeURIComponent(browserSubmittedProtocol)}`), 200, "full protocol search");
+      const partialSearch = expect(await workspace(`/cases?search=${browserSubmittedProtocol.slice(-6)}`), 200, "partial protocol search");
+      if (!fullSearch.cases?.some((item: any) => item.id === browserCase.id) || !partialSearch.cases?.some((item: any) => item.id === browserCase.id)) throw new Error("busca do protocolo humano não encontrou o caso");
+      const caseCsv = await workspace(`/cases/${browserCase.id}/report.csv`);
+      expect(caseCsv, 200, "RC case CSV");
+      if (!String(caseCsv.body).includes(browserSubmittedProtocol) || !caseCsv.headers.get("content-disposition")?.includes(`integrity-${browserSubmittedProtocol}.csv`)) throw new Error("CSV do RC não preservou protocolo/filename");
+      const casePdf = await workspace(`/cases/${browserCase.id}/dossier.pdf`);
+      expect(casePdf, 200, "RC case PDF");
+      if (!Buffer.isBuffer(casePdf.body) || !casePdf.body.toString("latin1").includes(browserSubmittedProtocol) || !casePdf.headers.get("content-disposition")?.includes(`integrity-${browserSubmittedProtocol}.pdf`)) throw new Error("PDF do RC não preservou protocolo/filename");
+      const notifications = expect(await workspace("/notifications", {}, compliance), 200, "RC notifications");
+      if (!Array.isArray(notifications.notifications)) throw new Error("notificações do RC indisponíveis");
+      const summary = expect(await request(`/api/admin/clients/${tenantA.id}/integrity-summary`, {}, adminA.token), 200, "RC admin summary");
+      if (summary.confidentiality_boundary !== "aggregate_only" || ["description","identity","messages","evidence","conclusion","notes"].some((key) => Object.hasOwn(summary, key))) throw new Error("Admin Global ultrapassou a fronteira agregada no RC");
+      Object.assign(evidence, {
+        protocol: browserSubmittedProtocol,
+        protocolFormat: true,
+        protocolReportCaseSynchronized: true,
+        legacyTracking: true,
+        fullAndPartialSearch: true,
+        exports: true,
+        lifecycleProtocolPreserved: true,
+        adminAggregateOnly: true,
+        rcProtocolSmoke: true,
+      });
+      return evidence;
+    }
     expect(await workspace(`/settings/committees/${committee.id}`, { method: "PATCH", body: JSON.stringify({ name: "Comitê de Ética", description: "Comitê do piloto", member_ids: [assignedInvestigator.membershipId], active: false, status: "inactive" }) }), 409, "committee orphan protection");
     expect(await workspace(`/settings/committees/${committee.id}`, { method: "PATCH", body: JSON.stringify({ name: "Comitê de Ética e Conduta", description: "Comitê do piloto", member_ids: [assignedInvestigator.membershipId, unassignedInvestigator.membershipId], active: true, status: "active" }) }), 200, "committee update");
     expect(await workspace(`/cases/${caseRow.id}`, {}, unassignedInvestigator, tenantA.id), 200, "committee investigator read");
@@ -517,8 +578,9 @@ export async function runIntegrityE2E(): Promise<Evidence> {
     if (reopened.status !== "reopened") throw new Error("reabertura não persistida");
     const operationalDossier = await workspace(`/cases/${caseRow.id}/dossier.pdf`);
     expect(operationalDossier, 200, "operational dossier");
+    if (!operationalDossier.headers.get("content-disposition")?.includes(`integrity-${submitted.protocol}.pdf`)) throw new Error("nome do dossiê não preservou o protocolo humano");
     const operationalPdfText = Buffer.isBuffer(operationalDossier.body) ? operationalDossier.body.toString("latin1") : "";
-    for (const expected of ["Validar cadeia de custódia", "Conclusão interna confidencial E2E", expectedChecksum]) {
+    for (const expected of [submitted.protocol, "Validar cadeia de custódia", "Conclusão interna confidencial E2E", expectedChecksum]) {
       if (!operationalPdfText.includes(expected)) throw new Error(`dossiê operacional sem ${expected}`);
     }
     const timeline = expect(await workspace(`/cases/${caseRow.id}/timeline`), 200, "timeline").events;
@@ -539,8 +601,10 @@ export async function runIntegrityE2E(): Promise<Evidence> {
     const exported = await workspace(`/cases/export.csv?category_id=${category.id}`);
     expect(exported, 200, "cases CSV export");
     if (!exported.headers.get("content-type")?.includes("text/csv")) throw new Error("exportação de listagem não retornou CSV");
+    if (!String(exported.body).includes(submitted.protocol)) throw new Error("CSV de casos não preservou o protocolo humano");
     const reportExport = await workspace(`/cases/${caseRow.id}/report.csv`);
     expect(reportExport, 200, "case report CSV export");
+    if (!String(reportExport.body).includes(submitted.protocol)) throw new Error("CSV individual não preservou o protocolo humano");
     const executivePdf=await workspace(`/reports/executive.pdf?department_id=${department.id}`); expect(executivePdf,200,"executive PDF"); if(!Buffer.isBuffer(executivePdf.body)||!executivePdf.body.toString("latin1").startsWith("%PDF-1.4"))throw new Error("executive PDF invalid");
     const executiveCsv=await workspace(`/reports/executive.csv?department_id=${department.id}`); expect(executiveCsv,200,"executive CSV"); if(/Pessoa E2E|Nota interna confidencial|Mensagem pública do comitê/.test(String(executiveCsv.body)))throw new Error("executive report leaked case data");
     if (!reportExport.headers.get("content-disposition")?.includes("integrity-")) throw new Error("relatório individual sem nome de arquivo");
