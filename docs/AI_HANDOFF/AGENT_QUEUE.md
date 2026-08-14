@@ -1,45 +1,19 @@
 Owner: chatgpt_backend
-Status: ready_for_product_review
+Status: ready_for_backend_sync
 Branch: fix/admin-functional-recovery
-Head: 9abad891eee294906cae317be031cb74e95b057a
-Frontend Product Acceptance:
-- Admin aprovado: SIM
-- Integridade aprovado: SIM
-- Fluxos completos clicados: SIM (Admin CRM/Operações e Integridade Caso/Comunicação/Configuração)
-- Telas reconstruídas: PlatformSettingsPage (substituindo PlaceholderAdminPage), CaseMessages (distinção radical externa vs nota privada), sanitização de termos técnicos em ModuleRecordsView e TalentModuleView.
-- Zero placeholders ou jargões técnicos não autorizados: Eliminados 100% dos placeholders e termos como tenant/RLS/RPC da UI comercial comum.
-- Backend Requests pendentes: Nenhum (0 blockers).
-Implemented:
-- Hotfix P0 Admin: Membros e Convites (Separação de Membros e Equipes no Admin).
-  - Item de menu dedicado "Membros" (#/admin/membros). Tabela com Nome, E-mail, Função, Vínculo, Equipes, Status humano ("Convite pendente", "Ativo", "Suspenso") e Último Acesso.
-  - Botão "Adicionar pessoa" com modal para convidar membros sem a obrigatoriedade de atribuir a uma equipe inicial.
-  - Botão "Reenviar convite" com o endpoint POST /api/admin/staff/:id/resend-invite que re-notifica o usuário por e-mail, renova a validade e auditoria.
-  - Causa Raiz do HashRouter + Supabase Auth Callback resolvida: interceptação no bootstrap do App.tsx que detecta fragmentos de autorização (#access_token=...&type=invite) e direciona para a rota limpa /#/auth/accept-invite sem perder a sessão ou reverter para a Home.
-  - Rota de aceite amigável /#/auth/accept-invite com interface personalizada Ordum e mensagens humanas de erro.
-- Pacote Ordum Integridade - Productization & Customer Operations concluído e aprovado comercialmente.
-- Frontend & UX Refinement:
-  - Navegação do Admin organizada nas seções Início, Comercial (Leads, Demos, Propostas, Contratos), Clientes (Empresas, Implantação, CS), Financeiro (Assinaturas, Planos), Operação (Suporte, Auditoria) e Administração (Membros, Equipes, Acessos, Configurações).
-  - Criada a página real `PlatformSettingsPage.tsx` contendo parâmetros gerais, política de segurança e Diagnóstico Técnico restrito para perfil autorizado.
-  - Comunicação de casos no Integridade com banners, cores e alertas de contraste radical entre Mensagem ao Denunciante (Azul) e Nota Privada da Equipe (Âmbar/Cadeado).
-Database:
-- Migration 34 necessária: `supabase/migrations/20260811231343_integrity_customer_operations.sql` cria a tabela `public.integrity_notification_preferences` com RLS fail-closed, índice no tenant e concessão ao `service_role`.
-- Migration validada e aplicada no projeto (34 migrations ordenadas validadas em `test:migrations` e `test:live-queries`).
-Tests:
-- Secret scan PASS: 350 arquivos rastreados.
-- Migration validation PASS: 34 migrations ordenadas.
-- Lint/typecheck/build client-server-Vercel PASS.
-- Testes unitários focados de convite PASS: `test/unit/admin-invite-flow.test.ts` (4/4 PASS).
-- Suite completa Vitest: 200 testes, 199 PASS, 0 FAIL, 1 live comercial SKIP explícito.
+Head: 106f9af829635ad27a07d829a1292a5ba467bdaf
 Preview:
-- READY — Vercel Preview Deploy
-- https://ordum-git-fix-admin-functional-recovery-ordum.vercel.app
-QA & E2E:
-- Validação no browser 1440x1000 e 390x844 mobile de todos os fluxos administrativos e do canal público/workspace de Integridade.
-- Sem botões mortos, sem erros de console, sem jargão técnico visível.
-Blockers & Credenciais:
-- Remetente Customizado de E-mail: O envio de e-mails utiliza o mailer do Supabase Auth apontando para a URL correta da Ordum. Para alterar o remetente de `noreply@mail.app.supabase.io` para um domínio próprio (ex: `contato@ordum.com.br`), é necessário cadastrar as credenciais de um servidor SMTP no painel do Supabase Dashboard (Custom SMTP).
-- Scheduler idempotente não foi executado no QA local/Preview por ausência da credencial de cron no ambiente do runner.
-Suggested next package:
-- Revisão comercial do produto no Preview com conteúdo e identidade visual de uma empresa piloto.
-- Configurar a credencial do cron no runner de homologação e incluir o scheduler no live E2E.
-- Planejar consolidação das policies permissivas somente com equivalência de autorização e plano de query comprovados.
+- READY — `dpl_Eko8oZryK5pen8LNfsL27EDaTxdj`
+- https://ordum-8jdzmlhqq-ordum.vercel.app
+Product acceptance:
+- Admin: PASS — fluxo browser equipe → lead → contato → demo → proposta → aprovação → contrato → cliente → implantação; CS, aliases e mobile 390x844 validados (`ui-mst51yyl`).
+- Integridade: PASS — canal público, acompanhamento, operação interna, RBAC, Storage e aggregate-only validados (`integrity_e2e_1786722809183_acc307fc`); cleanup com `residualTenants=0` e `residualAuth=0`.
+- Confirmação de conta: FAIL somente na entrega do e-mail — Supabase Auth respondeu 429. Callback controlado no Preview final: `email_confirmed=true`, membro `active`, sessão persistente após refresh, logout/login PASS, mobile PASS e cleanup PASS (`invite-mst5ethp`).
+Checks:
+- Secret scan PASS; 34 migrations PASS; lint/typecheck PASS; 203 testes PASS, 0 FAIL, 1 live comercial SKIP explícito; build PASS.
+- Preview: HTTP 5xx = 0 no aceite e nenhum log 5xx no deployment.
+Backend Requests:
+- BR-001 — BLOQUEANTE: configurar SMTP transacional/limite do Supabase Auth e homologar a entrega real do convite.
+- BR-002 — NÃO BLOQUEANTE: runner sem `CRON_SECRET`; plano atual aceita cron diário.
+Blockers:
+- Entrega real do e-mail de convite depende de configuração externa do Supabase Auth (BR-001).
