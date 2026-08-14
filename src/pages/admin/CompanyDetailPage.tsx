@@ -206,7 +206,7 @@ export function CompanyDetailPage({ tenantId }: { tenantId: string }) {
                 <h1 className="text-2xl font-bold text-[#202322]">
                   {tenant.name}
                 </h1>
-                <div className="mt-2 flex flex-wrap items-center gap-2 text-sm text-[#626866]"><span className={`rounded-full px-2.5 py-1 text-xs font-bold ${tenant.status === "active" ? "bg-emerald-100 text-emerald-800" : tenant.status === "suspended" ? "bg-red-100 text-red-800" : "bg-gray-100"}`}>{clientStatusLabel(tenant.status)}</span><span>{contracts[0]?.billing_plans?.name || integritySummary?.plan?.name || "Plano não definido"}</span><span>·</span><span>{tenant.owner?.name || tenant.owner?.email || "Sem responsável Ordum"}</span></div>
+                <div className="mt-2 flex flex-wrap items-center gap-2 text-sm text-[#626866]"><span className={`rounded-full px-2.5 py-1 text-xs font-bold ${tenant.status === "active" ? "bg-emerald-100 text-emerald-800" : tenant.status === "suspended" ? "bg-red-100 text-red-800" : "bg-gray-100"}`}>{clientLifecycleLabel(tenant.lifecycle_status || tenant.status)}</span><span>{contracts[0]?.billing_plans?.name || integritySummary?.plan?.name || "Plano não definido"}</span><span>·</span><span>{tenant.owner?.name || tenant.owner?.email || "Sem responsável Ordum"}</span></div>
               </div>
             </div>
 

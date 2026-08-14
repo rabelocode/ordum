@@ -329,8 +329,8 @@ export async function runIntegrityE2E(): Promise<Evidence> {
   let primaryError: unknown;
   try {
     const suffix = crypto.randomBytes(4).toString("hex");
-    const tenantA = value(await db.from("tenants").insert({ name: `Grupo Horizonte ${suffix}`, slug: `e2e-integrity-${suffix}-a`, status: "trial", settings: { e2e_run_id: runId } }).select("id").single(), "tenant A");
-    const tenantB = value(await db.from("tenants").insert({ name: `Empresa Isolada ${suffix}`, slug: `e2e-integrity-${suffix}-b`, status: "trial", settings: { e2e_run_id: runId } }).select("id").single(), "tenant B");
+    const tenantA = value(await db.from("tenants").insert({ name: "Grupo Horizonte", slug: `e2e-integrity-${suffix}-a`, status: "trial", settings: { e2e_run_id: runId } }).select("id").single(), "tenant A");
+    const tenantB = value(await db.from("tenants").insert({ name: "Empresa Isolada", slug: `e2e-integrity-${suffix}-b`, status: "trial", settings: { e2e_run_id: runId } }).select("id").single(), "tenant B");
     tenantIds.push(tenantA.id, tenantB.id);
     const solution = value(await db.from("solutions").select("id").eq("key", "integridade").single(), "solution integrity");
     value(await db.from("tenant_solutions").insert([{ tenant_id: tenantA.id, solution_id: solution.id, status: "active" }, { tenant_id: tenantB.id, solution_id: solution.id, status: "active" }]).select(), "tenant solutions");
@@ -439,7 +439,7 @@ export async function runIntegrityE2E(): Promise<Evidence> {
       { name: "investigator_unassigned_desktop", user: unassignedInvestigator, expectedCase: false },
     ], reportBody.subject);
     await runInternalUiFlow(compliance,"Relato enviado integralmente pela interface");
-    await runAdminProductQa(adminA,tenantA.id,`Grupo Horizonte ${suffix}`);
+    await runAdminProductQa(adminA,tenantA.id,"Grupo Horizonte");
     evidence.browserQa = true;
     evidence.internalUiFlow = true;
     evidence.adminProductQa = true;
