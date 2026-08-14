@@ -17,3 +17,12 @@ Contrato necessário: disponibilizar a credencial do runner e definir infraestru
 Permissão: configuração Vercel/ambiente.
 Bloqueante: NÃO
 Frontend pronto: SIM
+
+## BR-003
+
+Tela: Integridade → Casos e acompanhamento público
+Problema: os protocolos atuais usam o formato legado `ORD-` seguido de caracteres aleatórios; a experiência piloto pede numeração humana e consistente por ano.
+Contrato necessário: gerar protocolos públicos não enumeráveis no formato visual `INT-AAAA-000000`, preservando unicidade, consulta por protocolo + código de acesso e compatibilidade dos relatos existentes.
+Permissão: backend do Ordum Integridade.
+Bloqueante: NÃO
+Frontend pronto: SIM

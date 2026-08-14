@@ -383,31 +383,35 @@ export function IntegrityChannelPage({ slug }: { slug: string }) {
         {mode === "report" && result ? (
           <section className="rounded-2xl border border-[#DDD8CF] bg-white p-6 text-center shadow-sm sm:p-8">
             <ShieldCheck className="mx-auto h-14 w-14 text-emerald-600" />
-            <h2 className="mt-4 text-2xl font-bold">Relato recebido</h2>
+            <h2 className="mt-4 text-2xl font-bold">Relato enviado com sucesso</h2>
             <p className="mt-2 text-sm text-[#626866]">
-              {channel.confirmation_message || "Seu relato foi recebido com segurança."} Guarde os dois dados abaixo. A chave é exibida apenas agora e não pode ser recuperada.
+              {channel.confirmation_message || "Seu relato foi recebido com segurança."} Guarde as informações abaixo para acompanhar sua manifestação.
             </p>
             <div className="mt-6 space-y-4 rounded-xl bg-[#F6F5F2] p-5 text-left">
               <Credential label="Protocolo" value={result.protocol} visible />
               <Credential
-                label="Chave de acompanhamento"
+                label="Código de acesso"
                 value={result.access_secret}
                 visible={showSecret}
                 onToggle={() => setShowSecret(!showSecret)}
               />
             </div>
-            <p className="mt-4 text-sm leading-6 text-[#626866]">Guarde essas informações. Elas permitem acompanhar o andamento e conversar com a equipe responsável sem revelar sua identidade.</p>
-            <div className="mt-5 grid gap-2 sm:grid-cols-2"><Button type="button" variant="outline" onClick={copyReceipt}><Clipboard className="mr-2 h-4 w-4"/>Copiar dados</Button><Button type="button" variant="outline" onClick={downloadReceipt}><Download className="mr-2 h-4 w-4"/>Baixar comprovante</Button></div>
+            <p className="mt-4 text-sm leading-6 text-[#626866]">Com o protocolo e o código de acesso, você pode acompanhar o andamento e conversar com a equipe sem revelar sua identidade.</p>
+            <div className="mt-5 grid gap-2 sm:grid-cols-2"><Button type="button" variant="outline" onClick={copyReceipt}><Clipboard className="mr-2 h-4 w-4"/>Copiar informações</Button><Button type="button" variant="outline" onClick={downloadReceipt}><Download className="mr-2 h-4 w-4"/>Baixar comprovante</Button></div>
             {channel.attachment_policy?.enabled && (
               <div className="mt-5 rounded-xl border border-[#DDD8CF] p-4 text-left">
-                <label className="text-sm font-bold">
-                  Anexar evidência
+                <p className="text-sm font-bold">Deseja acrescentar um arquivo?</p>
+                <p className="mt-1 text-xs leading-5 text-[#626866]">Você pode enviar documentos, imagens, áudio ou vídeo permitidos pelo canal.</p>
+                <label className="mt-3 flex cursor-pointer items-center justify-between gap-3 rounded-xl border border-dashed border-[#C8C2B7] bg-[#F9F8F5] px-4 py-3 text-sm transition hover:border-[#3457D5]">
+                  <span className="min-w-0 truncate">{attachment?.name||"Selecionar arquivo"}</span>
+                  <span className="shrink-0 font-bold text-[#3457D5]">Escolher</span>
                   <input
+                    aria-label="Selecionar evidência"
                     type="file"
                     onChange={(event) =>
                       setAttachment(event.target.files?.[0] || null)
                     }
-                    className="mt-2 block w-full text-sm"
+                    className="sr-only"
                   />
                 </label>
                 <Button

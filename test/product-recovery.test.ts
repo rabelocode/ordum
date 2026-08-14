@@ -28,7 +28,7 @@ test("caixa de casos possui visões rápidas, filtros recolhidos e lista mobile"
 test("canal público conduz o relato em seis etapas e entrega comprovante seguro",()=>{
   const source=read("src/pages/public/IntegrityChannelPage.tsx");
   for(const label of ["Sobre o ocorrido","Pessoas e local","Detalhes","Evidências","Identificação","Revisão"]) assert.match(source,new RegExp(label));
-  assert.match(source,/Copiar dados/);
+  assert.match(source,/Copiar informações/);
   assert.match(source,/Baixar comprovante/);
   assert.match(source,/Seu relato/);
 });
