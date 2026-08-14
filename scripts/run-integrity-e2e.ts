@@ -122,6 +122,7 @@ async function runBrowserQa(scenarios: Array<{ name: string; user: FixtureUser; 
         await search.fill(protocol.slice(-6));
         await page.getByText(subject, { exact: true }).filter({ visible: true }).first().waitFor({ timeout: 15000 });
         await search.clear();
+        await page.waitForTimeout(500);
         await page.locator(".animate-pulse").first().waitFor({ state: "hidden", timeout: 15000 }).catch(() => undefined);
         try {
           await page.getByText(subject, { exact: true }).filter({ visible: true }).first().waitFor({ timeout: 15000 });

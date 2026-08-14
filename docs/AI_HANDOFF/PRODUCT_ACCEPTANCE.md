@@ -27,3 +27,17 @@ E2E real: `integrity_e2e_1786722809183_acc307fc`; cleanup `residualTenants=0`, `
 - PASS — mobile por implementação responsiva — Financeiro/Empresa — listas em cards, detalhes sem tabela horizontal e ações acessíveis.
 - PASS — HTTP — público/anônimo — Preview 200 e APIs administrativas 401 sem sessão; zero runtime errors/5xx no smoke.
 - BLOCKED — browser desktop/mobile — quatro personas — runtime oficial sem navegador disponível; revisão visual autenticada deve ser feita no Preview RC2.
+
+## RC2 Visual Acceptance
+
+- PASS — desktop 1440x1000 — Admin Global — Dashboard com prioridades, Comercial e Customer 360; navegação e CTAs reais — `tmp/rc2-visual/01-admin-dashboard.png`, `02-lead.png`, `03-proposal.png`, `04-company.png`.
+- PASS — desktop 1440x1000 — Financeiro — visão geral com quatro indicadores, assinaturas ativa/trial/em atraso, cobrança vencida e histórico em linguagem humana — `05-finance-overview.png`, `06-subscriptions.png`, `07-charge.png`.
+- PASS — desktop 1440x1000 — Customer Success — carteira saudável/atenção/risco, implantação e situação financeira sem score inventado — `08-customer-success.png`.
+- PASS — desktop 1440x1000 — tenant_admin/compliance/investigador — Home, Casos, detalhe e investigação preservados; Admin Global continua sem conteúdo confidencial — `09-integrity-home.png` a `12-integrity-investigation.png`.
+- PASS — desktop 1440x1000 — denunciante — canal e acompanhamento com protocolo humano, mensagens sanitizadas e seletor de evidência em português — `13-public-channel.png`, `14-public-tracking.png`.
+- PASS — mobile 390x844 — Admin/Financeiro — Dashboard, Empresa, visão financeira e cobrança sem overflow horizontal — `15-admin-dashboard-mobile.png` a `18-charge-mobile.png`.
+- PASS — mobile 390x844 — investigador/denunciante — caixa em cards carregados, detalhe, canal e tracking sem overflow ou linguagem técnica — `19-integrity-cases-mobile.png` a `22-public-tracking-mobile.png`.
+
+Problemas encontrados e corrigidos: trial/atraso eram derivados apenas do status bruto da assinatura; a UI agora respeita o estado financeiro efetivo. O upload público usava texto nativo em inglês; foi substituído por controle acessível em português. Capturas transitórias de skeleton foram estabilizadas.
+
+Evidências: Admin QA `rc21-mste6uvp-641b3f`; Integridade E2E `integrity_e2e_1786739456585_4d6dce2d`; ambos com fixtures descartáveis, console/HTTP 5xx inesperados = 0 e cleanup com `residualTenants=0`, `residualAuth=0`.
