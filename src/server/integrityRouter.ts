@@ -1,4 +1,5 @@
 import express from "express";
+import { inviteRedirectUrl } from "./inviteRedirect";
 import { createHash, randomUUID } from "node:crypto";
 import { z } from "zod";
 import {
@@ -335,12 +336,6 @@ export function createIntegrityRouter(
     });
     if (result.error) throw result.error;
   }
-
-  const inviteRedirect = (req: express.Request) => {
-    const configured = process.env.PUBLIC_APP_URL || process.env.VITE_APP_URL;
-    const origin = configured || req.headers.origin || `${req.protocol}://${req.get("host")}`;
-    return `${String(origin).replace(/\/$/, "")}/#/auth/accept-invite`;
-  };
 
   async function findAuthUserByEmail(db: any, email: string) {
     for (let page = 1; page <= 10; page += 1) {
@@ -2510,7 +2505,7 @@ export function createIntegrityRouter(
         if (existingMember.error) throw existingMember.error;
         if (existingMember.data?.status === "active") return res.status(409).json({ error: "Esta pessoa já faz parte da equipe." });
       }
-      const redirectTo = inviteRedirect(req);
+      const redirectTo = inviteRedirectUrl(req);
       let user = existingUser;
       if (!user) {
         const invited = await db.auth.admin.inviteUserByEmail(input.email, { redirectTo, data: { full_name: input.name } });
@@ -2546,7 +2541,7 @@ export function createIntegrityRouter(
       const db = getSupabaseAdmin(); const tenant = tenantId(req);
       const invitation = await db.from("invitations").select("id,email,status").eq("id", req.params.id).eq("tenant_id", tenant).maybeSingle();
       if (!invitation.data || invitation.data.status !== "pending") return res.status(404).json({ error: "Este convite não está mais pendente." });
-      const sent = await db.auth.signInWithOtp({ email: invitation.data.email, options: { shouldCreateUser: false, emailRedirectTo: inviteRedirect(req) } });
+      const sent = await db.auth.signInWithOtp({ email: invitation.data.email, options: { shouldCreateUser: false, emailRedirectTo: inviteRedirectUrl(req) } });
       if (sent.error) return res.status(503).json({ error: "Não foi possível reenviar o convite agora." });
       const expiresAt = new Date(Date.now() + 60 * 60 * 1000).toISOString();
       const updated = await db.from("invitations").update({ expires_at: expiresAt }).eq("id", invitation.data.id);

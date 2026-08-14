@@ -5,6 +5,7 @@ import { captureServerAnalytics } from './analytics';
 import { reportServerError } from './observability';
 import { z } from 'zod';
 import { authenticateRequest, resolvePlatformContext, requirePlatformPermission } from './tenantAuth';
+import { inviteRedirectUrl } from './inviteRedirect';
 
 export function createAdminOtherRouter(getSupabaseAdmin: any, _old_requirePlatformAuth: any) {
   const router = Router();
@@ -101,8 +102,7 @@ export function createAdminOtherRouter(getSupabaseAdmin: any, _old_requirePlatfo
       }
 
       // Determine redirect URL for invite link
-      const origin = req.headers.origin || `${req.protocol}://${req.get('host')}`;
-      const redirectTo = `${origin}/#/auth/accept-invite`;
+      const redirectTo = inviteRedirectUrl(req);
 
       // Assign Role lookup first
       const { data: roleData } = await getSupabaseAdmin()
@@ -123,7 +123,24 @@ export function createAdminOtherRouter(getSupabaseAdmin: any, _old_requirePlatfo
         const { data: usersList } = await getSupabaseAdmin().auth.admin.listUsers();
         const existingUser = usersList?.users?.find((u: any) => u.email?.toLowerCase() === email.toLowerCase());
         if (!existingUser) {
-          return res.status(400).json({ error: inviteErr.message || 'Erro ao enviar convite por e-mail.' });
+          const limited = inviteErr.message?.toLowerCase().includes('rate limit');
+          return res.status(limited ? 429 : 400).json({
+            error: limited
+              ? 'O serviço de e-mail atingiu o limite temporário de envios. Aguarde alguns minutos e tente novamente.'
+              : 'Não foi possível enviar o convite. Confira o e-mail e tente novamente.',
+          });
+        }
+        const sent = await getSupabaseAdmin().auth.signInWithOtp({
+          email,
+          options: { shouldCreateUser: false, emailRedirectTo: redirectTo },
+        });
+        if (sent.error) {
+          const limited = sent.error.message?.toLowerCase().includes('rate limit');
+          return res.status(limited ? 429 : 400).json({
+            error: limited
+              ? 'O serviço de e-mail atingiu o limite temporário de envios. Aguarde alguns minutos e tente novamente.'
+              : 'Não foi possível reenviar o acesso para este e-mail.',
+          });
         }
         userId = existingUser.id;
       } else {
@@ -216,9 +233,7 @@ export function createAdminOtherRouter(getSupabaseAdmin: any, _old_requirePlatfo
         return res.status(400).json({ error: 'E-mail do membro não localizado.' });
       }
 
-      const configuredUrl = process.env.PUBLIC_APP_URL || process.env.APP_URL || process.env.VITE_APP_URL;
-      const origin = configuredUrl || req.headers.origin || `${req.protocol}://${req.get('host')}`;
-      const redirectTo = `${String(origin).replace(/\/$/, '')}/#/auth/accept-invite`;
+      const redirectTo = inviteRedirectUrl(req);
 
       const { error: inviteErr } = await db.auth.admin.inviteUserByEmail(user.email, { redirectTo });
       if (inviteErr) {
@@ -227,7 +242,10 @@ export function createAdminOtherRouter(getSupabaseAdmin: any, _old_requirePlatfo
           options: { shouldCreateUser: false, emailRedirectTo: redirectTo }
         });
         if (sent.error) {
-          return res.status(500).json({ error: 'Não foi possível reenviar o convite por e-mail.' });
+          const limited = sent.error.message?.toLowerCase().includes('rate limit');
+          return res.status(limited ? 429 : 500).json({ error: limited
+            ? 'O serviço de e-mail atingiu o limite temporário de envios. Aguarde alguns minutos e tente novamente.'
+            : 'Não foi possível reenviar o convite por e-mail.' });
         }
       }
 

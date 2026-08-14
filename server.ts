@@ -26,6 +26,7 @@ import {
   resolvePlatformContext,
   requirePlatformPermission,
 } from "./src/server/tenantAuth";
+import { inviteRedirectUrl } from "./src/server/inviteRedirect";
 
 dotenv.config({ path: [".env.local", ".env"] });
 
@@ -449,13 +450,9 @@ export async function createApp() {
             candidate.email?.toLowerCase() === lead.email.toLowerCase(),
         );
         if (!user) {
-          const origin =
-            process.env.APP_URL ||
-            req.headers.origin ||
-            `${req.protocol}://${req.get("host")}`;
           const { data: inviteData, error: inviteError } =
             await db.auth.admin.inviteUserByEmail(lead.email, {
-              redirectTo: `${String(origin).replace(/\/$/, "")}/#/auth/accept-invite`,
+              redirectTo: inviteRedirectUrl(req),
               data: { full_name: lead.name },
             });
           if (inviteError) throw inviteError;

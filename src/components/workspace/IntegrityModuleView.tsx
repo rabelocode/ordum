@@ -20,7 +20,7 @@ export function IntegrityModuleView({tenant,user,onBack}:Props){
   ].map(([key,label,Icon]:any)=><button key={key} onClick={()=>{setSection(key);if(key==="investigations")setCaseView("mine");}} className={`flex shrink-0 items-center gap-2 border-b-2 py-3 text-sm font-bold ${section===key?"border-[#3457D5] text-[#3457D5]":"border-transparent text-[#626866] hover:text-[#202322]"}`}><Icon className="h-4 w-4"/>{label}</button>)}</nav></header>
     {section==="overview"?<IntegrityDashboard tenantId={tenant.id} userName={profile.name||"Olá"} onOpenCases={openCases} onOpenCase={setCaseId}/>:null}
     {section==="cases"?<IntegrityCasesList key={`cases-${caseView}`} tenantId={tenant.id} canExport={canExport} initialView={caseView} onSelect={setCaseId}/>:null}
-    {section==="investigations"?<IntegrityCasesList key="investigations" tenantId={tenant.id} canExport={canExport} initialView="mine" onSelect={setCaseId}/>:null}
+    {section==="investigations"?<IntegrityCasesList key="investigations" tenantId={tenant.id} canExport={canExport} initialView="mine" mode="investigations" onSelect={setCaseId}/>:null}
     {section==="reports"?<IntegrityReports tenantId={tenant.id} canExport={canExport}/>:null}
     {section==="settings"&&canSettings?<IntegritySettings tenantId={tenant.id}/>:null}
   </div>;

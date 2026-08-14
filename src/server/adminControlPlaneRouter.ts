@@ -184,6 +184,10 @@ export function createAdminControlPlaneRouter(getSupabaseAdmin: any) {
         if (!tenants.length) return res.json(pageResult([], 0, page, pageSize));
         query = query.in(config.tenantField, tenants);
       }
+      if (config.tenantField && typeof req.query.tenant === 'string' && req.query.tenant) {
+        if (tenants !== null && !tenants.includes(req.query.tenant)) return res.status(403).json({ error: 'Cliente fora do seu escopo.' });
+        query = query.eq(config.tenantField, req.query.tenant);
+      }
       if (config.teamField && !isGlobalAdmin(req.platformContext)) {
         const teamIds = req.platformContext.teams.map((team: any) => team.id);
         if (!teamIds.length && config.ownerField) query = query.eq(config.ownerField, req.platformContext.platformMember.id);

@@ -7,6 +7,7 @@ import {
   resolvePlatformContext,
   requirePlatformPermission,
 } from "./tenantAuth";
+import { inviteRedirectUrl } from "./inviteRedirect";
 
 export function createAdminClientsRouter(getSupabaseAdmin: any) {
   const router = Router();
@@ -22,13 +23,6 @@ export function createAdminClientsRouter(getSupabaseAdmin: any) {
       if (result.data.users.length < 1000) break;
     }
     return null;
-  }
-
-  function inviteRedirectUrl() {
-    const configured = process.env.APP_URL?.replace(/\/$/, "");
-    if (configured) return `${configured}/#/auth/accept-invite`;
-    const deployment = process.env.VERCEL_URL;
-    return `${deployment ? `https://${deployment}` : "https://ordum-ordum.vercel.app"}/#/auth/accept-invite`;
   }
 
   // GET /api/admin/clients
@@ -418,7 +412,7 @@ export function createAdminClientsRouter(getSupabaseAdmin: any) {
           const invited = await db.auth.admin.inviteUserByEmail(
             parsed.data.email,
             {
-              redirectTo: inviteRedirectUrl(),
+              redirectTo: inviteRedirectUrl(req),
               data: { full_name: parsed.data.name },
             },
           );

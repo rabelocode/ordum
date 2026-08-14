@@ -34,6 +34,13 @@ const AccessControlPage = lazy(() => import("./pages/admin/AccessControlPage").t
 
 const SuspenseFallback = () => <PageShellSkeleton />;
 
+function HashRedirect({ to }: { to: string }) {
+  useEffect(() => {
+    window.location.replace(`${window.location.pathname}${window.location.search}#${to}`);
+  }, [to]);
+  return <PageShellSkeleton />;
+}
+
 export default function App() {
   const [currentRoute, setCurrentRoute] = useState("/");
 
@@ -45,14 +52,21 @@ export default function App() {
       const lowerHref = href.toLowerCase();
       const lowerHash = hash.toLowerCase();
       const lowerSearch = search.toLowerCase();
+      const lowerPathname = window.location.pathname.toLowerCase();
 
       // Checar se a URL contém um callback do Supabase Auth (invite, recovery, access_token, token_hash, code, error)
-      const isInviteFlow = lowerHref.includes("accept-invite") || 
+      const callbackType = new URLSearchParams(
+        lowerHash.includes("access_token=")
+          ? lowerHash.slice(lowerHash.indexOf("access_token="))
+          : lowerSearch,
+      ).get("type");
+      const isInviteFlow = lowerPathname === "/auth/invite-callback" ||
+                           lowerHref.includes("accept-invite") ||
                            lowerHref.includes("convite") || 
                            lowerHash.includes("type=invite") || 
                            lowerSearch.includes("type=invite") ||
                            lowerHash.includes("invite") ||
-                           lowerHash.includes("access_token=");
+                           ["invite", "signup", "magiclink"].includes(callbackType || "");
 
       if (isInviteFlow) {
         setCurrentRoute("/auth/accept-invite");
@@ -155,6 +169,13 @@ export default function App() {
       );
     }
     if (pathname.startsWith("/admin")) {
+      const legacyAdminRoutes: Record<string, string> = {
+        "/admin/desempenho": "/admin/customer-success",
+        "/admin/solucoes": "/admin/planos",
+        "/admin/deployments": "/admin/sistema",
+        "/admin/engenharia": "/admin/sistema",
+      };
+      if (legacyAdminRoutes[pathname]) return <HashRedirect to={legacyAdminRoutes[pathname]} />;
       let adminContent = <AdminDashboard />;
       
       if (pathname === "/admin/empresas") {
@@ -199,13 +220,7 @@ export default function App() {
         adminContent = <ControlPlaneModulePage module="operations" />;
       } else if (pathname === "/admin/acessos") {
         adminContent = <AccessControlPage />;
-      } else if (
-        pathname === "/admin/configuracoes" ||
-        pathname === "/admin/desempenho" ||
-        pathname === "/admin/solucoes" ||
-        pathname === "/admin/deployments" ||
-        pathname === "/admin/engenharia"
-      ) {
+      } else if (pathname === "/admin/configuracoes") {
         adminContent = <PlatformSettingsPage />;
       }
 

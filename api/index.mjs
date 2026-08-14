@@ -217,6 +217,19 @@ var init_tenantAuth = __esm({
   }
 });
 
+// src/server/inviteRedirect.ts
+function inviteRedirectUrl(req) {
+  const configured = process.env.PUBLIC_APP_URL || process.env.APP_URL || process.env.VITE_APP_URL;
+  const deployment = process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : "";
+  const requestOrigin = req ? req.headers.origin || `${req.protocol}://${req.get("host")}` : "";
+  const origin = String(configured || requestOrigin || deployment || "https://ordum-ordum.vercel.app").replace(/\/$/, "");
+  return `${origin}/auth/invite-callback`;
+}
+var init_inviteRedirect = __esm({
+  "src/server/inviteRedirect.ts"() {
+  }
+});
+
 // src/server/billing/config.ts
 function getBillingConfig(env = process.env) {
   const enabled = env.BILLING_ENABLED === "true";
@@ -846,9 +859,8 @@ async function ensureOwnerUser(db, contract) {
   if (error) throw error;
   const existing = data.users.find((user) => user.email?.toLowerCase() === contract.owner_email.toLowerCase());
   if (existing) return existing;
-  const baseUrl = process.env.APP_URL || "https://ordum-ordum.vercel.app";
   const { data: invited, error: inviteError } = await db.auth.admin.inviteUserByEmail(contract.owner_email, {
-    redirectTo: `${baseUrl.replace(/\/$/, "")}/#/auth/accept-invite`,
+    redirectTo: inviteRedirectUrl(),
     data: { full_name: contract.owner_name || contract.customer_name }
   });
   if (inviteError) throw inviteError;
@@ -1999,6 +2011,7 @@ var init_router = __esm({
     init_config();
     init_analytics();
     init_tenantAuth();
+    init_inviteRedirect();
     init_domain();
   }
 });
@@ -2502,6 +2515,7 @@ function createAdminLeadsRouter(getSupabaseAdmin2, _old_requirePlatformAuth) {
 init_authorization();
 init_operational();
 init_tenantAuth();
+init_inviteRedirect();
 import { Router as Router2 } from "express";
 import { z as z2 } from "zod";
 function createAdminClientsRouter(getSupabaseAdmin2) {
@@ -2517,12 +2531,6 @@ function createAdminClientsRouter(getSupabaseAdmin2) {
       if (result.data.users.length < 1e3) break;
     }
     return null;
-  }
-  function inviteRedirectUrl() {
-    const configured = process.env.APP_URL?.replace(/\/$/, "");
-    if (configured) return `${configured}/#/auth/accept-invite`;
-    const deployment = process.env.VERCEL_URL;
-    return `${deployment ? `https://${deployment}` : "https://ordum-ordum.vercel.app"}/#/auth/accept-invite`;
   }
   router.get(
     "/",
@@ -2794,7 +2802,7 @@ function createAdminClientsRouter(getSupabaseAdmin2) {
           const invited = await db.auth.admin.inviteUserByEmail(
             parsed.data.email,
             {
-              redirectTo: inviteRedirectUrl(),
+              redirectTo: inviteRedirectUrl(req),
               data: { full_name: parsed.data.name }
             }
           );
@@ -3096,6 +3104,7 @@ function installServerErrorHandler(app) {
 
 // src/server/adminOtherRouter.ts
 init_tenantAuth();
+init_inviteRedirect();
 import { z as z3 } from "zod";
 function createAdminOtherRouter(getSupabaseAdmin2, _old_requirePlatformAuth) {
   const router = Router3();
@@ -3169,8 +3178,7 @@ function createAdminOtherRouter(getSupabaseAdmin2, _old_requirePlatformAuth) {
       if (role_key === "admin") {
         finalRelationshipType = "partner";
       }
-      const origin = req.headers.origin || `${req.protocol}://${req.get("host")}`;
-      const redirectTo = `${origin}/#/auth/accept-invite`;
+      const redirectTo = inviteRedirectUrl(req);
       const { data: roleData } = await getSupabaseAdmin2().from("platform_roles").select("id").eq("key", role_key).single();
       if (!roleData) return res.status(400).json({ error: "Fun\xE7\xE3o interna inv\xE1lida." });
       let userId;
@@ -3181,7 +3189,20 @@ function createAdminOtherRouter(getSupabaseAdmin2, _old_requirePlatformAuth) {
         const { data: usersList } = await getSupabaseAdmin2().auth.admin.listUsers();
         const existingUser = usersList?.users?.find((u) => u.email?.toLowerCase() === email.toLowerCase());
         if (!existingUser) {
-          return res.status(400).json({ error: inviteErr.message || "Erro ao enviar convite por e-mail." });
+          const limited = inviteErr.message?.toLowerCase().includes("rate limit");
+          return res.status(limited ? 429 : 400).json({
+            error: limited ? "O servi\xE7o de e-mail atingiu o limite tempor\xE1rio de envios. Aguarde alguns minutos e tente novamente." : "N\xE3o foi poss\xEDvel enviar o convite. Confira o e-mail e tente novamente."
+          });
+        }
+        const sent = await getSupabaseAdmin2().auth.signInWithOtp({
+          email,
+          options: { shouldCreateUser: false, emailRedirectTo: redirectTo }
+        });
+        if (sent.error) {
+          const limited = sent.error.message?.toLowerCase().includes("rate limit");
+          return res.status(limited ? 429 : 400).json({
+            error: limited ? "O servi\xE7o de e-mail atingiu o limite tempor\xE1rio de envios. Aguarde alguns minutos e tente novamente." : "N\xE3o foi poss\xEDvel reenviar o acesso para este e-mail."
+          });
         }
         userId = existingUser.id;
       } else {
@@ -3241,9 +3262,7 @@ function createAdminOtherRouter(getSupabaseAdmin2, _old_requirePlatformAuth) {
       if (!user || !user.email) {
         return res.status(400).json({ error: "E-mail do membro n\xE3o localizado." });
       }
-      const configuredUrl = process.env.PUBLIC_APP_URL || process.env.APP_URL || process.env.VITE_APP_URL;
-      const origin = configuredUrl || req.headers.origin || `${req.protocol}://${req.get("host")}`;
-      const redirectTo = `${String(origin).replace(/\/$/, "")}/#/auth/accept-invite`;
+      const redirectTo = inviteRedirectUrl(req);
       const { error: inviteErr } = await db.auth.admin.inviteUserByEmail(user.email, { redirectTo });
       if (inviteErr) {
         const sent = await db.auth.signInWithOtp({
@@ -3251,7 +3270,8 @@ function createAdminOtherRouter(getSupabaseAdmin2, _old_requirePlatformAuth) {
           options: { shouldCreateUser: false, emailRedirectTo: redirectTo }
         });
         if (sent.error) {
-          return res.status(500).json({ error: "N\xE3o foi poss\xEDvel reenviar o convite por e-mail." });
+          const limited = sent.error.message?.toLowerCase().includes("rate limit");
+          return res.status(limited ? 429 : 500).json({ error: limited ? "O servi\xE7o de e-mail atingiu o limite tempor\xE1rio de envios. Aguarde alguns minutos e tente novamente." : "N\xE3o foi poss\xEDvel reenviar o convite por e-mail." });
         }
       }
       await db.from("platform_members").update({ status: "invited", updated_at: (/* @__PURE__ */ new Date()).toISOString() }).eq("id", memberId);
@@ -3689,6 +3709,10 @@ function createAdminControlPlaneRouter(getSupabaseAdmin2) {
       if (config.tenantField && tenants !== null) {
         if (!tenants.length) return res.json(pageResult([], 0, page, pageSize));
         query = query.in(config.tenantField, tenants);
+      }
+      if (config.tenantField && typeof req.query.tenant === "string" && req.query.tenant) {
+        if (tenants !== null && !tenants.includes(req.query.tenant)) return res.status(403).json({ error: "Cliente fora do seu escopo." });
+        query = query.eq(config.tenantField, req.query.tenant);
       }
       if (config.teamField && !isGlobalAdmin(req.platformContext)) {
         const teamIds = req.platformContext.teams.map((team) => team.id);
@@ -4162,6 +4186,7 @@ function createAdminTeamsRouter(getSupabaseAdmin2, _old_requirePlatformAuth) {
 init_router();
 
 // src/server/integrityRouter.ts
+init_inviteRedirect();
 init_tenantAuth();
 import express from "express";
 import { createHash as createHash2, randomUUID as randomUUID2 } from "node:crypto";
@@ -4861,11 +4886,6 @@ function createIntegrityRouter(getSupabaseAdmin2, authOverrides) {
     });
     if (result.error) throw result.error;
   }
-  const inviteRedirect = (req) => {
-    const configured = process.env.PUBLIC_APP_URL || process.env.VITE_APP_URL;
-    const origin = configured || req.headers.origin || `${req.protocol}://${req.get("host")}`;
-    return `${String(origin).replace(/\/$/, "")}/#/auth/accept-invite`;
-  };
   async function findAuthUserByEmail(db, email) {
     for (let page = 1; page <= 10; page += 1) {
       const result = await db.auth.admin.listUsers({ page, perPage: 1e3 });
@@ -6598,7 +6618,7 @@ function createIntegrityRouter(getSupabaseAdmin2, authOverrides) {
         if (existingMember.error) throw existingMember.error;
         if (existingMember.data?.status === "active") return res.status(409).json({ error: "Esta pessoa j\xE1 faz parte da equipe." });
       }
-      const redirectTo = inviteRedirect(req);
+      const redirectTo = inviteRedirectUrl(req);
       let user = existingUser;
       if (!user) {
         const invited = await db.auth.admin.inviteUserByEmail(input.email, { redirectTo, data: { full_name: input.name } });
@@ -6634,7 +6654,7 @@ function createIntegrityRouter(getSupabaseAdmin2, authOverrides) {
       const tenant = tenantId(req);
       const invitation = await db.from("invitations").select("id,email,status").eq("id", req.params.id).eq("tenant_id", tenant).maybeSingle();
       if (!invitation.data || invitation.data.status !== "pending") return res.status(404).json({ error: "Este convite n\xE3o est\xE1 mais pendente." });
-      const sent = await db.auth.signInWithOtp({ email: invitation.data.email, options: { shouldCreateUser: false, emailRedirectTo: inviteRedirect(req) } });
+      const sent = await db.auth.signInWithOtp({ email: invitation.data.email, options: { shouldCreateUser: false, emailRedirectTo: inviteRedirectUrl(req) } });
       if (sent.error) return res.status(503).json({ error: "N\xE3o foi poss\xEDvel reenviar o convite agora." });
       const expiresAt = new Date(Date.now() + 60 * 60 * 1e3).toISOString();
       const updated = await db.from("invitations").update({ expires_at: expiresAt }).eq("id", invitation.data.id);
@@ -7528,6 +7548,7 @@ import dotenv from "dotenv";
 import cors from "cors";
 import { randomUUID as randomUUID4 } from "node:crypto";
 init_tenantAuth();
+init_inviteRedirect();
 dotenv.config({ path: [".env.local", ".env"] });
 async function createApp() {
   initServerObservability();
@@ -7812,9 +7833,8 @@ async function createApp() {
           (candidate) => candidate.email?.toLowerCase() === lead.email.toLowerCase()
         );
         if (!user) {
-          const origin = process.env.APP_URL || req.headers.origin || `${req.protocol}://${req.get("host")}`;
           const { data: inviteData, error: inviteError } = await db.auth.admin.inviteUserByEmail(lead.email, {
-            redirectTo: `${String(origin).replace(/\/$/, "")}/#/auth/accept-invite`,
+            redirectTo: inviteRedirectUrl(req),
             data: { full_name: lead.name }
           });
           if (inviteError) throw inviteError;

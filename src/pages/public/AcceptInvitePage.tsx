@@ -5,6 +5,7 @@ import { authService } from "../../services/auth";
 import { supabase } from "../../lib/supabase";
 import { captureClientException } from '../../lib/observability';
 import { PageShellSkeleton } from '../../components/ui/LoadingSkeletons';
+import { recoverInviteSession } from '../../lib/inviteCallback';
 
 export function AcceptInvitePage() {
   const [fullName, setFullName] = useState("");
@@ -20,11 +21,12 @@ export function AcceptInvitePage() {
     // Tentar processar a sessão ou callback de autenticação do Supabase
     const initInviteSession = async () => {
       try {
-        // Tentar obter a sessão atual do Supabase
-        const { data: { session }, error: sessionError } = await supabase.auth.getSession();
-        
-        if (sessionError) {
-          console.warn("Aviso ao obter sessão do Supabase:", sessionError.message);
+        const recovered = await recoverInviteSession();
+        const session = recovered.session;
+        if (recovered.error) {
+          setHasValidSession(false);
+          setErrorMessage("Este link de convite não é válido ou já expirou. Solicite um novo envio ao administrador.");
+          return;
         }
 
         if (session) {

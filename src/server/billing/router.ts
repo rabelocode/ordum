@@ -9,6 +9,7 @@ import { getBillingConfig, publicBillingHealth } from './config';
 import { captureServerAnalytics } from '../analytics';
 import { z } from 'zod';
 import { authenticateRequest, resolvePlatformContext, requirePlatformPermission } from '../tenantAuth';
+import { inviteRedirectUrl } from '../inviteRedirect';
 import {
   SUPPORTED_ASAAS_EVENTS,
   accessTransitionForPaymentStatus,
@@ -226,9 +227,8 @@ async function ensureOwnerUser(db: any, contract: any) {
   const existing = data.users.find((user: any) => user.email?.toLowerCase() === contract.owner_email.toLowerCase());
   if (existing) return existing;
 
-  const baseUrl = process.env.APP_URL || 'https://ordum-ordum.vercel.app';
   const { data: invited, error: inviteError } = await db.auth.admin.inviteUserByEmail(contract.owner_email, {
-    redirectTo: `${baseUrl.replace(/\/$/, '')}/#/auth/accept-invite`,
+    redirectTo: inviteRedirectUrl(),
     data: { full_name: contract.owner_name || contract.customer_name },
   });
   if (inviteError) throw inviteError;
