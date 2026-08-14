@@ -188,13 +188,13 @@ async function runInternalUiFlow(user: FixtureUser, subject: string) {
     await page.getByRole("button", { name: "Criar tarefa", exact: true }).click();
     await page.getByText("Tarefa criada.", { exact: true }).waitFor();
     await page.getByRole("button", { name: "Comunicação", exact: true }).click();
-    await page.getByPlaceholder("Escreva uma resposta clara e sem informações internas...").fill("Recebemos seu complemento e a apuração foi iniciada.");
+    await page.getByPlaceholder("Escreva uma mensagem clara para o denunciante acompanhar seu protocolo...").fill("Recebemos seu complemento e a apuração foi iniciada.");
     await page.getByRole("button", { name: "Enviar mensagem", exact: true }).click();
     await page.getByRole("button", { name: "Confirmar envio", exact: true }).click();
     await page.getByText("Mensagem enviada ao denunciante.", { exact: true }).waitFor();
     await page.getByRole("tab", { name: "Notas da equipe", exact: true }).click();
-    await page.getByPlaceholder("Registre uma observação que não será exibida ao denunciante...").fill("Nota interna criada pela homologação de interface; não deve aparecer no portal público.");
-    await page.getByRole("button", { name: "Salvar nota", exact: true }).click();
+    await page.getByPlaceholder("Registre uma nota técnica ou observação interna confidencial para a equipe...").fill("Nota interna criada pela homologação de interface; não deve aparecer no portal público.");
+    await page.getByRole("button", { name: "Salvar nota privada", exact: true }).click();
     await page.getByText("Nota privada registrada.", { exact: true }).waitFor();
     await page.getByRole("button", { name: "Evidências", exact: true }).click();
     await page.getByLabel("Selecionar evidência").setInputFiles({ name:"evidencia-qa.txt", mimeType:"text/plain", buffer:Buffer.from("Evidência descartável da homologação Ordum") });

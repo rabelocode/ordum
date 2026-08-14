@@ -661,16 +661,16 @@ export function ConsultantsPage() {
 
               <div>
                 <label className="block text-xs font-bold uppercase tracking-wider text-[#202322] mb-1">
-                  Função na Plataforma
+                  Papel na Ordum
                 </label>
                 <select
                   value={editRole}
                   onChange={(e: any) => setEditRole(e.target.value)}
                   className="w-full px-3.5 py-2.5 text-xs border border-[#DDD8CF] rounded-xl focus:outline-none focus:border-[#B66E45] bg-[#F6F5F2]/30"
                 >
-                  <option value="sales">Sales (Vendedor / Consultor Comercial)</option>
-                  <option value="manager">Manager (Gerente de Equipe)</option>
-                  <option value="admin">Admin (Diretoria / Administrador Global)</option>
+                  <option value="sales">Vendedor ou consultor comercial</option>
+                  <option value="manager">Gerente de equipe</option>
+                  <option value="admin">Diretoria ou administrador</option>
                 </select>
               </div>
 
@@ -680,7 +680,7 @@ export function ConsultantsPage() {
                 </label>
                 {editRole === 'admin' ? (
                   <div className="p-3 bg-amber-50 border border-amber-200 rounded-xl text-amber-900 text-xs font-medium">
-                    Regra da Plataforma: Administradores globais devem possuir vínculo <strong>Sócio / Diretoria (Partner)</strong>.
+                    Administradores devem possuir vínculo de sócio ou diretoria.
                   </div>
                 ) : (
                   <select
@@ -688,11 +688,11 @@ export function ConsultantsPage() {
                     onChange={(e) => setEditRelationship(e.target.value)}
                     className="w-full px-3.5 py-2.5 text-xs border border-[#DDD8CF] rounded-xl focus:outline-none focus:border-[#B66E45] bg-[#F6F5F2]/30"
                   >
-                    <option value="employee">CLT / Interno (Employee)</option>
-                    <option value="contractor">Contratado / PJ (Contractor)</option>
-                    <option value="representative">Representante Comercial (Representative)</option>
-                    <option value="agency">Agência Parceira (Agency)</option>
-                    <option value="partner">Sócio (Partner)</option>
+                    <option value="employee">Colaborador interno</option>
+                    <option value="contractor">Contratado ou prestador</option>
+                    <option value="representative">Representante comercial</option>
+                    <option value="agency">Agência parceira</option>
+                    <option value="partner">Sócio ou diretoria</option>
                   </select>
                 )}
               </div>

@@ -283,7 +283,18 @@ export async function createApp() {
         .select("id,tenant_id,role_keys,status,expires_at,tenants(name)")
         .eq("email", email).eq("status", "pending").order("created_at", { ascending: false }).limit(1).maybeSingle();
       if (invitation.error) throw invitation.error;
-      if (!invitation.data) return res.status(404).json({ error: "Este convite não está mais disponível." });
+      if (!invitation.data) {
+        const platformMember = await db.from("platform_members")
+          .select("status,platform_roles(name,key)")
+          .eq("user_id", req.user.id)
+          .eq("status", "invited")
+          .maybeSingle();
+        if (platformMember.error) throw platformMember.error;
+        if (!platformMember.data) return res.status(404).json({ error: "Este convite não está mais disponível." });
+        const role = platformMember.data.platform_roles as any;
+        const roleLabels: Record<string, string> = { admin: "Administrador", manager: "Gerente", sales: "Comercial" };
+        return res.json({ organization: "equipe Ordum", role: roleLabels[role?.key] || role?.name || "Equipe Ordum" });
+      }
       if (invitation.data.expires_at && new Date(invitation.data.expires_at).getTime() <= Date.now())
         return res.status(410).json({ error: "Este convite expirou. Peça um novo envio ao administrador da empresa." });
       const labels: Record<string,string> = { tenant_admin:"Administrador",integrity_compliance:"Compliance",integrity_investigator:"Investigador" };

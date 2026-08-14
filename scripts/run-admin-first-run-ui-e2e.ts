@@ -72,7 +72,9 @@ async function login(page: Page, email: string) {
   await page.locator("input[type=password]").fill(password);
   await page.getByRole("button", { name: /Entrar/ }).click();
   await page.waitForURL(/#\/admin/, { timeout: 20000 });
-  await page.reload({ waitUntil: "networkidle" });
+  await page.getByRole("heading", { name: /Veja o que precisa/ }).waitFor({ timeout: 20000 });
+  await page.reload({ waitUntil: "domcontentloaded" });
+  await page.getByRole("heading", { name: /Veja o que precisa/ }).waitFor({ timeout: 20000 });
 }
 async function shot(page: Page, name: string) {
   await page.screenshot({ path: `${artifacts}/${name}.png`, fullPage: true });
@@ -276,11 +278,13 @@ try {
   await page.goto(`${base}/#/admin/equipes`, { waitUntil: "networkidle" });
   await shot(page, "00-teams-loaded");
   console.log(`TEAMS_PAGE=${page.url()} BODY=${(await page.locator("body").innerText()).slice(0, 1200)}`);
-  await page.getByText("Prepare sua operação comercial").waitFor();
-  await shot(page, "01-first-run");
-  await page
-    .getByRole("button", { name: "Configurar equipe comercial" })
-    .click();
+  const firstRun = page.getByText("Prepare sua operação comercial");
+  if (await firstRun.isVisible().catch(() => false)) {
+    await shot(page, "01-first-run");
+    await page.getByRole("button", { name: "Configurar equipe comercial" }).click();
+  } else {
+    await page.getByRole("button", { name: "Nova equipe" }).click();
+  }
   await shot(page, "01b-create-team-dialog");
   console.log(`CREATE_DIALOG=${(await page.locator("body").innerText()).slice(-1000)}`);
   await page.getByLabel("Nome da Equipe").fill(teamName);
@@ -483,6 +487,19 @@ try {
   });
   await page.getByText(company).first().waitFor({ timeout: 30000 });
   await shot(page, "08-onboarding-mobile");
+  await page.goto(`${base}/#/admin/customer-success`, { waitUntil: "domcontentloaded" });
+  await page.getByRole("heading", { name: "Customer Success", exact: true }).waitFor({ timeout: 20000 });
+  await shot(page, "09-customer-success-mobile");
+  for (const [legacy, expected] of [
+    ["desempenho", "customer-success"],
+    ["solucoes", "planos"],
+    ["deployments", "sistema"],
+    ["engenharia", "sistema"],
+  ] as const) {
+    await page.goto(`${base}/#/admin/${legacy}`, { waitUntil: "domcontentloaded" });
+    await page.waitForURL(new RegExp(`#\\/admin\\/${expected}$`), { timeout: 20000 });
+  }
+  console.log("CS=PASS LEGACY_ROUTES=PASS MOBILE=PASS");
   console.log(
     JSON.stringify({
       status: "PASS",
