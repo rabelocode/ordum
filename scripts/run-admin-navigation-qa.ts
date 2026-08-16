@@ -105,6 +105,11 @@ async function runQa() {
     const adminNav = await labels(admin);
     for (const label of ['Comercial', 'Clientes', 'Financeiro', 'Operação', 'Administração']) if (!adminNav.includes(label)) throw new Error(`admin sem grupo ${label}`);
     await screenshot(admin, '01-admin-full');
+    const commercialButton = admin.getByRole('button', { name: 'Comercial', exact: true }).first();
+    await commercialButton.focus(); await commercialButton.press('Space');
+    if (await commercialButton.getAttribute('aria-expanded') !== 'true') throw new Error('Space não expandiu o menu');
+    await commercialButton.press('Enter');
+    if (await commercialButton.getAttribute('aria-expanded') !== 'false') throw new Error('Enter não recolheu o menu');
     await openGroup(admin, 'Administração');
     await admin.getByRole('link', { name: 'Acessos e permissões', exact: true }).waitFor();
     await screenshot(admin, '06-administration-open');
@@ -157,6 +162,10 @@ async function runQa() {
     await mobile.getByRole('heading', { name: 'Cobranças', exact: true }).waitFor();
     const visibleMenus = await mobile.getByRole('complementary', { name: 'Menu administrativo' }).evaluateAll(elements => elements.filter(element => getComputedStyle(element).display !== 'none').length);
     if (visibleMenus) throw new Error('drawer mobile permaneceu aberto');
+    await mobile.getByRole('button', { name: 'Abrir menu' }).click();
+    await mobile.keyboard.press('Escape');
+    const menusAfterEscape = await mobile.getByRole('complementary', { name: 'Menu administrativo' }).evaluateAll(elements => elements.filter(element => getComputedStyle(element).display !== 'none').length);
+    if (menusAfterEscape) throw new Error('Escape não fechou o drawer mobile');
     const overflow = await mobile.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth + 1);
     if (overflow) throw new Error('overflow horizontal no menu mobile');
 
