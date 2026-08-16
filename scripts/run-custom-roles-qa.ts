@@ -59,6 +59,7 @@ async function login(context: BrowserContext, key: string, errors: string[]) {
 }
 
 async function openAccess(page: Page) {
+  if (!page.url().startsWith(base)) await page.goto(base, { waitUntil: 'networkidle' });
   await page.evaluate(() => { window.location.hash = '#/admin/acessos'; });
   await page.reload({ waitUntil: 'networkidle' });
   await page.getByRole('heading', { name: 'Acessos e permissões' }).waitFor();
@@ -104,6 +105,11 @@ async function runQa(fixture: Awaited<ReturnType<typeof setup>>) {
     const catalogStatus = (await catalogResponse).status();
     if (catalogStatus !== 200) throw new Error(`catálogo de papéis retornou ${catalogStatus}`);
     await admin.getByRole('button', { name: 'Papéis', exact: true }).click();
+    for (const systemRole of ['Administrador', 'Gerente', 'Vendas']) {
+      const systemCard = admin.locator('article').filter({ hasText: systemRole });
+      await systemCard.getByText('Papel do sistema', { exact: true }).waitFor();
+      if (await systemCard.getByRole('button', { name: 'Editar papel' }).count()) throw new Error(`${systemRole} exibiu edição`);
+    }
     await screenshot(admin, '01-roles');
 
     const financeRole = await createRoleInUi(admin, 'Financeiro Júnior', ['Visualizar empresas', 'Visualizar financeiro']);
@@ -129,14 +135,17 @@ async function runQa(fixture: Awaited<ReturnType<typeof setup>>) {
     await screenshot(finance, '07-custom-role-menu');
     await finance.goto(`${base}/#/admin/acessos`, { waitUntil: 'networkidle' });
     await finance.getByRole('heading', { name: 'Área restrita' }).waitFor();
-    const unauthorized = await finance.evaluate(async () => {
+    const unauthorized = await finance.evaluate(async ({ roleId }) => {
       const sessionKey = Object.keys(localStorage).find(key => key.includes('auth-token'));
       const stored = sessionKey ? JSON.parse(localStorage.getItem(sessionKey) || '{}') : null;
       const token = stored?.access_token || stored?.currentSession?.access_token;
-      const response = await fetch('/api/admin/access/roles', { method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ name: 'Escalada', description: '', permission_keys: ['platform.staff.manage'] }) });
-      return response.status;
-    });
-    if (unauthorized !== 403) throw new Error(`criação sem staff.manage retornou ${unauthorized}`);
+      const body = JSON.stringify({ name: 'Escalada', description: '', permission_keys: ['platform.staff.manage'] });
+      const headers = { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' };
+      const create = await fetch('/api/admin/access/roles', { method: 'POST', headers, body });
+      const update = await fetch(`/api/admin/access/roles/${roleId}`, { method: 'PATCH', headers, body });
+      return { create: create.status, update: update.status };
+    }, { roleId: financeRole.id });
+    if (unauthorized.create !== 403 || unauthorized.update !== 403) throw new Error(`gestão sem staff.manage retornou POST ${unauthorized.create} / PATCH ${unauthorized.update}`);
     await finance.close();
 
     await openAccess(admin);
@@ -151,6 +160,13 @@ async function runQa(fixture: Awaited<ReturnType<typeof setup>>) {
     await screenshot(admin, '08-edit-impact');
     await impact.getByRole('button', { name: 'Salvar alterações' }).click();
     await admin.getByText('Papel atualizado.', { exact: true }).waitFor();
+
+    const refreshedContext = await browser.newContext({ viewport: { width: 1440, height: 1000 } }); contexts.push(refreshedContext);
+    const refreshed = await login(refreshedContext, 'finance', errors);
+    const refreshedNav = refreshed.getByRole('navigation', { name: 'Navegação administrativa' });
+    await refreshedNav.getByRole('button', { name: 'Clientes', exact: true }).click();
+    await refreshedNav.getByText('Customer Success', { exact: true }).waitFor();
+    await refreshed.close();
 
     await createRoleInUi(admin, 'Revisor Operacional', ['Visualizar suporte'], true);
     await admin.getByText('Revisor Operacional', { exact: true }).waitFor();

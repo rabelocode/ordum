@@ -5,7 +5,7 @@ export const SYSTEM_ROLE_KEYS = new Set(['admin', 'manager', 'sales']);
 const ROLE_LABELS: Record<string, string> = {
   admin: 'Administrador',
   manager: 'Gerente',
-  sales: 'Comercial',
+  sales: 'Vendas',
 };
 
 const PERMISSION_LABELS: Record<string, string> = {

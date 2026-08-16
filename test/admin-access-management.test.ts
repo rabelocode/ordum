@@ -12,7 +12,7 @@ test('access preview reuses the real navigation taxonomy for commercial, finance
 test('permissions and roles are presented in business language', () => {
   assert.equal(permissionLabel('platform.billing.read'), 'Visualizar financeiro');
   assert.equal(permissionLabel('platform.staff.manage'), 'Administrar membros da Ordum');
-  assert.equal(roleLabel({ key: 'sales', name: 'Sales' }), 'Comercial');
+  assert.equal(roleLabel({ key: 'sales', name: 'Sales' }), 'Vendas');
   assert.equal(roleLabel({ key: 'manager', name: 'Manager' }), 'Gerente');
   assert.equal(SYSTEM_ROLE_KEYS.has('admin'), true);
   assert.deepEqual(roleAreas(['platform.billing.read']), ['Financeiro']);
