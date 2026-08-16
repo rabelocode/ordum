@@ -135,17 +135,16 @@ async function runQa(fixture: Awaited<ReturnType<typeof setup>>) {
     await screenshot(finance, '07-custom-role-menu');
     await finance.goto(`${base}/#/admin/acessos`, { waitUntil: 'networkidle' });
     await finance.getByRole('heading', { name: 'Área restrita' }).waitFor();
-    const unauthorized = await finance.evaluate(async ({ roleId }) => {
+    const financeToken = await finance.evaluate(() => {
       const sessionKey = Object.keys(localStorage).find(key => key.includes('auth-token'));
       const stored = sessionKey ? JSON.parse(localStorage.getItem(sessionKey) || '{}') : null;
-      const token = stored?.access_token || stored?.currentSession?.access_token;
-      const body = JSON.stringify({ name: 'Escalada', description: '', permission_keys: ['platform.staff.manage'] });
-      const headers = { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' };
-      const create = await fetch('/api/admin/access/roles', { method: 'POST', headers, body });
-      const update = await fetch(`/api/admin/access/roles/${roleId}`, { method: 'PATCH', headers, body });
-      return { create: create.status, update: update.status };
-    }, { roleId: financeRole.id });
-    if (unauthorized.create !== 403 || unauthorized.update !== 403) throw new Error(`gestão sem staff.manage retornou POST ${unauthorized.create} / PATCH ${unauthorized.update}`);
+      return stored?.access_token || stored?.currentSession?.access_token;
+    });
+    const unauthorizedBody = { name: 'Escalada', description: '', permission_keys: ['platform.staff.manage'] };
+    const unauthorizedHeaders = { Authorization: `Bearer ${financeToken}` };
+    const unauthorizedCreate = await finance.request.post(`${base}/api/admin/access/roles`, { headers: unauthorizedHeaders, data: unauthorizedBody });
+    const unauthorizedUpdate = await finance.request.patch(`${base}/api/admin/access/roles/${financeRole.id}`, { headers: unauthorizedHeaders, data: unauthorizedBody });
+    if (unauthorizedCreate.status() !== 403 || unauthorizedUpdate.status() !== 403) throw new Error(`gestão sem staff.manage retornou POST ${unauthorizedCreate.status()} / PATCH ${unauthorizedUpdate.status()}`);
     await finance.close();
 
     await openAccess(admin);
