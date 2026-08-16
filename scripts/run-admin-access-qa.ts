@@ -120,6 +120,7 @@ async function runQa(fixture: Awaited<ReturnType<typeof setup>>) {
     const adminContext = await browser.newContext({ viewport: { width: 1440, height: 1000 } }); contexts.push(adminContext);
     const admin = await login(adminContext, 'admin', errors);
     await accessPage(admin);
+    await admin.getByPlaceholder('Buscar por nome ou e-mail').fill(runId);
     await screenshot(admin, '01-access-list');
     await admin.locator('article').filter({ hasText: 'Mariana Souza' }).getByRole('button', { name: /Gerenciar acesso/ }).click();
     const firstDrawer = admin.getByRole('dialog', { name: /Mariana Souza/ });
@@ -165,6 +166,7 @@ async function runQa(fixture: Awaited<ReturnType<typeof setup>>) {
     await mobile.goto(`${base}/#/admin/acessos`, { waitUntil: 'networkidle' });
     await mobile.getByRole('heading', { name: 'Acessos e permissões' }).waitFor();
     await mobile.getByText('Mariana Souza', { exact: true }).waitFor();
+    await mobile.getByPlaceholder('Buscar por nome ou e-mail').fill(runId);
     await screenshot(mobile, '08-access-mobile');
     const overflow = await mobile.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth + 1);
     if (overflow) throw new Error('overflow horizontal na gestão de acessos mobile');
