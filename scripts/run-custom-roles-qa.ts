@@ -59,8 +59,10 @@ async function login(context: BrowserContext, key: string, errors: string[]) {
 }
 
 async function openAccess(page: Page) {
-  await page.goto(`${base}/#/admin/acessos`, { waitUntil: 'networkidle' });
+  await page.evaluate(() => { window.location.hash = '#/admin/acessos'; });
+  await page.reload({ waitUntil: 'networkidle' });
   await page.getByRole('heading', { name: 'Acessos e permissões' }).waitFor();
+  await page.getByRole('button', { name: 'Papéis', exact: true }).waitFor();
 }
 
 async function screenshot(page: Page, name: string) {
@@ -68,14 +70,17 @@ async function screenshot(page: Page, name: string) {
 }
 
 async function createRoleInUi(page: Page, name: string, permissions: string[], unassigned = false) {
-  await page.getByRole('button', { name: 'Papéis', exact: true }).click();
-  await page.getByRole('button', { name: 'Novo papel' }).click();
+  const rolesTab = page.getByRole('button', { name: 'Papéis', exact: true });
+  if (await rolesTab.getAttribute('aria-current') !== 'page') await rolesTab.click();
+  const newRole = page.getByRole('button', { name: 'Novo papel' });
+  await newRole.waitFor();
+  await newRole.click();
   const editor = page.getByRole('dialog', { name: /Crie uma função/ });
   await editor.getByLabel('Nome').fill(name);
   await editor.getByLabel('Descrição').fill(`${unassigned ? 'Papel sem pessoa' : 'Acompanha clientes e operação financeira'} · ${runId}`);
+  if (!unassigned) await screenshot(page, '02-new-role');
   for (const permission of permissions) await editor.getByText(permission, { exact: true }).click();
   if (!unassigned) {
-    await screenshot(page, '02-new-role');
     await screenshot(page, '03-permissions');
     await editor.getByText('Financeiro', { exact: true }).last().waitFor();
     await screenshot(page, '04-preview');

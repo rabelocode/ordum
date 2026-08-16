@@ -3893,9 +3893,11 @@ function createAdminControlPlaneRouter(getSupabaseAdmin2) {
       ]);
       if (catalog.error) throw catalog.error;
       if (permissions.error) throw permissions.error;
+      const roles = Array.isArray(catalog.data) ? catalog.data : [];
+      const permissionRows = (permissions.data || []).length ? permissions.data : [...new Set(roles.flatMap((role) => Array.isArray(role.permission_keys) ? role.permission_keys : []))].map((key) => ({ key, category: null, description: null }));
       return res.json({
-        roles: Array.isArray(catalog.data) ? catalog.data : [],
-        permissions: (permissions.data || []).map((permission) => ({
+        roles,
+        permissions: permissionRows.map((permission) => ({
           key: permission.key,
           category: permission.category || null,
           description: permission.description || null
