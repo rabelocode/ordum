@@ -77,7 +77,7 @@ async function createRoleInUi(page: Page, name: string, permissions: string[], u
   await newRole.click();
   const editor = page.getByRole('dialog', { name: /Crie uma função/ });
   await editor.getByLabel('Nome').fill(name);
-  await editor.getByLabel('Descrição').fill(`${unassigned ? 'Papel sem pessoa' : 'Acompanha clientes e operação financeira'} · ${runId}`);
+  await editor.getByLabel('Descrição').fill(`${unassigned ? 'Papel sem pessoa' : 'Acesso operacional a clientes e financeiro.'} · ${runId}`);
   if (!unassigned) await screenshot(page, '02-new-role');
   for (const permission of permissions) await editor.getByText(permission, { exact: true }).click();
   if (!unassigned) {
@@ -87,7 +87,7 @@ async function createRoleInUi(page: Page, name: string, permissions: string[], u
   }
   await editor.getByRole('button', { name: 'Criar papel' }).click();
   await page.getByText('Papel criado.', { exact: true }).waitFor();
-  const role = value(await db.from('platform_roles').select('id,key').eq('name', name).eq('description', `${unassigned ? 'Papel sem pessoa' : 'Acompanha clientes e operação financeira'} · ${runId}`).single(), `papel ${name}`);
+  const role = value(await db.from('platform_roles').select('id,key').eq('name', name).eq('description', `${unassigned ? 'Papel sem pessoa' : 'Acesso operacional a clientes e financeiro.'} · ${runId}`).single(), `papel ${name}`);
   createdRoles.push(role.id);
   return role;
 }
@@ -99,7 +99,10 @@ async function runQa(fixture: Awaited<ReturnType<typeof setup>>) {
   try {
     const adminContext = await browser.newContext({ viewport: { width: 1440, height: 1000 } }); contexts.push(adminContext);
     const admin = await login(adminContext, 'admin', errors);
+    const catalogResponse = admin.waitForResponse(response => response.url().includes('/api/admin/access/roles') && response.request().method() === 'GET');
     await openAccess(admin);
+    const catalogStatus = (await catalogResponse).status();
+    if (catalogStatus !== 200) throw new Error(`catálogo de papéis retornou ${catalogStatus}`);
     await admin.getByRole('button', { name: 'Papéis', exact: true }).click();
     await screenshot(admin, '01-roles');
 
@@ -178,7 +181,7 @@ async function runQa(fixture: Awaited<ReturnType<typeof setup>>) {
     const assigned = value(await db.from('platform_members').select('platform_roles(key)').eq('id', fixture.target.memberId).single(), 'atribuição final');
     if ((assigned as any).platform_roles?.key !== financeRole.key) throw new Error('papel customizado não permaneceu atribuído');
     if (errors.length) throw new Error(errors.join('; '));
-    console.log(JSON.stringify({ status: 'PASS', runId, rolesCreated: 2, unassignedVisible: true, systemRoleProtected: true, deepLinkDenied: true, auditHuman: true, screenshots: 9, mobileOverflow: false, consoleErrors: 0, http5xx: 0 }));
+    console.log(JSON.stringify({ status: 'PASS', runId, catalogStatus, rolesCreated: 2, unassignedVisible: true, systemRoleProtected: true, deepLinkDenied: true, auditHuman: true, screenshots: 9, mobileOverflow: false, consoleErrors: 0, http5xx: 0 }));
   } finally {
     for (const context of contexts) await context.close();
     await browser.close();
