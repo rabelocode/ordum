@@ -57,4 +57,14 @@ Necessidade: catálogo completo de papéis ativos e gestão transacional de pap�
 Contrato desejado: API server-side para listar todos os papéis com suas permissões e quantidade de pessoas, além de criar/editar papéis personalizados de forma atômica; papéis de sistema devem permanecer protegidos. Não conceder override individual de permissão.
 Permissão: autorização administrativa de acessos já existente, com decisão final do backend.
 Bloqueante: NÃO para administrar pessoas nos papéis existentes; SIM para papéis personalizados e papéis ainda sem pessoas vinculadas.
-Frontend pronto: PARCIAL — tabs, apresentação humana e preview estão prontos; criação/edição permanece sem CTA falso.
+Frontend pronto: SIM — catálogo, criação, edição, preview, impacto e atribuição estão integrados à API Express; homologação remota depende do BR-007.
+
+## BR-007
+
+Tela: Administração → Acessos e permissões → Papéis
+Problema: as wrappers `public.platform_role_catalog` e `public.manage_platform_custom_role` são `SECURITY INVOKER` e possuem `EXECUTE` para `service_role`, mas `service_role` não possui `USAGE` no schema `app_private`; a chamada server-side falha com `permission denied for schema app_private`.
+Necessidade: completar o grant mínimo exigido pelo contrato invoker, preservando `anon`, `authenticated` e `PUBLIC` sem `EXECUTE` nas wrappers e sem acesso do browser ao service role.
+Contrato desejado: `service_role` consegue executar as duas wrappers públicas e alcançar as funções internas; demais grants e proteção de papéis de sistema permanecem inalterados.
+Permissão: backend/Supabase da Ordum.
+Bloqueante: SIM para catálogo, criação e edição de papéis personalizados.
+Frontend pronto: SIM

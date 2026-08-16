@@ -1,46 +1,39 @@
 Owner: chatgpt_backend
 Status: ready_for_backend_sync
 Branch: fix/admin-functional-recovery
-Head: f0e630f8842b2807a88aa2ea223d3c3f381102c9
-Headline: Admin Access Management — papéis e permissões administráveis em linguagem humana.
+Head: 90f96c85bcf6560b5bec33c387df078ea58da3c3
+Headline: Admin Access Management completo no produto; homologação de papéis personalizados bloqueada por grant remoto incompleto.
 
 Implemented:
-- `Acessos`, `Papéis` e `Permissões` substituem o simulador técnico como experiência principal.
-- Lista responsiva por nome/e-mail, função, equipe e status; detalhe em drawer com função, equipes, último acesso e preview imediato.
-- Permissões agrupadas em Comercial, Clientes, Financeiro, Operação e Administração, sem keys técnicas na operação comum.
-- Preview reutiliza a taxonomia da Navigation IA; diagnóstico técnico permaneceu como ferramenta secundária autorizada.
-- Papéis existentes são derivados do backend e humanizados; papéis de sistema são identificados e não possuem ação destrutiva.
-- Alteração de função/equipes, suspensão e reativação usam APIs existentes; alteração da própria função fica bloqueada na UX e no servidor.
-- Membros e Acessos possuem links contextuais; auditoria de convites, função, equipes, suspensão e reativação ganhou linguagem humana.
-- Requisições do dashboard agora são canceladas na troca de sessão, eliminando 401 no console durante troca de persona.
+- API Express autenticada para catálogo, criação e edição atômica de papéis; ator sempre derivado da sessão e erros humanizados.
+- Papéis lista funções com zero pessoas, diferencia sistema/personalizado e não oferece exclusão ou edição de papéis protegidos.
+- Editor responsivo agrupa permissões por domínio, omite keys técnicas, mostra o menu resultante e confirma impacto nas pessoas vinculadas.
+- Seletor de acesso recebe imediatamente papéis personalizados; auditoria apresenta criação/edição em linguagem humana.
 
 Database:
-- Nenhuma migration, RPC, policy ou alteração estrutural.
-- BR-006 criado para catálogo completo e gestão transacional de papéis personalizados; sem workaround frontend.
+- Git sincronizado com as migrations remotas já aplicadas `20260816162954_platform_custom_roles_management` e `20260816163157_platform_custom_roles_api_wrappers`; nenhuma migration foi reaplicada.
+- Estado remoto confirmado: `system_managed=true` para admin/manager/sales; wrappers invoker com EXECUTE apenas para postgres/service_role.
+- BR-007: `service_role` não possui USAGE em `app_private`, por isso as wrappers invoker falham antes da função interna.
 
 Tests:
-- Suite completa: 224 testes; 223 PASS, 1 live E2E explicitamente SKIP, 0 FAIL.
-- Focados: taxonomia de acesso, labels humanas, papéis customizados e regressão das proteções de autoalteração/último admin PASS.
-- Secret scan, migration validation, lint, typecheck e build PASS.
+- Secret scan, migration validation, lint, typecheck e build PASS; suite completa 228 testes, 227 PASS, 1 live E2E explicitamente SKIP, 0 FAIL.
+- 7 testes focados de apresentação, contrato API, proteção e migrations PASS.
+- Browser reproduziu GET `/api/admin/access/roles` = 500; RPC via SDK confirmou `permission denied for schema app_private`.
 
 Preview:
-- READY — `dpl_65Ewga2oVJg6phJmBKfFezGF3Pu3`
-- Imutável: https://ordum-w9p89uzme-ordum.vercel.app
-- Alias: https://ordum-git-fix-admin-functional-recovery-ordum.vercel.app
+- READY — `dpl_EJzGEkXKNpoH6M11M2oEdjVympL6`
+- Imutável: https://ordum-rakwoyr7c-ordum.vercel.app
+- Alias da branch: https://ordum-git-fix-admin-functional-recovery-ordum.vercel.app
 
 QA:
-- Run descartável `admin-access-msw0764m-3a5d63`; cinco pessoas e quatro papéis de QA; cleanup de Auth, membros, equipes, permissões e papéis concluído.
-- Admin: Membros → Gerenciar acesso; tabs, filtros, drawer, função, equipe, preview e status clicados.
-- Comercial: menu real Comercial + Clientes; Financeiro/Administração/Operação ausentes.
-- Financeiro: função alterada pela UI; novo login exibiu Clientes + Financeiro; deep link de Acessos negado.
-- Customer Success: função alterada pela UI; novo login exibiu Clientes, Implantação e Customer Success.
-- Mobile `390x844`: lista, filtros e cards sem overflow horizontal.
-- Console errors `0`; HTTP 5xx `0`; alteração final persistida no backend e fixtures removidas.
-- Screenshots: `tmp/admin-access/01-access-list.png` a `08-access-mobile.png`, somente com dados descartáveis.
+- Fixtures Auth/membros descartáveis criadas e removidas em todas as tentativas; zero papel ou pessoa QA residual.
+- UI desktop abriu Papéis e Novo papel; o editor e preview visual foram validados até a dependência do catálogo.
+- Runner completo `scripts/run-custom-roles-qa.ts` preparado para criação, papel sem pessoa, atribuição, login, menu real, deep-link, edição/impacto, auditoria, mobile e cleanup.
+- Screenshots parciais e descartáveis: `tmp/custom-roles/01-roles.png` e `02-new-role.png`; não há alegação de E2E PASS.
 
 Blockers:
-- BR-006: papéis personalizados e papéis sem pessoa vinculada precisam de contrato backend próprio. Não bloqueia gestão dos papéis existentes.
-- BR-001 SMTP externo, BR-002 cron não bloqueante e BR-005 Asaas Sandbox permanecem pendentes e inalterados.
+- BR-007 bloqueia a homologação remota e a resolução do BR-006.
+- BR-001 SMTP, BR-002 cron não bloqueante e BR-005 Asaas Sandbox permanecem pendentes e inalterados.
 
 Suggested next package:
-- Backend sync do BR-006; depois homologar criação/edição de papel personalizado e sua auditoria pela UI preparada.
+- Aplicar e versionar o grant mínimo do BR-007; então executar o runner custom roles sem outras mudanças de produto e marcar BR-006 resolvido com evidência completa.
