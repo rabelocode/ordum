@@ -121,7 +121,7 @@ async function runVisualQa(browser: Browser) {
 
   const financeContext = await browser.newContext({ viewport: { width: 1440, height: 1000 } });
   const finance = await financeContext.newPage(); observe(finance, errors); await login(finance, "financeiro");
-  await gotoHash(finance, "#/admin/financeiro"); await finance.getByRole("heading", { name: "Gestão financeira", exact: true }).waitFor();
+  await gotoHash(finance, "#/admin/financeiro"); await finance.getByRole("heading", { name: "Visão geral financeira", exact: true }).waitFor();
   try { await finance.getByText("MRR ativo", { exact: true }).waitFor({ timeout: 15000 }); }
   catch { await shot(finance, "debug-finance-error"); throw new Error(`Financeiro não carregou: ${(await finance.locator("body").innerText()).replace(/\s+/g, " ").slice(0, 1200)}`); }
   await shot(finance, "05-finance-overview");
@@ -134,7 +134,7 @@ async function runVisualQa(browser: Browser) {
   const mobilePage = await mobile.newPage(); observe(mobilePage, errors); await login(mobilePage, "admin");
   await gotoHash(mobilePage, "#/admin"); await assertNoOverflow(mobilePage, "dashboard mobile"); await shot(mobilePage, "15-admin-dashboard-mobile");
   await gotoHash(mobilePage, `#/admin/empresas/${ids.tenants[0]}`); await mobilePage.getByRole("heading", { name: "Grupo Horizonte", exact: true }).waitFor(); await assertNoOverflow(mobilePage, "company mobile"); await shot(mobilePage, "16-company-mobile");
-  await gotoHash(mobilePage, "#/admin/financeiro"); await mobilePage.getByRole("heading", { name: "Gestão financeira", exact: true }).waitFor(); await assertNoOverflow(mobilePage, "finance mobile"); await shot(mobilePage, "17-finance-mobile");
+  await gotoHash(mobilePage, "#/admin/financeiro"); await mobilePage.getByRole("heading", { name: "Visão geral financeira", exact: true }).waitFor(); await assertNoOverflow(mobilePage, "finance mobile"); await shot(mobilePage, "17-finance-mobile");
   await mobilePage.getByRole("button", { name: "Cobranças", exact: true }).click(); await mobilePage.getByPlaceholder("Buscar cliente", { exact: true }).fill("Horizonte Serviços"); await mobilePage.getByText("Horizonte Serviços", { exact: true }).first().click(); await assertNoOverflow(mobilePage, "charge mobile"); await shot(mobilePage, "18-charge-mobile");
 
   for (const context of [desktop, financeContext, csContext, mobile]) await context.close();

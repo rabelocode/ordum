@@ -49,8 +49,7 @@ test("comunicação exige confirmação explícita antes de mensagem externa",()
 });
 
 test("Admin oculta navegação técnica da operação comum",()=>{
-  const source=read("src/pages/admin/OrdumAdminLayout.tsx");
-  const nav=source.slice(source.indexOf("const allNavItems"),source.indexOf("const visibleNavItems"));
+  const nav=read("src/pages/admin/adminNavigation.ts");
   assert.doesNotMatch(nav,/Deployments|Engenharia|Control plane/);
-  for(const section of ["COMERCIAL","CLIENTES","FINANCEIRO","OPERAÇÃO","ADMINISTRAÇÃO"]) assert.match(nav,new RegExp(section));
+  for(const section of ["Comercial","Clientes","Financeiro","Operação","Administração"]) assert.match(nav,new RegExp(section));
 });

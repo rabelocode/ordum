@@ -4,8 +4,9 @@ import { useAccess } from '../../core/auth/AccessContext';
 import { ListSkeleton, MetricGridSkeleton } from '../../components/ui/LoadingSkeletons';
 import { ActionDialog } from '../../components/ui/ActionDialog';
 import { userFacingApiError } from '../../lib/userFacingError';
+import { billingViewFromHash, type BillingView } from './billingNavigation';
 
-type View = 'overview' | 'subscriptions' | 'payments' | 'overdue';
+type View = BillingView;
 
 const currency = new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' });
 const money = (cents?: number | null) => currency.format((cents || 0) / 100);
@@ -16,8 +17,7 @@ const paymentMethod: Record<string, string> = { PIX: 'Pix', BOLETO: 'Boleto', CR
 
 export function BillingPage() {
   const { session, hasPlatformPermission: can } = useAccess();
-  const initialView = (new URLSearchParams(window.location.hash.split('?')[1] || '').get('view') as View) || 'overview';
-  const [view, setView] = useState<View>(['overview', 'subscriptions', 'payments', 'overdue'].includes(initialView) ? initialView : 'overview');
+  const [view, setView] = useState<View>(() => billingViewFromHash(window.location.hash));
   const [overview, setOverview] = useState<any>(null);
   const [records, setRecords] = useState<any>({ subscriptions: { items: [] }, payments: { items: [] } });
   const [loading, setLoading] = useState(true);
@@ -51,7 +51,20 @@ export function BillingPage() {
   }, [request, session]);
 
   useEffect(() => { void load(); }, [load]);
-  useEffect(() => { const params = new URLSearchParams(window.location.hash.split('?')[1] || ''); params.set('view', view); window.location.hash = `#/admin/financeiro?${params}`; }, [view]);
+  useEffect(() => {
+    const syncFromRoute = () => { setView(billingViewFromHash(window.location.hash)); setSelected(null); };
+    window.addEventListener('hashchange', syncFromRoute);
+    return () => window.removeEventListener('hashchange', syncFromRoute);
+  }, []);
+
+  const navigateView = useCallback((nextView: View) => {
+    const params = new URLSearchParams(window.location.hash.split('?')[1] || '');
+    params.set('view', nextView);
+    const nextHash = `#/admin/financeiro?${params}`;
+    if (window.location.hash !== nextHash) window.location.hash = nextHash;
+    else setView(nextView);
+    setStatus(''); setQuery(''); setSelected(null);
+  }, []);
 
   const subscriptions = useMemo(() => filterRecords(records.subscriptions?.items || [], query, status, 'subscription'), [records, query, status]);
   const payments = useMemo(() => filterRecords(records.payments?.items || [], query, status, 'payment'), [records, query, status]);
@@ -75,19 +88,20 @@ export function BillingPage() {
   </>;
 
   const tabs: [View, string][] = [['overview', 'Visão geral'], ['subscriptions', 'Assinaturas'], ['payments', 'Cobranças'], ['overdue', 'Inadimplência']];
+  const viewTitle: Record<View, string> = { overview: 'Visão geral financeira', subscriptions: 'Assinaturas', payments: 'Cobranças', overdue: 'Inadimplência' };
   return <div className="mx-auto max-w-7xl space-y-6">
     <header className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
-      <div><p className="text-xs font-bold uppercase tracking-[.18em] text-[#B66E45]">Financeiro</p><h1 className="mt-1 text-3xl font-black text-[#202322]">Gestão financeira</h1><p className="mt-1 text-sm text-[#626866]">Acompanhe contratos, cobranças e clientes que precisam de atenção.</p></div>
+      <div><p className="text-xs font-bold uppercase tracking-[.18em] text-[#B66E45]">Financeiro</p><h1 className="mt-1 text-3xl font-black text-[#202322]">{viewTitle[view]}</h1><p className="mt-1 text-sm text-[#626866]">Acompanhe contratos, cobranças e clientes que precisam de atenção.</p></div>
       <button onClick={() => void load()} disabled={loading} className="inline-flex items-center justify-center gap-2 rounded-xl border border-[#DDD8CF] bg-white px-4 py-2.5 text-sm font-bold disabled:opacity-50"><RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />Atualizar</button>
     </header>
     <nav aria-label="Áreas do Financeiro" className="flex gap-1 overflow-x-auto border-b border-[#DDD8CF]">
-      {tabs.map(([key, label]) => <button key={key} onClick={() => { setView(key); setStatus(''); setQuery(''); }} className={`shrink-0 border-b-2 px-4 py-3 text-sm font-bold ${view === key ? 'border-[#B66E45] text-[#202322]' : 'border-transparent text-[#626866]'}`}>{label}</button>)}
+      {tabs.map(([key, label]) => <button key={key} onClick={() => navigateView(key)} className={`shrink-0 border-b-2 px-4 py-3 text-sm font-bold ${view === key ? 'border-[#B66E45] text-[#202322]' : 'border-transparent text-[#626866]'}`}>{label}</button>)}
       <a href="#/admin/planos" className="shrink-0 border-b-2 border-transparent px-4 py-3 text-sm font-bold text-[#626866]">Planos</a>
     </nav>
     {error ? <div role="alert" className="flex items-start gap-2 rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-700"><AlertCircle className="mt-0.5 h-4 w-4 shrink-0" /><span>{error}</span></div> : null}
     {success ? <div role="status" className="flex items-start gap-2 rounded-xl border border-emerald-200 bg-emerald-50 p-4 text-sm text-emerald-800"><CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0" /><span>{success}</span></div> : null}
     {loading ? view === 'overview' ? <MetricGridSkeleton count={4} /> : <ListSkeleton rows={6} /> : null}
-    {!loading && view === 'overview' ? <FinancialOverview overview={overview} onNavigate={setView} /> : null}
+    {!loading && view === 'overview' ? <FinancialOverview overview={overview} onNavigate={navigateView} /> : null}
     {!loading && view !== 'overview' ? <>
       <FinanceFilters view={view} query={query} status={status} onQuery={setQuery} onStatus={setStatus} />
       {view === 'subscriptions' ? <RecordList kind="subscription" items={subscriptions} onOpen={(value) => setSelected({ kind: 'subscription', value })} /> : null}
