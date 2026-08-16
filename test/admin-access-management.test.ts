@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import { navigationPreview, permissionGroups, permissionLabel, roleAreas, roleLabel, SYSTEM_ROLE_KEYS } from '../src/pages/admin/adminAccessPresentation';
 
@@ -21,4 +22,13 @@ test('permissions and roles are presented in business language', () => {
 test('unknown custom roles keep the backend name without exposing a role key', () => {
   assert.equal(roleLabel({ key: 'finance_coordinator', name: 'Coordenação Financeira' }), 'Coordenação Financeira');
   assert.equal(roleLabel({ key: 'finance_coordinator' }), 'Função personalizada');
+});
+
+test('server contract keeps self-role and last-admin protections', () => {
+  const source = readFileSync(new URL('../src/server/adminOtherRouter.ts', import.meta.url), 'utf8');
+  assert.match(source, /targetMember\.user_id === req\.user\.id/);
+  assert.match(source, /Ninguém pode alterar a própria função global/);
+  assert.match(source, /Não é possível rebaixar a função do único Admin ativo/);
+  assert.match(source, /Não é possível suspender o único Admin ativo/);
+  assert.match(source, /requirePlatformPermission\('platform\.staff\.manage'\)/);
 });
