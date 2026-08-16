@@ -32,11 +32,11 @@ async function createCustomRole(key: string, name: string, permissions: string[]
   return role.id;
 }
 
-async function createPersona(key: string, name: string, roleId: string) {
+async function createPersona(key: string, name: string, roleId: string, relationshipType = 'employee') {
   const email = `${key}.${runId}@ordum-test.internal`;
   const auth = value(await db.auth.admin.createUser({ email, password, email_confirm: true, user_metadata: { full_name: name, runId } }), `auth ${key}`).user;
   users.push(auth.id);
-  const member = value(await db.from('platform_members').insert({ user_id: auth.id, role_id: roleId, status: 'active', relationship_type: 'employee', created_by: auth.id }).select('id').single(), `member ${key}`);
+  const member = value(await db.from('platform_members').insert({ user_id: auth.id, role_id: roleId, status: 'active', relationship_type: relationshipType, created_by: auth.id }).select('id').single(), `member ${key}`);
   members.push(member.id);
   personas[key] = email;
 }
@@ -46,7 +46,7 @@ async function setup() {
   const salesRole = await createCustomRole('sales_qa', 'Comercial', ['platform.access', 'platform.dashboard.read', 'platform.leads.read', 'platform.demos.manage', 'platform.commercial.read', 'platform.clients.read']);
   const financeRole = await createCustomRole('finance_qa', 'Financeiro', ['platform.access', 'platform.dashboard.read', 'platform.clients.read', 'platform.billing.read']);
   const csRole = await createCustomRole('cs_qa', 'Customer Success', ['platform.access', 'platform.dashboard.read', 'platform.clients.read', 'platform.onboarding.read', 'platform.success.read']);
-  await createPersona('admin', 'Victor Almeida', adminRole.id);
+  await createPersona('admin', 'Victor Almeida', adminRole.id, 'partner');
   await createPersona('sales', 'Rafael Comercial', salesRole);
   await createPersona('finance', 'Mariana Financeiro', financeRole);
   await createPersona('cs', 'Camila Sucesso', csRole);
@@ -71,7 +71,7 @@ async function login(context: BrowserContext, persona: string, errors: string[])
 
 async function go(page: Page, hash: string) {
   await page.evaluate(value => { window.location.hash = value; }, hash);
-  await page.waitForLoadState('networkidle');
+  await page.reload({ waitUntil: 'networkidle' });
 }
 
 async function openGroup(page: Page, label: string) {
@@ -87,6 +87,13 @@ async function screenshot(page: Page, name: string) {
   await page.screenshot({ path: `${artifacts}/${name}.png`, fullPage: true });
 }
 
+async function waitForDashboard(page: Page) {
+  await page.waitForFunction(() => {
+    const button = [...document.querySelectorAll('button')].find(item => item.textContent?.includes('Atualizar'));
+    return button instanceof HTMLButtonElement && !button.disabled;
+  });
+}
+
 async function runQa() {
   const errors: string[] = [];
   const browser = await chromium.launch({ headless: true });
@@ -94,6 +101,7 @@ async function runQa() {
   try {
     const adminContext = await browser.newContext({ viewport: { width: 1440, height: 1000 } }); contexts.push(adminContext);
     const admin = await login(adminContext, 'admin', errors);
+    await waitForDashboard(admin);
     const adminNav = await labels(admin);
     for (const label of ['Comercial', 'Clientes', 'Financeiro', 'Operação', 'Administração']) if (!adminNav.includes(label)) throw new Error(`admin sem grupo ${label}`);
     await screenshot(admin, '01-admin-full');
@@ -103,6 +111,7 @@ async function runQa() {
 
     const salesContext = await browser.newContext({ viewport: { width: 1440, height: 1000 } }); contexts.push(salesContext);
     const sales = await login(salesContext, 'sales', errors);
+    await waitForDashboard(sales);
     const salesNav = await labels(sales);
     if (!salesNav.includes('Comercial') || !salesNav.includes('Clientes') || /Financeiro|Operação|Administração/.test(salesNav)) throw new Error(`sidebar comercial incorreta: ${salesNav}`);
     await openGroup(sales, 'Comercial');
@@ -115,7 +124,8 @@ async function runQa() {
     const financeNav = await labels(finance);
     if (!financeNav.includes('Financeiro') || financeNav.includes('Administração') || financeNav.includes('Comercial')) throw new Error(`sidebar financeira incorreta: ${financeNav}`);
     await go(finance, '#/admin/financeiro?view=payments');
-    await finance.getByRole('heading', { name: 'Cobranças', exact: true }).waitFor();
+    try { await finance.getByRole('heading', { name: 'Cobranças', exact: true }).waitFor({ timeout: 10_000 }); }
+    catch { throw new Error(`finance deep link ${finance.url()}: ${(await finance.locator('body').innerText()).replace(/\s+/g, ' ').slice(0, 1000)}`); }
     await finance.getByRole('link', { name: 'Cobranças', exact: true }).first().getAttribute('aria-current').then(value => { if (value !== 'page') throw new Error('Cobranças sem active state'); });
     await screenshot(finance, '03-finance-reduced');
     await screenshot(finance, '05-finance-open');
@@ -128,14 +138,17 @@ async function runQa() {
 
     const csContext = await browser.newContext({ viewport: { width: 1440, height: 1000 } }); contexts.push(csContext);
     const cs = await login(csContext, 'cs', errors);
+    await openGroup(cs, 'Clientes');
     const csNav = await labels(cs);
     if (!csNav.includes('Clientes') || !csNav.includes('Customer Success') || /Financeiro|Operação|Administração|Comercial/.test(csNav)) throw new Error(`sidebar CS incorreta: ${csNav}`);
     await go(cs, '#/admin/customer-success');
     await cs.getByRole('heading', { name: 'Customer Success', exact: true }).waitFor();
     await screenshot(cs, '04-cs-reduced');
 
-    const mobileContext = await browser.newContext({ viewport: { width: 390, height: 844 } }); contexts.push(mobileContext);
-    const mobile = await login(mobileContext, 'admin', errors);
+    const mobileContext = await browser.newContext({ viewport: { width: 390, height: 844 }, storageState: await adminContext.storageState() }); contexts.push(mobileContext);
+    const mobile = await mobileContext.newPage(); observe(mobile, errors);
+    await mobile.goto(`${base}/#/admin`, { waitUntil: 'networkidle' });
+    await mobile.getByRole('button', { name: 'Abrir menu' }).waitFor();
     await mobile.getByRole('button', { name: 'Abrir menu' }).click();
     await mobile.getByRole('complementary', { name: 'Menu administrativo' }).waitFor();
     await openGroup(mobile, 'Financeiro');

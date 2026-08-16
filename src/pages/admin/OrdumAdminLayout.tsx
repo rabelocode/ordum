@@ -219,7 +219,8 @@ function AdminLayoutInner({ children, currentPath }: { children: React.ReactNode
           </div>
           <div className="flex-1 min-w-0">
             <div className="truncate text-sm font-bold text-white">{personName}</div>
-            <div className="truncate text-[10px] text-gray-400">{platformRole?.name || 'Equipe Ordum'} · Ambiente administrativo</div>
+            <div className="truncate text-[10px] text-gray-300">{platformRole?.name || 'Equipe Ordum'}</div>
+            <div className="truncate text-[10px] text-gray-500">Ambiente administrativo</div>
           </div>
         </div>
         <button
