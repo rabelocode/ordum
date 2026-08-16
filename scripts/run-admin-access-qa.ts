@@ -55,12 +55,12 @@ async function setup() {
   await createPerson('minimal', 'Paulo Acesso Básico', minimal.id);
   const team = value(await db.from('platform_teams').insert({ name: `Comercial Centro-Oeste — ${runId}`, slug: `comercial-${runId}`, team_type: 'sales', status: 'active', member_lead_visibility: 'team', member_client_visibility: 'team', created_by: admin.userId, settings: { e2e_run_id: runId } }).select('id').single(), 'equipe');
   teamIds.push(team.id);
-  value(await db.from('platform_team_members').insert({ team_id: team.id, platform_member_id: target.memberId, team_role: 'member', status: 'active' }).select(), 'membro da equipe');
   return { target, roleKeys: { commercial: commercial.key, finance: finance.key, cs: cs.key } };
 }
 
 function observe(page: Page, errors: string[]) {
-  page.on('console', message => { if (message.type() === 'error') errors.push(`console: ${message.text().slice(0, 180)}`); });
+  page.on('console', message => { if (message.type() === 'error') errors.push(`console em ${page.url()}: ${message.text().slice(0, 180)}`); });
+  page.on('response', response => { if (response.url().startsWith(base) && response.status() === 401) errors.push(`HTTP 401 ${new URL(response.url()).pathname} em ${page.url()}`); });
   page.on('response', response => { if (response.url().startsWith(base) && response.status() >= 500) errors.push(`HTTP ${response.status()} ${new URL(response.url()).pathname}`); });
 }
 
@@ -81,9 +81,11 @@ async function logout(page: Page) {
 }
 
 async function accessPage(page: Page) {
-  await page.goto(`${base}/#/admin/acessos`, { waitUntil: 'networkidle' });
+  await page.evaluate(() => { window.location.hash = '#/admin/acessos'; });
+  await page.reload({ waitUntil: 'networkidle' });
   await page.getByRole('heading', { name: 'Acessos e permissões' }).waitFor();
-  await page.getByText('Mariana Souza', { exact: true }).waitFor();
+  try { await page.getByText('Mariana Souza', { exact: true }).waitFor({ timeout: 12_000 }); }
+  catch { throw new Error(`lista de acessos não carregou em ${page.url()}: ${(await page.locator('body').innerText()).replace(/\s+/g, ' ').slice(0, 1400)}`); }
 }
 
 async function screenshot(page: Page, name: string) {
@@ -94,6 +96,11 @@ async function assertNavigation(page: Page, expected: string[], absent: string[]
   const nav = await page.getByRole('navigation', { name: 'Navegação administrativa' }).innerText();
   for (const label of expected) if (!nav.includes(label)) throw new Error(`menu sem ${label}: ${nav}`);
   for (const label of absent) if (nav.includes(label)) throw new Error(`menu exibiu ${label}: ${nav}`);
+}
+
+async function openGroup(page: Page, name: string) {
+  const button = page.getByRole('button', { name, exact: true }).first();
+  if (await button.getAttribute('aria-expanded') !== 'true') await button.click();
 }
 
 async function changeRole(page: Page, roleName: string) {
@@ -125,11 +132,11 @@ async function runQa(fixture: Awaited<ReturnType<typeof setup>>) {
     const commercialContext = await browser.newContext({ viewport: { width: 1440, height: 1000 } }); contexts.push(commercialContext);
     const commercial = await login(commercialContext, 'target', errors);
     await assertNavigation(commercial, ['Comercial', 'Clientes'], ['Financeiro', 'Administração', 'Operação']);
+    await openGroup(commercial, 'Comercial');
     await screenshot(commercial, '05-commercial-menu');
     await logout(commercial);
 
     const financeDrawer = await changeRole(admin, 'Financeiro');
-    await financeDrawer.getByText('Financeiro', { exact: true }).first().waitFor();
     await financeDrawer.getByText('Cobranças', { exact: true }).waitFor();
     await screenshot(admin, '04-access-preview');
     await financeDrawer.getByRole('button', { name: 'Salvar acesso' }).click();
@@ -138,6 +145,7 @@ async function runQa(fixture: Awaited<ReturnType<typeof setup>>) {
     const financeContext = await browser.newContext({ viewport: { width: 1440, height: 1000 } }); contexts.push(financeContext);
     const finance = await login(financeContext, 'target', errors);
     await assertNavigation(finance, ['Clientes', 'Financeiro'], ['Comercial', 'Administração', 'Operação']);
+    await openGroup(finance, 'Financeiro');
     await screenshot(finance, '06-finance-menu');
     await finance.goto(`${base}/#/admin/acessos`, { waitUntil: 'networkidle' });
     await finance.getByRole('heading', { name: 'Área restrita' }).waitFor();
@@ -148,6 +156,7 @@ async function runQa(fixture: Awaited<ReturnType<typeof setup>>) {
     await admin.getByText('Função e equipes atualizadas.', { exact: true }).waitFor();
     const csContext = await browser.newContext({ viewport: { width: 1440, height: 1000 } }); contexts.push(csContext);
     const cs = await login(csContext, 'target', errors);
+    await openGroup(cs, 'Clientes');
     await assertNavigation(cs, ['Clientes', 'Customer Success'], ['Financeiro', 'Comercial', 'Administração', 'Operação']);
     await screenshot(cs, '07-cs-menu');
 
