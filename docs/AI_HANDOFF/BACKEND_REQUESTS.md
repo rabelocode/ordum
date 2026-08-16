@@ -52,19 +52,23 @@ Frontend pronto: SIM
 ## BR-006
 
 Tela: Administração → Acessos e permissões → Papéis
-Problema: as APIs atuais expõem papéis apenas por pessoas que já os utilizam e não oferecem contrato administrativo para criar ou editar papéis personalizados e seus conjuntos de permissões. A interface não pode administrar com segurança um papel ainda sem pessoas vinculadas.
-Necessidade: catálogo completo de papéis ativos e gestão transacional de papéis personalizados, preservando papéis de sistema, proteção do último administrador e auditoria.
-Contrato desejado: API server-side para listar todos os papéis com suas permissões e quantidade de pessoas, além de criar/editar papéis personalizados de forma atômica; papéis de sistema devem permanecer protegidos. Não conceder override individual de permissão.
+Problema: RESOLVIDO em 16/08/2026.
+Necessidade: catálogo completo e gestão atômica de papéis personalizados entregues, sem override individual e com papéis de sistema protegidos.
+Contrato desejado: `platform_role_catalog` e `manage_platform_custom_role` consumidos somente pela API server-side autenticada.
 Permissão: autorização administrativa de acessos já existente, com decisão final do backend.
-Bloqueante: NÃO para administrar pessoas nos papéis existentes; SIM para papéis personalizados e papéis ainda sem pessoas vinculadas.
-Frontend pronto: SIM — catálogo, criação, edição, preview, impacto e atribuição estão integrados à API Express; homologação remota depende do BR-007.
+Bloqueante: NÃO
+Frontend pronto: SIM
+
+Evidência: runner `custom-role-msw4atdk-152e74` validou catálogo completo, papel personalizado com zero pessoas, criação, edição com impacto, atribuição, login e menu reais, deep-link negado, auditoria humana, papéis de sistema protegidos e cleanup zerado.
 
 ## BR-007
 
 Tela: Administração → Acessos e permissões → Papéis
-Problema: as wrappers `public.platform_role_catalog` e `public.manage_platform_custom_role` são `SECURITY INVOKER` e possuem `EXECUTE` para `service_role`, mas `service_role` não possui `USAGE` no schema `app_private`; a chamada server-side falha com `permission denied for schema app_private`.
-Necessidade: completar o grant mínimo exigido pelo contrato invoker, preservando `anon`, `authenticated` e `PUBLIC` sem `EXECUTE` nas wrappers e sem acesso do browser ao service role.
-Contrato desejado: `service_role` consegue executar as duas wrappers públicas e alcançar as funções internas; demais grants e proteção de papéis de sistema permanecem inalterados.
+Problema: RESOLVIDO em 16/08/2026 pela migration `20260816170658_grant_service_role_app_private_usage`.
+Necessidade: grant mínimo do contrato invoker aplicado sem ampliar a superfície do browser.
+Contrato desejado: `service_role` executa as duas wrappers e possui `USAGE` em `app_private`; `PUBLIC`, `anon` e `authenticated` permanecem sem `USAGE` e sem `EXECUTE` nas wrappers.
 Permissão: backend/Supabase da Ordum.
-Bloqueante: SIM para catálogo, criação e edição de papéis personalizados.
+Bloqueante: NÃO
 Frontend pronto: SIM
+
+Evidência: grants remotos confirmados (`service_role=true`; `PUBLIC/anon/authenticated=false`), GET autenticado `/api/admin/access/roles` = 200 e negativos de criação/edição sem `platform.staff.manage` = 403.
