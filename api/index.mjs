@@ -3587,6 +3587,22 @@ var MODULES = {
 function hasPermission(context, permission) {
   return context.role?.key === "admin" || context.permissions.includes(permission);
 }
+var customRoleSchema = z4.object({
+  name: z4.string().trim().min(2).max(80),
+  description: z4.string().trim().max(280).optional().default(""),
+  permission_keys: z4.array(z4.string().trim().min(1).max(120)).max(100).transform((keys) => [...new Set(keys)])
+}).strict();
+function customRoleError(error) {
+  const message = String(error?.message || "");
+  if (message.includes("platform_role_manage_forbidden") || message.includes("platform_role_catalog_forbidden")) {
+    return { status: 403, error: "Voc\xEA n\xE3o possui permiss\xE3o para administrar pap\xE9is." };
+  }
+  if (message.includes("platform_role_invalid_name")) return { status: 400, error: "Informe um nome v\xE1lido de at\xE9 80 caracteres." };
+  if (message.includes("platform_role_unknown_permissions")) return { status: 400, error: "Uma ou mais permiss\xF5es selecionadas n\xE3o est\xE3o dispon\xEDveis." };
+  if (message.includes("platform_role_not_found")) return { status: 404, error: "Papel n\xE3o encontrado." };
+  if (message.includes("platform_system_role_protected")) return { status: 409, error: "Pap\xE9is do sistema n\xE3o podem ser alterados." };
+  return { status: 500, error: "N\xE3o foi poss\xEDvel salvar este papel. Tente novamente." };
+}
 function cleanUuidList(value) {
   if (typeof value !== "string" || !value.trim()) return null;
   const values = value.split(",").map((item) => item.trim()).filter((item) => /^[0-9a-f-]{36}$/i.test(item));
@@ -3867,6 +3883,65 @@ function createAdminControlPlaneRouter(getSupabaseAdmin2) {
     ]);
     for (const result of [members, permissions, memberships]) if (result.error) throw result.error;
     return res.json({ members: members.data || [], rolePermissions: permissions.data || [], teamMemberships: memberships.data || [], rule: "relationship_type \xE9 informativo e nunca concede privil\xE9gios." });
+  });
+  router.get("/access/roles", authenticateRequest, resolvePlatformContext, requirePlatformPermission(["platform.access.simulate", "platform.staff.manage"]), async (req, res) => {
+    try {
+      const db = getSupabaseAdmin2();
+      const [catalog, permissions] = await Promise.all([
+        db.rpc("platform_role_catalog", { p_actor_user_id: req.user.id }),
+        db.from("platform_permissions").select("key,category,description").order("category").order("key")
+      ]);
+      if (catalog.error) throw catalog.error;
+      if (permissions.error) throw permissions.error;
+      return res.json({
+        roles: Array.isArray(catalog.data) ? catalog.data : [],
+        permissions: (permissions.data || []).map((permission) => ({
+          key: permission.key,
+          category: permission.category || null,
+          description: permission.description || null
+        }))
+      });
+    } catch (error) {
+      const mapped = customRoleError(error);
+      return res.status(mapped.status).json({ error: mapped.error });
+    }
+  });
+  router.post("/access/roles", authenticateRequest, resolvePlatformContext, requirePlatformPermission("platform.staff.manage"), async (req, res) => {
+    const parsed = customRoleSchema.safeParse(req.body);
+    if (!parsed.success) return res.status(400).json({ error: "Revise o nome, a descri\xE7\xE3o e as permiss\xF5es selecionadas." });
+    try {
+      const result = await getSupabaseAdmin2().rpc("manage_platform_custom_role", {
+        p_actor_user_id: req.user.id,
+        p_role_id: null,
+        p_name: parsed.data.name,
+        p_description: parsed.data.description,
+        p_permission_keys: parsed.data.permission_keys
+      });
+      if (result.error) throw result.error;
+      return res.status(201).json({ role: result.data });
+    } catch (error) {
+      const mapped = customRoleError(error);
+      return res.status(mapped.status).json({ error: mapped.error });
+    }
+  });
+  router.patch("/access/roles/:id", authenticateRequest, resolvePlatformContext, requirePlatformPermission("platform.staff.manage"), async (req, res) => {
+    const roleId = z4.string().uuid().safeParse(req.params.id);
+    const parsed = customRoleSchema.safeParse(req.body);
+    if (!roleId.success || !parsed.success) return res.status(400).json({ error: "Revise o papel e as permiss\xF5es selecionadas." });
+    try {
+      const result = await getSupabaseAdmin2().rpc("manage_platform_custom_role", {
+        p_actor_user_id: req.user.id,
+        p_role_id: roleId.data,
+        p_name: parsed.data.name,
+        p_description: parsed.data.description,
+        p_permission_keys: parsed.data.permission_keys
+      });
+      if (result.error) throw result.error;
+      return res.json({ role: result.data });
+    } catch (error) {
+      const mapped = customRoleError(error);
+      return res.status(mapped.status).json({ error: mapped.error });
+    }
   });
   router.post("/access/simulate", authenticateRequest, resolvePlatformContext, requirePlatformPermission("platform.access.simulate"), async (req, res) => {
     if (!hasPermission(req.platformContext, "platform.access.simulate")) return res.status(403).json({ error: "Forbidden" });

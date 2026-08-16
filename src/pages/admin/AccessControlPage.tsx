@@ -1,14 +1,15 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { AlertCircle, CheckCircle2, ChevronRight, Search, UserCog, Users, X } from 'lucide-react';
+import { AlertCircle, CheckCircle2, ChevronRight, Pencil, Plus, Search, ShieldCheck, UserCog, Users, X } from 'lucide-react';
 import { AccessPreview } from '../../components/admin/AccessPreview';
 import { ActionDialog } from '../../components/ui/ActionDialog';
 import { ListSkeleton } from '../../components/ui/LoadingSkeletons';
 import { useAccess } from '../../core/auth/AccessContext';
 import { userFacingApiError, userFacingException } from '../../lib/userFacingError';
-import { permissionLabel, roleAreas, roleDescription, roleLabel, SYSTEM_ROLE_KEYS } from './adminAccessPresentation';
+import { permissionGroups, permissionLabel, roleAreas, roleDescription, roleLabel, SYSTEM_ROLE_KEYS } from './adminAccessPresentation';
 
 type Tab = 'access' | 'roles' | 'permissions';
-type Role = { id: string; key: string; name: string; description?: string; active?: boolean };
+type Role = { id: string; key: string; name: string; description?: string; active?: boolean; system_managed?: boolean; member_count?: number; active_member_count?: number; permission_keys?: string[] };
+type Permission = { key: string; category?: string | null; description?: string | null };
 type Team = { id: string; name: string };
 type StaffMember = {
   id: string; user_id: string; status: string; relationship_type: string;
@@ -30,6 +31,8 @@ export function AccessControlPage() {
   const [staff, setStaff] = useState<StaffMember[]>([]);
   const [teams, setTeams] = useState<Team[]>([]);
   const [matrix, setMatrix] = useState<Matrix>({ members: [], rolePermissions: [], teamMemberships: [] });
+  const [roles, setRoles] = useState<Role[]>([]);
+  const [availablePermissions, setAvailablePermissions] = useState<Permission[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
@@ -47,6 +50,11 @@ export function AccessControlPage() {
   const [diagnosticPermission, setDiagnosticPermission] = useState('');
   const [diagnosticTeamId, setDiagnosticTeamId] = useState('');
   const [diagnosticResult, setDiagnosticResult] = useState<{ allowed: boolean; origin?: string } | null>(null);
+  const [roleEditor, setRoleEditor] = useState<Role | 'new' | null>(null);
+  const [roleName, setRoleName] = useState('');
+  const [roleDescriptionText, setRoleDescriptionText] = useState('');
+  const [rolePermissionKeys, setRolePermissionKeys] = useState<string[]>([]);
+  const [confirmRoleImpact, setConfirmRoleImpact] = useState(false);
 
   const canManage = hasPlatformPermission('platform.staff.manage');
 
@@ -55,20 +63,25 @@ export function AccessControlPage() {
     setLoading(true); setError('');
     try {
       const headers = { Authorization: `Bearer ${session.access_token}` };
-      const [staffResponse, matrixResponse, teamsResponse] = await Promise.all([
+      const [staffResponse, matrixResponse, teamsResponse, rolesResponse] = await Promise.all([
         fetch('/api/admin/staff', { headers }),
         fetch('/api/admin/access/matrix', { headers }),
         fetch('/api/admin/teams', { headers }),
+        fetch('/api/admin/access/roles', { headers }),
       ]);
-      const [staffBody, matrixBody, teamsBody] = await Promise.all([
+      const [staffBody, matrixBody, teamsBody, rolesBody] = await Promise.all([
         staffResponse.json().catch(() => ([])),
         matrixResponse.json().catch(() => ({})),
         teamsResponse.json().catch(() => ([])),
+        rolesResponse.json().catch(() => ({})),
       ]);
       if (!staffResponse.ok) throw new Error(userFacingApiError(staffBody, staffResponse.status, 'Não foi possível carregar as pessoas.'));
       if (!matrixResponse.ok) throw new Error(userFacingApiError(matrixBody, matrixResponse.status, 'Não foi possível carregar os acessos.'));
       if (!teamsResponse.ok) throw new Error(userFacingApiError(teamsBody, teamsResponse.status, 'Não foi possível carregar as equipes.'));
+      if (!rolesResponse.ok) throw new Error(userFacingApiError(rolesBody, rolesResponse.status, 'Não foi possível carregar os papéis.'));
       setStaff(staffBody || []); setMatrix(matrixBody); setTeams(teamsBody || []);
+      setRoles((rolesBody.roles || []).sort((a: Role, b: Role) => roleLabel(a).localeCompare(roleLabel(b), 'pt-BR')));
+      setAvailablePermissions(rolesBody.permissions || []);
     } catch (caught) {
       setError(userFacingException(caught, 'Não foi possível carregar os acessos. Tente novamente.'));
     } finally { setLoading(false); }
@@ -85,13 +98,6 @@ export function AccessControlPage() {
     }
     return result;
   }, [matrix.rolePermissions]);
-
-  const roles = useMemo(() => {
-    const roleMap = new Map<string, Role>();
-    for (const member of staff) if (member.role?.id) roleMap.set(member.role.id, member.role);
-    for (const member of matrix.members) if (member.platform_roles?.id) roleMap.set(member.platform_roles.id, member.platform_roles);
-    return [...roleMap.values()].sort((a, b) => roleLabel(a).localeCompare(roleLabel(b), 'pt-BR'));
-  }, [matrix.members, staff]);
 
   useEffect(() => {
     if (!permissionRoleId && roles[0]) setPermissionRoleId(roles[0].id);
@@ -117,7 +123,10 @@ export function AccessControlPage() {
       && (!teamFilter || member.teams?.some(team => team.id === teamFilter));
   }), [query, roleFilter, staff, statusFilter, teamFilter]);
 
-  function permissionsForRole(roleId?: string) { return roleId ? permissionsByRole.get(roleId) || [] : []; }
+  function permissionsForRole(roleId?: string) {
+    const role = roles.find(item => item.id === roleId);
+    return role?.permission_keys || (roleId ? permissionsByRole.get(roleId) || [] : []);
+  }
   function permissionsForMember(member: StaffMember) { return permissionsForRole(member.role?.id); }
   function openAccess(member: StaffMember) {
     setSelected(member); setEditRole(member.role?.key || ''); setEditTeams((member.teams || []).map(team => team.id));
@@ -162,6 +171,47 @@ export function AccessControlPage() {
     const administrativeChange = selected.role?.key === 'admin' || editRole === 'admin';
     if (removedTeam || administrativeChange) setPendingAction('save');
     else void applyUpdate();
+  }
+
+  function openRoleEditor(role: Role | 'new') {
+    setRoleEditor(role);
+    setRoleName(role === 'new' ? '' : role.name);
+    setRoleDescriptionText(role === 'new' ? '' : role.description || '');
+    setRolePermissionKeys(role === 'new' ? [] : (role.permission_keys || []).filter(key => key !== 'platform.access'));
+    setError(''); setSuccess(''); setConfirmRoleImpact(false);
+  }
+
+  function toggleRolePermission(key: string) {
+    setRolePermissionKeys(current => current.includes(key) ? current.filter(item => item !== key) : [...current, key]);
+  }
+
+  function requestRoleSave() {
+    if (!roleName.trim()) { setError('Informe um nome para o papel.'); return; }
+    if (roleEditor !== 'new' && roleEditor && Number(roleEditor.member_count || 0) > 0) {
+      const before = [...(roleEditor.permission_keys || []).filter(key => key !== 'platform.access')].sort().join('|');
+      const after = [...rolePermissionKeys].sort().join('|');
+      if (before !== after) { setConfirmRoleImpact(true); return; }
+    }
+    void saveRole();
+  }
+
+  async function saveRole() {
+    if (!session || !roleEditor) return;
+    setSaving(true); setError('');
+    try {
+      const editing = roleEditor !== 'new';
+      const response = await fetch(editing ? `/api/admin/access/roles/${roleEditor.id}` : '/api/admin/access/roles', {
+        method: editing ? 'PATCH' : 'POST',
+        headers: { Authorization: `Bearer ${session.access_token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: roleName.trim(), description: roleDescriptionText.trim(), permission_keys: rolePermissionKeys }),
+      });
+      const body = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(userFacingApiError(body, response.status, 'Não foi possível salvar este papel.'));
+      setSuccess(editing ? 'Papel atualizado.' : 'Papel criado.');
+      setConfirmRoleImpact(false); setRoleEditor(null);
+      await load();
+    } catch (caught) { setError(userFacingException(caught, 'Não foi possível salvar este papel.')); }
+    finally { setSaving(false); }
   }
 
   async function simulate(event: React.FormEvent) {
@@ -211,12 +261,11 @@ export function AccessControlPage() {
         <div className="divide-y">{filtered.map(member => <AccessRow key={member.id} member={member} permissions={permissionsForMember(member)} onManage={() => openAccess(member)}/>)}</div>
       </div>}
     </> : tab === 'roles' ? <section className="space-y-5">
-      <div><h2 className="text-xl font-black">Papéis disponíveis</h2><p className="mt-1 text-sm text-[#626866]">Cada papel reúne um conjunto padrão de áreas e ações.</p></div>
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between"><div><h2 className="text-xl font-black">Papéis disponíveis</h2><p className="mt-1 text-sm text-[#626866]">Cada papel reúne um conjunto padrão de áreas e ações.</p></div>{canManage ? <button onClick={() => openRoleEditor('new')} className="inline-flex items-center justify-center gap-2 rounded-xl bg-[#202322] px-4 py-2.5 text-sm font-bold text-white"><Plus className="h-4 w-4"/>Novo papel</button> : null}</div>
       <div className="grid gap-4 lg:grid-cols-2">{roles.map(role => {
-        const keys = permissionsForRole(role.id); const count = staff.filter(member => member.role?.id === role.id).length;
-        return <article key={role.id} className="rounded-2xl border border-[#DDD8CF] bg-white p-5"><div className="flex items-start justify-between gap-3"><div><h3 className="text-lg font-black">{roleLabel(role)}</h3><p className="mt-1 text-sm text-[#626866]">{roleDescription(role)}</p></div><span className="rounded-full bg-[#F6F5F2] px-2.5 py-1 text-xs font-bold">{SYSTEM_ROLE_KEYS.has(role.key) ? 'Papel do sistema' : 'Personalizado'}</span></div><p className="mt-4 text-sm"><strong>{count}</strong> pessoa{count === 1 ? '' : 's'}</p><div className="mt-4 flex flex-wrap gap-2">{roleAreas(keys).map(area => <span key={area} className="rounded-lg bg-[#F3E8E1] px-2.5 py-1 text-xs font-bold text-[#8B4C2D]">{area}</span>)}</div></article>;
+        const keys = permissionsForRole(role.id); const count = Number(role.member_count ?? staff.filter(member => member.role?.id === role.id).length); const system = Boolean(role.system_managed || SYSTEM_ROLE_KEYS.has(role.key));
+        return <article key={role.id} className="rounded-2xl border border-[#DDD8CF] bg-white p-5"><div className="flex items-start justify-between gap-3"><div><h3 className="text-lg font-black">{roleLabel(role)}</h3><p className="mt-1 text-sm text-[#626866]">{roleDescription(role)}</p></div><span className="rounded-full bg-[#F6F5F2] px-2.5 py-1 text-xs font-bold">{system ? 'Papel do sistema' : 'Personalizado'}</span></div><p className="mt-4 text-sm"><strong>{count}</strong> pessoa{count === 1 ? '' : 's'}</p><div className="mt-4 flex flex-wrap gap-2">{roleAreas(keys).map(area => <span key={area} className="rounded-lg bg-[#F3E8E1] px-2.5 py-1 text-xs font-bold text-[#8B4C2D]">{area}</span>)}</div><div className="mt-5 border-t border-[#EEEAE3] pt-4">{system ? <span className="inline-flex items-center gap-2 text-sm font-bold text-[#626866]"><ShieldCheck className="h-4 w-4"/>Permissões protegidas</span> : canManage ? <button onClick={() => openRoleEditor(role)} className="inline-flex items-center gap-2 text-sm font-bold text-[#8B4C2D]"><Pencil className="h-4 w-4"/>Editar papel</button> : null}</div></article>;
       })}</div>
-      <div className="rounded-2xl border border-dashed border-[#C9C3B9] p-5"><h3 className="font-black">Precisa de uma função diferente?</h3><p className="mt-1 text-sm text-[#626866]">Novos papéis personalizados ainda não podem ser criados por esta tela. Os papéis existentes continuam administráveis com segurança.</p></div>
     </section> : <section className="grid gap-6 lg:grid-cols-[1.2fr_.8fr]">
       <div className="space-y-5"><div><h2 className="text-xl font-black">Permissões por papel</h2><p className="mt-1 text-sm text-[#626866]">Veja as áreas e ações incluídas em cada função.</p></div><label className="block text-sm font-bold">Função<select value={permissionRoleId} onChange={event => setPermissionRoleId(event.target.value)} className="mt-1 w-full rounded-xl border border-[#DDD8CF] bg-white p-2.5 font-normal">{roles.map(role => <option key={role.id} value={role.id}>{roleLabel(role)}</option>)}</select></label><div className="rounded-2xl border border-[#DDD8CF] bg-white p-5"><AccessPreview permissions={permissionRoleKeys} detailed/></div></div>
       <form onSubmit={simulate} className="h-fit space-y-4 rounded-2xl bg-[#202322] p-5 text-white"><div><p className="text-xs font-bold uppercase tracking-wide text-[#D99368]">Ferramenta administrativa</p><h2 className="mt-1 text-lg font-black">Diagnosticar acesso</h2><p className="mt-1 text-sm text-white/60">Confira uma capacidade específica sem alterar o acesso.</p></div><label className="block text-sm font-bold">Pessoa<select value={diagnosticMemberId} onChange={event => setDiagnosticMemberId(event.target.value)} className="mt-1 w-full rounded-xl border border-white/15 bg-white/10 p-2.5 font-normal">{staff.map(member => <option className="text-black" key={member.id} value={member.id}>{member.user?.user_metadata?.full_name || member.user?.email || 'Pessoa da Ordum'}</option>)}</select></label><label className="block text-sm font-bold">Ação consultada<select value={diagnosticPermission} onChange={event => setDiagnosticPermission(event.target.value)} className="mt-1 w-full rounded-xl border border-white/15 bg-white/10 p-2.5 font-normal">{[...new Set(matrix.rolePermissions.map(item => item.platform_permissions?.key).filter(Boolean) as string[])].sort((a, b) => permissionLabel(a).localeCompare(permissionLabel(b), 'pt-BR')).map(key => <option className="text-black" key={key} value={key}>{permissionLabel(key)}</option>)}</select></label><label className="block text-sm font-bold">Equipe <span className="font-normal text-white/60">(opcional)</span><select value={diagnosticTeamId} onChange={event => setDiagnosticTeamId(event.target.value)} className="mt-1 w-full rounded-xl border border-white/15 bg-white/10 p-2.5 font-normal"><option className="text-black" value="">Sem equipe específica</option>{teams.map(team => <option className="text-black" key={team.id} value={team.id}>{team.name}</option>)}</select></label><button disabled={saving || !diagnosticMemberId || !diagnosticPermission} className="w-full rounded-xl bg-[#B66E45] px-4 py-2.5 text-sm font-bold disabled:opacity-50">Verificar acesso</button>{diagnosticResult ? <div role="status" className={`rounded-xl p-4 text-sm ${diagnosticResult.allowed ? 'bg-emerald-400/15 text-emerald-200' : 'bg-red-400/15 text-red-200'}`}><strong>{diagnosticResult.allowed ? 'Acesso permitido.' : 'Acesso não permitido.'}</strong><p className="mt-1 opacity-80">{diagnosticResult.allowed ? 'A função e o escopo atendem a esta ação.' : 'A função ou o escopo atual não permite esta ação.'}</p></div> : null}</form>
@@ -230,8 +279,16 @@ export function AccessControlPage() {
       {canManage ? <div className="flex flex-col-reverse gap-3 border-t pt-5 sm:flex-row sm:justify-between"><div>{selected.status === 'suspended' ? <button onClick={() => void changeStatus('reactivate')} disabled={saving} className="rounded-xl border border-emerald-300 px-4 py-2.5 text-sm font-bold text-emerald-800">Reativar acesso</button> : <button onClick={() => setPendingAction('suspend')} disabled={saving || selectedIsSelf} className="rounded-xl border border-red-200 px-4 py-2.5 text-sm font-bold text-red-700 disabled:opacity-40">Suspender acesso</button>}</div><button onClick={requestSave} disabled={saving || (selectedIsSelf && editRole !== selected.role?.key)} className="rounded-xl bg-[#202322] px-5 py-2.5 text-sm font-bold text-white disabled:opacity-50">{saving ? 'Salvando…' : 'Salvar acesso'}</button></div> : <p className="rounded-xl bg-amber-50 p-3 text-sm text-amber-900">Seu perfil permite consultar, mas não alterar acessos.</p>}</div>
     </aside></div> : null}
 
+    {roleEditor ? <div className="fixed inset-0 z-[70] flex justify-end bg-black/45" role="dialog" aria-modal="true" aria-labelledby="role-editor-title" onMouseDown={event => { if (event.target === event.currentTarget && !saving) setRoleEditor(null); }}><aside className="h-full w-full max-w-3xl overflow-y-auto bg-white p-5 shadow-2xl sm:p-7"><div className="flex items-start justify-between gap-4"><div><p className="text-xs font-bold uppercase tracking-wide text-[#B66E45]">{roleEditor === 'new' ? 'Novo papel' : 'Editar papel'}</p><h2 id="role-editor-title" className="mt-1 text-2xl font-black">{roleEditor === 'new' ? 'Crie uma função para sua operação' : roleLabel(roleEditor)}</h2><p className="mt-1 text-sm text-[#626866]">Escolha em linguagem simples as áreas e ações disponíveis.</p></div><button aria-label="Fechar editor de papel" disabled={saving} onClick={() => setRoleEditor(null)} className="rounded-lg p-2 hover:bg-gray-100 disabled:opacity-50"><X className="h-5 w-5"/></button></div>
+      <div className="mt-7 grid gap-7 lg:grid-cols-[1.15fr_.85fr]"><div className="space-y-6"><section className="grid gap-4"><label className="text-sm font-bold">Nome<input autoFocus value={roleName} onChange={event => setRoleName(event.target.value)} maxLength={80} placeholder="Ex.: Coordenador Financeiro" className="mt-1 w-full rounded-xl border border-[#DDD8CF] p-3 font-normal"/></label><label className="text-sm font-bold">Descrição<textarea value={roleDescriptionText} onChange={event => setRoleDescriptionText(event.target.value)} maxLength={280} rows={3} placeholder="Explique a responsabilidade deste papel." className="mt-1 w-full resize-none rounded-xl border border-[#DDD8CF] p-3 font-normal"/></label></section>
+      <section><h3 className="font-black">Permissões</h3><p className="mt-1 text-sm text-[#626866]">Marque somente o necessário para esta função.</p><div className="mt-4 space-y-5">{permissionGroups(availablePermissions.map(permission => permission.key).filter(key => key !== 'platform.access')).map(group => <fieldset key={group.label}><legend className="text-sm font-black text-[#343937]">{group.label}</legend><div className="mt-2 grid gap-2 sm:grid-cols-2">{group.items.map(item => <label key={item.key} className={`flex min-h-12 items-start gap-3 rounded-xl border p-3 text-sm transition ${rolePermissionKeys.includes(item.key) ? 'border-[#B66E45] bg-[#FBF5F1]' : 'border-[#DDD8CF] bg-white'}`}><input type="checkbox" className="mt-0.5 h-4 w-4 accent-[#B66E45]" checked={rolePermissionKeys.includes(item.key)} onChange={() => toggleRolePermission(item.key)}/><span>{item.label}</span></label>)}</div></fieldset>)}</div></section></div>
+      <aside className="h-fit rounded-2xl border border-[#DDD8CF] bg-[#F9F8F5] p-5 lg:sticky lg:top-4"><AccessPreview permissions={['platform.access', ...rolePermissionKeys]} detailed/><p className="mt-4 border-t border-[#DDD8CF] pt-4 text-xs text-[#626866]">O acesso ao painel é incluído automaticamente. O papel não altera a participação em equipes.</p></aside></div>
+      <div className="mt-7 flex flex-col-reverse gap-3 border-t pt-5 sm:flex-row sm:justify-end"><button disabled={saving} onClick={() => setRoleEditor(null)} className="rounded-xl border border-[#DDD8CF] px-4 py-2.5 text-sm font-bold disabled:opacity-50">Cancelar</button><button disabled={saving || roleName.trim().length < 2} onClick={requestRoleSave} className="rounded-xl bg-[#202322] px-5 py-2.5 text-sm font-bold text-white disabled:opacity-50">{saving ? 'Salvando…' : roleEditor === 'new' ? 'Criar papel' : 'Salvar alterações'}</button></div>
+    </aside></div> : null}
+
     <ActionDialog open={pendingAction === 'save'} title="Confirmar alteração de acesso" description="A função administrativa ou o escopo de equipe será alterado. Confirme somente se esta mudança foi revisada." confirmLabel="Confirmar alteração" busy={saving} onClose={() => setPendingAction(null)} onConfirm={applyUpdate}/>
     <ActionDialog open={pendingAction === 'suspend'} title={`Suspender acesso de ${selected?.user?.user_metadata?.full_name || 'esta pessoa'}?`} description="Ela não poderá acessar o painel administrativo até ser reativada. Nenhum cadastro será excluído." confirmLabel="Suspender acesso" danger busy={saving} onClose={() => setPendingAction(null)} onConfirm={() => changeStatus('suspend')}/>
+    <ActionDialog open={confirmRoleImpact} title="Confirmar alteração de permissões" description={`Esta alteração afetará ${roleEditor !== 'new' && roleEditor ? Number(roleEditor.member_count || 0) : 0} pessoa${roleEditor !== 'new' && roleEditor && Number(roleEditor.member_count || 0) === 1 ? '' : 's'} que usa${roleEditor !== 'new' && roleEditor && Number(roleEditor.member_count || 0) === 1 ? '' : 'm'} este papel.`} confirmLabel="Salvar alterações" busy={saving} onClose={() => setConfirmRoleImpact(false)} onConfirm={saveRole}/>
   </div>;
 }
 
