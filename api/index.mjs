@@ -3902,6 +3902,7 @@ function createAdminControlPlaneRouter(getSupabaseAdmin2) {
         }))
       });
     } catch (error) {
+      reportServerError(error, req, "platform_role_catalog");
       const mapped = customRoleError(error);
       return res.status(mapped.status).json({ error: mapped.error });
     }
@@ -3920,6 +3921,7 @@ function createAdminControlPlaneRouter(getSupabaseAdmin2) {
       if (result.error) throw result.error;
       return res.status(201).json({ role: result.data });
     } catch (error) {
+      reportServerError(error, req, "platform_role_create");
       const mapped = customRoleError(error);
       return res.status(mapped.status).json({ error: mapped.error });
     }
@@ -3939,6 +3941,7 @@ function createAdminControlPlaneRouter(getSupabaseAdmin2) {
       if (result.error) throw result.error;
       return res.json({ role: result.data });
     } catch (error) {
+      reportServerError(error, req, "platform_role_update");
       const mapped = customRoleError(error);
       return res.status(mapped.status).json({ error: mapped.error });
     }

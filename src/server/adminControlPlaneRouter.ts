@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { canReadAssignedResource, isGlobalAdmin } from './authorization';
 import { auditContext, pageResult, parsePagination } from './operational';
 import { authenticateRequest, resolvePlatformContext, requirePlatformPermission } from './tenantAuth';
+import { reportServerError } from './observability';
 
 const MODULES: Record<string, {
   table: string;
@@ -351,6 +352,7 @@ export function createAdminControlPlaneRouter(getSupabaseAdmin: any) {
         })),
       });
     } catch (error: any) {
+      reportServerError(error, req, 'platform_role_catalog');
       const mapped = customRoleError(error);
       return res.status(mapped.status).json({ error: mapped.error });
     }
@@ -370,6 +372,7 @@ export function createAdminControlPlaneRouter(getSupabaseAdmin: any) {
       if (result.error) throw result.error;
       return res.status(201).json({ role: result.data });
     } catch (error: any) {
+      reportServerError(error, req, 'platform_role_create');
       const mapped = customRoleError(error);
       return res.status(mapped.status).json({ error: mapped.error });
     }
@@ -390,6 +393,7 @@ export function createAdminControlPlaneRouter(getSupabaseAdmin: any) {
       if (result.error) throw result.error;
       return res.json({ role: result.data });
     } catch (error: any) {
+      reportServerError(error, req, 'platform_role_update');
       const mapped = customRoleError(error);
       return res.status(mapped.status).json({ error: mapped.error });
     }
