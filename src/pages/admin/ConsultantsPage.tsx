@@ -36,7 +36,7 @@ export function ConsultantsPage() {
 
   const [members, setMembers] = useState<StaffMember[]>([]);
   const [teamsList, setTeamsList] = useState<any[]>([]);
-  const [searchTerm, setSearchTerm] = useState('');
+  const [searchTerm, setSearchTerm] = useState(() => new URLSearchParams(window.location.hash.split('?')[1] || '').get('q') || '');
   const [isLoading, setIsLoading] = useState(true);
   const [actionError, setActionError] = useState('');
   const [actionSuccess, setActionSuccess] = useState('');
@@ -481,10 +481,18 @@ export function ConsultantsPage() {
                               </button>
                             )}
                             {platformRole?.key==='admin'&&<button onClick={()=>setPendingAction({type:'sessions',id:member.id})} disabled={actionLoadingId===member.id} className="px-2.5 py-1 text-[11px] font-bold bg-amber-50 text-amber-800 rounded-lg" title="Encerrar sessões">Sessões</button>}
+                            {hasPlatformPermission('platform.access.simulate') && (
+                              <a
+                                href={`#/admin/acessos?member=${member.id}`}
+                                className="px-2.5 py-1 text-[11px] font-bold text-[#8B4C2D] hover:bg-[#F3E8E1] rounded-lg transition-colors"
+                              >
+                                Gerenciar acesso
+                              </a>
+                            )}
                             <button
                               onClick={() => handleOpenEditModal(member)}
                               className="p-1.5 text-gray-500 hover:text-[#202322] hover:bg-[#F6F5F2] rounded-lg transition-colors"
-                              title="Editar Função / Vínculo"
+                              title="Editar cadastro"
                             >
                               <Edit3 className="w-4 h-4" />
                             </button>

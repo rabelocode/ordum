@@ -48,3 +48,13 @@ Contrato necessário: cadastrar as credenciais Sandbox diretamente no ambiente s
 Permissão: configuração administrativa Vercel/Asaas Sandbox.
 Bloqueante: NÃO para o produto financeiro local; SIM apenas para operações externas e homologação Asaas real.
 Frontend pronto: SIM
+
+## BR-006
+
+Tela: Administração → Acessos e permissões → Papéis
+Problema: as APIs atuais expõem papéis apenas por pessoas que já os utilizam e não oferecem contrato administrativo para criar ou editar papéis personalizados e seus conjuntos de permissões. A interface não pode administrar com segurança um papel ainda sem pessoas vinculadas.
+Necessidade: catálogo completo de papéis ativos e gestão transacional de papéis personalizados, preservando papéis de sistema, proteção do último administrador e auditoria.
+Contrato desejado: API server-side para listar todos os papéis com suas permissões e quantidade de pessoas, além de criar/editar papéis personalizados de forma atômica; papéis de sistema devem permanecer protegidos. Não conceder override individual de permissão.
+Permissão: autorização administrativa de acessos já existente, com decisão final do backend.
+Bloqueante: NÃO para administrar pessoas nos papéis existentes; SIM para papéis personalizados e papéis ainda sem pessoas vinculadas.
+Frontend pronto: PARCIAL — tabs, apresentação humana e preview estão prontos; criação/edição permanece sem CTA falso.
