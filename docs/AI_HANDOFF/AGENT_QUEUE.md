@@ -1,52 +1,46 @@
 Owner: chatgpt_backend
-Status: ready_for_product_review
+Status: ready_for_backend_sync
 Branch: fix/admin-functional-recovery
-Head: d2d5f29a2b73d000cf9da033da6845219e841552
-Headline: Admin Navigation IA — menus e submenus organizados por domínio e nível de acesso.
+Head: f0e630f8842b2807a88aa2ea223d3c3f381102c9
+Headline: Admin Access Management — papéis e permissões administráveis em linguagem humana.
+
+Implemented:
+- `Acessos`, `Papéis` e `Permissões` substituem o simulador técnico como experiência principal.
+- Lista responsiva por nome/e-mail, função, equipe e status; detalhe em drawer com função, equipes, último acesso e preview imediato.
+- Permissões agrupadas em Comercial, Clientes, Financeiro, Operação e Administração, sem keys técnicas na operação comum.
+- Preview reutiliza a taxonomia da Navigation IA; diagnóstico técnico permaneceu como ferramenta secundária autorizada.
+- Papéis existentes são derivados do backend e humanizados; papéis de sistema são identificados e não possuem ação destrutiva.
+- Alteração de função/equipes, suspensão e reativação usam APIs existentes; alteração da própria função fica bloqueada na UX e no servidor.
+- Membros e Acessos possuem links contextuais; auditoria de convites, função, equipes, suspensão e reativação ganhou linguagem humana.
+- Requisições do dashboard agora são canceladas na troca de sessão, eliminando 401 no console durante troca de persona.
+
+Database:
+- Nenhuma migration, RPC, policy ou alteração estrutural.
+- BR-006 criado para catálogo completo e gestão transacional de papéis personalizados; sem workaround frontend.
+
+Tests:
+- Suite completa: 224 testes; 223 PASS, 1 live E2E explicitamente SKIP, 0 FAIL.
+- Focados: taxonomia de acesso, labels humanas, papéis customizados e regressão das proteções de autoalteração/último admin PASS.
+- Secret scan, migration validation, lint, typecheck e build PASS.
 
 Preview:
-- READY — `dpl_CxjFcFueNugMJBdvctc8EEPhNEoM`
-- Imutável: https://ordum-itwya3pqi-ordum.vercel.app
+- READY — `dpl_65Ewga2oVJg6phJmBKfFezGF3Pu3`
+- Imutável: https://ordum-w9p89uzme-ordum.vercel.app
 - Alias: https://ordum-git-fix-admin-functional-recovery-ordum.vercel.app
-- Browser QA: console errors `0`; HTTP 5xx `0`; logs Vercel 5xx `0`.
-
-Arquitetura de menu:
-- Árvore única de dois níveis: Início direto; Comercial, Clientes, Financeiro, Operação e Administração como accordions.
-- Filtragem primária por `platformCan`; fallbacks legados preservados apenas onde já existiam; parents vazios removidos.
-- Desktop e mobile consomem a mesma árvore; um grupo aberto por vez; rota ativa prevalece sobre preferência visual local.
-- Breadcrumb, título, parent/child active state e bloqueio frontend de deep link derivam da mesma definição.
-- Financeiro roteável por `?view=overview|subscriptions|payments|overdue`; deep link e back/forward homologados.
-
-Permissões usadas:
-- Comercial: `platform.leads.read`, `platform.demos.manage`, `platform.commercial.read`.
-- Clientes: `platform.clients.read`, `platform.onboarding.read`, `platform.success.read`.
-- Financeiro: `platform.billing.read`.
-- Operação: `platform.support.read`, `platform.audit.read|platform.audit.team.read`, `platform.system.read`.
-- Administração: `platform.staff.read`, `platform.teams.read`, `platform.access.simulate`, `platform.settings.read`.
 
 QA:
-- Run descartável `admin-nav-msvyu5y1-4536f9`; cleanup de Auth, membros, permissões e papéis de QA concluído.
-- Admin: cinco domínios autorizados; Administração expandida; footer com nome, papel humano e ambiente.
-- Comercial: somente Comercial + Empresas; URL direta de Financeiro negada.
-- Financeiro: somente Empresas + Financeiro; Cobranças deep-linked e active state; back/forward entre Cobranças e Assinaturas.
-- Customer Success: somente Clientes com Empresas, Implantação e Customer Success.
-- Desktop `1440x1000`; mobile `390x844`; Space/Enter no accordion; submenu fecha drawer; Escape fecha drawer; sem overflow.
-- Screenshots: `tmp/admin-navigation/01-admin-full.png` a `07-mobile-menu.png`.
+- Run descartável `admin-access-msw0764m-3a5d63`; cinco pessoas e quatro papéis de QA; cleanup de Auth, membros, equipes, permissões e papéis concluído.
+- Admin: Membros → Gerenciar acesso; tabs, filtros, drawer, função, equipe, preview e status clicados.
+- Comercial: menu real Comercial + Clientes; Financeiro/Administração/Operação ausentes.
+- Financeiro: função alterada pela UI; novo login exibiu Clientes + Financeiro; deep link de Acessos negado.
+- Customer Success: função alterada pela UI; novo login exibiu Clientes, Implantação e Customer Success.
+- Mobile `390x844`: lista, filtros e cards sem overflow horizontal.
+- Console errors `0`; HTTP 5xx `0`; alteração final persistida no backend e fixtures removidas.
+- Screenshots: `tmp/admin-access/01-access-list.png` a `08-access-mobile.png`, somente com dados descartáveis.
 
-Checks:
-- lint, typecheck, migration validation, secret scan e build PASS.
-- 18/18 testes focados de navegação, Financeiro e regressão de produto PASS.
-- Integridade não foi alterado; smoke de regressão focado permaneceu PASS.
+Blockers:
+- BR-006: papéis personalizados e papéis sem pessoa vinculada precisam de contrato backend próprio. Não bloqueia gestão dos papéis existentes.
+- BR-001 SMTP externo, BR-002 cron não bloqueante e BR-005 Asaas Sandbox permanecem pendentes e inalterados.
 
-Bugs corrigidos:
-- Lista plana substituída por navegação semântica e permission-aware.
-- Assinaturas, Cobranças e Inadimplência agora possuem URL própria e histórico do navegador coerente.
-- Rota administrativa conhecida sem permissão mostra acesso negado antes de renderizar a página.
-- IDs `aria-controls` desktop/mobile deixaram de colidir; fechamento de grupo limpa a preferência persistida.
-- “Equipes comerciais” e “Acessos” foram humanizados para “Equipes” e “Acessos e permissões”.
-
-Backend Requests:
-- BR-001 pendente: SMTP transacional externo.
-- BR-002 pendente não bloqueante: cron intradiário/runner.
-- BR-005 pendente: credenciais Asaas Sandbox; produção permanece desabilitada.
-- Nenhum request novo: perfis customizados já são representáveis pelo RBAC atual e foram validados com fixtures descartáveis.
+Suggested next package:
+- Backend sync do BR-006; depois homologar criação/edição de papel personalizado e sua auditoria pela UI preparada.
