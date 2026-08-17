@@ -3,7 +3,8 @@
 ## BR-001
 
 Tela: Admin → Membros → Adicionar pessoa
-Problema: o Supabase Auth responde `email rate limit exceeded`; a UI agora informa o bloqueio, mas o e-mail real não pode ser homologado.
+Status: WAITING FOR SMTP CREDENTIALS.
+Problema: o Supabase Auth padrão responde `email rate limit exceeded`; a UI informa o bloqueio, mas a entrega real não pode ser homologada.
 Contrato necessário: configurar SMTP transacional próprio no Supabase Auth e validar o redirect `/auth/invite-callback` nos ambientes Preview e produção.
 Permissão: configuração administrativa do projeto Supabase.
 Bloqueante: SIM
@@ -12,7 +13,8 @@ Frontend pronto: SIM
 ## BR-002
 
 Tela: Integridade → alertas de SLA e tarefas
-Problema: o runner local não possui `CRON_SECRET` e a conta Vercel Hobby aceita apenas cron diário.
+Status: WAITING FOR INFRASTRUCTURE.
+Problema: `CRON_SECRET` está cadastrado como Sensitive na Vercel, mas não pode ser recuperado pelo runner atual; a frequência implantada permanece diária.
 Contrato necessário: disponibilizar a credencial do runner e definir infraestrutura/plano para alertas intradiários; até lá o job permanece diário e fail-closed.
 Permissão: configuração Vercel/ambiente.
 Bloqueante: NÃO
@@ -43,7 +45,8 @@ Evidência: `integrity_notification_preferences` existe com RLS habilitado; `PUB
 ## BR-005
 
 Tela: Administração → Saúde do sistema → Integração financeira
-Problema: a homologação externa do Asaas Sandbox permanece indisponível porque `ASAAS_API_KEY` e `ASAAS_WEBHOOK_TOKEN` não estão disponíveis no ambiente atual; `BILLING_ENABLED` permanece desligado por segurança.
+Status: WAITING FOR ASAAS SANDBOX CREDENTIALS.
+Problema: a homologação externa permanece indisponível porque `ASAAS_API_KEY` não está cadastrada; o token existente não é recuperável pelo runner e `BILLING_ENABLED` permanece fail-closed.
 Contrato necessário: cadastrar as credenciais Sandbox diretamente no ambiente seguro da Vercel, validar o webhook `/api/webhooks/asaas` e executar o roteiro de homologação de `docs/ORDUM_08_BILLING_ASAAS.md`.
 Permissão: configuração administrativa Vercel/Asaas Sandbox.
 Bloqueante: NÃO para o produto financeiro local; SIM apenas para operações externas e homologação Asaas real.
@@ -72,3 +75,13 @@ Bloqueante: NÃO
 Frontend pronto: SIM
 
 Evidência: grants remotos confirmados (`service_role=true`; `PUBLIC/anon/authenticated=false`), GET autenticado `/api/admin/access/roles` = 200 e negativos de criação/edição sem `platform.staff.manage` = 403.
+
+## BR-008
+
+Tela: Release Readiness → histórico de migrations
+Status: WAITING FOR SUPABASE CLI ACCESS.
+Problema: Git e remoto possuem 39 entradas, porém timestamps históricos divergem e `20260806230000_backfill_commercial_items` não consta no histórico remoto oficial.
+Contrato necessário: autenticar o Supabase CLI no projeto, comparar os aliases históricos e usar exclusivamente `supabase migration repair` para reconciliar versões equivalentes; não executar DDL duplicado nem inserir manualmente na tabela de migrations.
+Permissão: acesso administrativo do Supabase CLI ao projeto `ordum-production`.
+Bloqueante: SIM para o checklist de ativação produtiva; NÃO para o produto congelado em Preview.
+Frontend pronto: SIM

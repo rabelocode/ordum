@@ -6,7 +6,7 @@
 
 A integração usa a API v3 do Asaas exclusivamente no Sandbox. `BILLING_ENABLED=false` é o padrão e produção é recusada pelo código. A API usa `access_token`, `Content-Type: application/json` e `User-Agent`. O webhook valida `asaas-access-token` com comparação constante, aplica limite de taxa no banco, persiste antes do negócio, responde `200` imediatamente e delega o processamento ao `waitUntil` da Vercel. A fila durável é retomada pela conciliação caso uma execução assíncrona seja interrompida.
 
-No ciclo do piloto, o adapter foi exercitado com transporte isolado para criação de cliente, assinatura, consulta de cobrança e cancelamento. Confirmação, evento duplicado, fora de ordem e conciliação permanecem cobertos por testes de domínio/SQL. A homologação contra a API Sandbox real continua bloqueada enquanto `ASAAS_API_KEY` e `ASAAS_WEBHOOK_TOKEN` não estiverem cadastradas.
+No ciclo do piloto, o adapter foi exercitado com transporte isolado para criação de cliente, assinatura, consulta de cobrança e cancelamento. Confirmação, evento duplicado, fora de ordem e conciliação permanecem cobertos por testes de domínio/SQL. A homologação contra a API Sandbox real continua bloqueada enquanto `ASAAS_API_KEY` não estiver cadastrada e o token sensível do webhook não puder ser validado pelo runner autorizado.
 
 No Admin RC2, a operação financeira usa linguagem de negócio e separa contrato, assinatura e pagamento. A visão geral apresenta no máximo quatro indicadores reais; assinaturas, cobranças e inadimplência possuem filas próprias; detalhes de infraestrutura permanecem em Saúde do sistema. Quando o provider está indisponível, os dados locais continuam consultáveis e ações externas ficam fail-closed, sem permitir marcação manual de pagamento.
 

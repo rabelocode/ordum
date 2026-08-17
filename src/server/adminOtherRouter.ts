@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import { publicBillingHealth } from './billing/config';
+import { getReleaseReadiness } from './releaseReadiness';
 import { auditContext, pageResult, parsePagination } from './operational';
 import { captureServerAnalytics } from './analytics';
 import { reportServerError } from './observability';
@@ -558,6 +559,7 @@ export function createAdminOtherRouter(getSupabaseAdmin: any, _old_requirePlatfo
         database: { status: error ? 'error' : 'connected', latencyMs: databaseLatencyMs },
         auth: { status: authCheck.error ? 'error' : 'connected', latencyMs: authLatencyMs },
         billing: publicBillingHealth(),
+        release: getReleaseReadiness(),
         webhook: { last: lastWebhook.data || null, queued: queue.count || 0 },
         reconciliation: lastReconciliation.data || null,
         deploy: { commitSha: process.env.VERCEL_GIT_COMMIT_SHA || null, url: process.env.VERCEL_URL || null, region: process.env.VERCEL_REGION || null },

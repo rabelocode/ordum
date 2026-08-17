@@ -3,12 +3,7 @@ const webhookUrl = process.env.ASAAS_WEBHOOK_URL?.trim() || 'https://ordum-git-f
 const webhookToken = process.env.ASAAS_WEBHOOK_TOKEN?.trim() || '';
 const baseUrl = 'https://api-sandbox.asaas.com/v3';
 const webhookName = 'Ordum Preview Sandbox';
-const targetEvents = [
-  'PAYMENT_CREATED', 'PAYMENT_UPDATED', 'PAYMENT_CONFIRMED', 'PAYMENT_RECEIVED',
-  'PAYMENT_OVERDUE', 'PAYMENT_DELETED', 'PAYMENT_RESTORED', 'PAYMENT_REFUNDED',
-  'PAYMENT_RECEIVED_IN_CASH_UNDONE', 'PAYMENT_CHARGEBACK_REQUESTED',
-  'PAYMENT_CHARGEBACK_DISPUTE', 'PAYMENT_AWAITING_CHARGEBACK_REVERSAL',
-];
+const targetEvents = [...SUPPORTED_ASAAS_EVENTS];
 
 function fail(message: string): never {
   throw new Error(message);
@@ -21,6 +16,7 @@ async function jsonResponse(response: Response, operation: string) {
 
 async function setupWebhook() {
   if (!apiKey) fail('ASAAS_API_KEY Sandbox ausente.');
+  if (!apiKey.startsWith('$aact_hmlg_')) fail('ASAAS_API_KEY deve ser uma chave do ambiente Sandbox.');
   if (!webhookToken || webhookToken.length < 32 || webhookToken.length > 255 || /[\s\x00-\x1f\x7f]/.test(webhookToken)) {
     fail('ASAAS_WEBHOOK_TOKEN deve ter 32 a 255 caracteres sem espaços ou controles.');
   }
@@ -75,3 +71,4 @@ setupWebhook().catch((error) => {
   console.error('Webhook Sandbox setup failed:', error instanceof Error ? error.message : String(error));
   process.exitCode = 1;
 });
+import { SUPPORTED_ASAAS_EVENTS } from '../src/server/billing/domain';

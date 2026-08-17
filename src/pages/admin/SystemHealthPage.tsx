@@ -1,7 +1,10 @@
 import React, { useState, useEffect } from 'react';
 import { useAccess } from '../../core/auth/AccessContext';
-import { Server, Database, ShieldCheck, WalletCards } from 'lucide-react';
+import { BellRing, Database, Mail, Server, ShieldCheck, WalletCards } from 'lucide-react';
 import { MetricGridSkeleton } from '../../components/ui/LoadingSkeletons';
+
+const readinessLabel = (state?: string) => state === 'operational' ? 'Operacional' : state === 'unavailable' ? 'Indisponível' : 'Configuração pendente';
+const readinessColor = (state?: string) => state === 'operational' ? 'text-green-700' : state === 'unavailable' ? 'text-red-700' : 'text-amber-700';
 
 export function SystemHealthPage() {
   const { session } = useAccess();
@@ -125,9 +128,25 @@ export function SystemHealthPage() {
           <div className="bg-white p-6 rounded-2xl border border-[#DDD8CF]/40 shadow-sm">
             <div className="flex items-center gap-4 mb-4">
               <div className="w-12 h-12 bg-amber-50 text-[#B66E45] rounded-xl flex items-center justify-center"><WalletCards className="w-6 h-6" /></div>
-              <div><h3 className="font-bold text-[#202322]">Asaas</h3><div className={`text-sm font-medium ${health.billing?.enabled ? 'text-green-600' : 'text-amber-700'}`}>{health.billing?.enabled ? 'Sandbox habilitado' : 'Desabilitado com segurança'}</div></div>
+              <div><h3 className="font-bold text-[#202322]">Integração financeira</h3><div className={`text-sm font-medium ${readinessColor(health.release?.external?.financialIntegration?.state)}`}>{readinessLabel(health.release?.external?.financialIntegration?.state)}</div></div>
             </div>
-            <div className="text-sm text-gray-500 space-y-2 mt-4 pt-4 border-t border-gray-100"><div className="flex justify-between"><span>Ambiente:</span><span className="font-medium text-gray-900">{health.billing?.environment || 'sandbox'}</span></div><div className="flex justify-between"><span>Segredos:</span><span className="font-medium text-gray-900">{health.billing?.configured ? 'Configurados' : 'Pendentes'}</span></div></div>
+            <div className="text-sm text-gray-500 space-y-2 mt-4 pt-4 border-t border-gray-100"><div className="flex justify-between"><span>Ambiente seguro:</span><span className="font-medium text-gray-900">Sandbox</span></div><div className="flex justify-between"><span>Conexão externa:</span><span className="font-medium text-gray-900">{health.release?.external?.financialIntegration?.configured ? 'Configurada' : 'Aguardando credenciais'}</span></div></div>
+          </div>
+
+          <div className="bg-white p-6 rounded-2xl border border-[#DDD8CF]/40 shadow-sm">
+            <div className="flex items-center gap-4 mb-4">
+              <div className="w-12 h-12 bg-sky-50 text-sky-700 rounded-xl flex items-center justify-center"><Mail className="w-6 h-6" /></div>
+              <div><h3 className="font-bold text-[#202322]">E-mail transacional</h3><div className={`text-sm font-medium ${readinessColor(health.release?.external?.transactionalEmail?.state)}`}>{readinessLabel(health.release?.external?.transactionalEmail?.state)}</div></div>
+            </div>
+            <div className="text-sm text-gray-500 space-y-2 mt-4 pt-4 border-t border-gray-100"><div className="flex justify-between"><span>Configuração:</span><span className="font-medium text-gray-900">{health.release?.external?.transactionalEmail?.configured ? 'Concluída' : 'Aguardando credenciais'}</span></div><div className="flex justify-between"><span>Entrega real:</span><span className="font-medium text-gray-900">{health.release?.external?.transactionalEmail?.validated ? 'Validada' : 'Pendente'}</span></div></div>
+          </div>
+
+          <div className="bg-white p-6 rounded-2xl border border-[#DDD8CF]/40 shadow-sm">
+            <div className="flex items-center gap-4 mb-4">
+              <div className="w-12 h-12 bg-violet-50 text-violet-700 rounded-xl flex items-center justify-center"><BellRing className="w-6 h-6" /></div>
+              <div><h3 className="font-bold text-[#202322]">Automação de alertas</h3><div className={`text-sm font-medium ${readinessColor(health.release?.external?.alertAutomation?.state)}`}>{readinessLabel(health.release?.external?.alertAutomation?.state)}</div></div>
+            </div>
+            <div className="text-sm text-gray-500 space-y-2 mt-4 pt-4 border-t border-gray-100"><div className="flex justify-between"><span>Frequência atual:</span><span className="font-medium text-gray-900">Diária</span></div><div className="flex justify-between"><span>Alertas intradiários:</span><span className="font-medium text-gray-900">Aguardando infraestrutura</span></div></div>
           </div>
         </div>
       )}
