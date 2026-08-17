@@ -1,37 +1,49 @@
 Owner: chatgpt_backend
 Status: ready_for_product_review
 Branch: fix/admin-functional-recovery
-Head: 2ace7c6ed2c82a0d2e16fec1f487743e68a0f7db
-Headline: Admin Access Management homologado — papéis personalizados e RBAC completos.
+Head: 07c1919e8cc6ddc9535357a4c3e0b2b5264fd50f
+Headline: Admin + Integridade FROZEN — gate final de produto aprovado.
 
-Implemented:
-- Catálogo, criação, edição atômica, atribuição e preview do menu foram homologados de ponta a ponta.
-- Papéis personalizados aparecem com zero pessoas; Administrador, Gerente e Vendas permanecem protegidos e sem CTA de edição.
-- Correções de homologação: contagem de impacto considera pessoas atuais, dialogs possuem nome acessível e papel `sales` usa o rótulo Vendas.
+Result:
+- FROZEN WITH EXTERNAL BLOCKERS; nenhum blocker interno encontrado.
 
-Database:
-- Migration remota já aplicada `20260816170658_grant_service_role_app_private_usage` materializada no Git sem reaplicação.
-- Grants confirmados: `service_role` possui USAGE em `app_private` e EXECUTE nas wrappers; PUBLIC/anon/authenticated não possuem esses acessos.
-- BR-006 e BR-007 RESOLVIDOS.
+Browser run:
+- Comercial completo: `ui-mswhe44h` PASS.
+- Financeiro/CS: `rc21-mswhh98i-45d1ad` PASS.
+- Navigation/RBAC: `admin-nav-mswhilku-a48c52` PASS.
+- Acessos/custom roles: `admin-access-mswhkpfl-42801b` e `custom-role-mswhjiw2-0162a5` PASS.
+- Integridade completo: `integrity_e2e_1786926372985_2e838e83` PASS.
+- Convite/callback: `invite-mswifehh` PASS até o provider; entrega SMTP recebeu o 429 esperado de BR-001.
 
-Tests:
-- Browser QA final `custom-role-msw4atdk-152e74`: PASS; catálogo HTTP 200; dois papéis criados; papel sem membro visível; sistema protegido; deep-link negado; auditoria humana.
-- Negativos: usuário sem `platform.staff.manage` recebeu 403 em POST e PATCH; menu real atualizado após novo login.
-- Migration validation, secret scan, lint, typecheck e build PASS; testes focados 7/7; suíte 228 testes, 227 PASS, 1 live E2E explicitamente SKIP, 0 FAIL.
+Fixes:
+- Eliminada a corrida de resolução de destino que podia sobrescrever a navegação imediatamente após login/aceite do convite.
+- Runner de aceite passou a acionar explicitamente o CTA real de envio.
+
+Personas:
+- Admin Global, Comercial, Financeiro, Customer Success, tenant_admin, compliance, investigador atribuído/não atribuído e denunciante anônimo/identificado validados.
+- Deep-links proibidos negados; Admin Global permaneceu aggregate-only no Integridade.
+
+Desktop/Mobile:
+- 1440x1000 e 390x844 validados.
+- Evidências finais: `tmp/final-freeze/01-dashboard.png` a `24-public-mobile.png`.
 
 Preview:
-- READY — `dpl_34Ks8XV6WzVKdb21UGPCfxZW33TM`
-- Imutável: https://ordum-dxuue9a52-ordum.vercel.app
-- Alias da branch: https://ordum-git-fix-admin-functional-recovery-ordum.vercel.app
+- READY — `dpl_FkERuCnhy1QWTEreZ3xruTkRoT3V`.
+- Imutável: https://ordum-mae070gl0-ordum.vercel.app
+- Alias: https://ordum-git-fix-admin-functional-recovery-ordum.vercel.app
+- HTTP 5xx = 0; console inesperado = 0 (somente 429 externo do SMTP no teste de convite).
 
-QA:
-- Desktop e mobile 390x844 validados; 9 screenshots em `tmp/custom-roles/`; overflow mobile = false.
-- Criação → papel com zero pessoas → atribuição → login real → edição com impacto → refresh de permissões → auditoria concluídos.
-- Console errors = 0; HTTP 5xx = 0 no runner e nos logs do deployment.
-- Cleanup: Auth QA = 0; platform_members QA = 0; papéis QA = 0; team memberships QA = 0.
+Checks:
+- Migration validation, secret scan, lint, typecheck e build PASS.
+- Suíte: 228 testes; 227 PASS, 1 live E2E explicitamente SKIP, 0 FAIL.
 
-Blockers:
-- BR-001 SMTP, BR-002 cron não bloqueante e BR-005 Asaas Sandbox permanecem pendentes e inalterados.
+Cleanup:
+- Auth QA = 0; platform_members QA = 0; roles QA = 0; tenants QA = 0; reports QA = 0.
 
-Suggested next package:
-- Product review da Gestão de Acessos homologada; não há blocker interno de papéis personalizados.
+Internal blockers:
+- Nenhum.
+
+External blockers:
+- BR-001 SMTP transacional: pendente e bloqueante somente para entrega real do convite.
+- BR-002 cron intradiário: pendente, não bloqueante.
+- BR-005 Asaas Sandbox: pendente para operações financeiras externas; produto local permanece fail-closed.
