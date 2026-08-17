@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import { Lock, Mail, ArrowRight, Shield, AlertCircle, CheckCircle2, ArrowLeft, Loader2 } from "lucide-react";
 import { Button } from "../../components/ui/Button";
 import { authService } from "../../services/auth";
@@ -7,6 +7,7 @@ import { captureClientException } from '../../lib/observability';
 
 export function LoginPage() {
   const { user, signOut } = useAuth();
+  const destinationResolvedRef = useRef(false);
   
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -30,6 +31,8 @@ export function LoginPage() {
   };
 
   const resolveUserDestination = async (accessToken: string) => {
+    if (destinationResolvedRef.current) return;
+    destinationResolvedRef.current = true;
     const returnTo = getReturnTo();
 
     try {
