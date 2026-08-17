@@ -1,8 +1,8 @@
 Owner: chatgpt_backend
 Status: ready_for_product_review
 Branch: fix/admin-functional-recovery
-Head: 6c78c894badc1c7e9a10ee414b1936822307c43b
-Headline: Release Readiness — produto congelado; integrações externas mapeadas e homologadas quando disponíveis.
+Head: 5f375bdf75d54cf28a04db1379dc533553d87c55
+Headline: Release Readiness — BR-008 resolvido; histórico Git e Supabase oficialmente sincronizado.
 
 Core product:
 - Admin: FROZEN.
@@ -41,13 +41,16 @@ Health / environment / security:
 - Logs do Preview: HTTP 5xx = 0; nenhum segredo exposto.
 
 Database / release checklist:
-- Validação local: 39 migrations ordenadas.
-- Histórico remoto comparado sem DDL, `db push`, insert manual ou repair inseguro.
-- BR-008: WAITING FOR SUPABASE CLI ACCESS para reconciliar divergências históricas pelo fluxo oficial; `SUPABASE_ACCESS_TOKEN` ausente.
+- BR-008: RESOLVIDO em 17/08/2026.
+- Acesso oficial validado no projeto `ordum-production`; `supabase migration list --linked` final possui 40 versões com `local = remote`.
+- Aliases históricos reconciliados somente por `supabase migration repair`; migration remota `20260805230011` materializada no Git com hash canônico igual.
+- `20260806230000_backfill_commercial_items` marcado como aplicado após prova agregada de zero propostas e zero contratos pendentes.
+- Zero DDL, `db push`, alteração manual em `schema_migrations` ou leitura de conteúdo comercial.
 - Checklist de ativação e rollback: `docs/AI_HANDOFF/RELEASE_READINESS.md`.
 
 Checks:
-- Secret scan, migration validation, lint, typecheck e build: PASS.
+- Secret scan: 378 arquivos, PASS; migration validation: 40 migrations ordenadas, PASS.
+- Lint, typecheck e build permanecem PASS do pacote de Release Readiness; nenhum código de produto foi alterado no BR-008.
 - Testes focados de release readiness: 5 PASS, 0 FAIL.
 - QA final: fixtures removidas; Auth QA = 0, platform_members QA = 0, tenants QA = 0.
 
@@ -55,4 +58,3 @@ External blockers:
 - BR-001: WAITING FOR SMTP CREDENTIALS.
 - BR-002: WAITING FOR INFRASTRUCTURE.
 - BR-005: WAITING FOR ASAAS SANDBOX CREDENTIALS.
-- BR-008: WAITING FOR SUPABASE CLI ACCESS.
