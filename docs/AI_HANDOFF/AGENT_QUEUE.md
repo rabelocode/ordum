@@ -1,49 +1,58 @@
 Owner: chatgpt_backend
 Status: ready_for_product_review
 Branch: fix/admin-functional-recovery
-Head: 07c1919e8cc6ddc9535357a4c3e0b2b5264fd50f
-Headline: Admin + Integridade FROZEN — gate final de produto aprovado.
+Head: 6c78c894badc1c7e9a10ee414b1936822307c43b
+Headline: Release Readiness — produto congelado; integrações externas mapeadas e homologadas quando disponíveis.
 
-Result:
-- FROZEN WITH EXTERNAL BLOCKERS; nenhum blocker interno encontrado.
-
-Browser run:
-- Comercial completo: `ui-mswhe44h` PASS.
-- Financeiro/CS: `rc21-mswhh98i-45d1ad` PASS.
-- Navigation/RBAC: `admin-nav-mswhilku-a48c52` PASS.
-- Acessos/custom roles: `admin-access-mswhkpfl-42801b` e `custom-role-mswhjiw2-0162a5` PASS.
-- Integridade completo: `integrity_e2e_1786926372985_2e838e83` PASS.
-- Convite/callback: `invite-mswifehh` PASS até o provider; entrega SMTP recebeu o 429 esperado de BR-001.
-
-Fixes:
-- Eliminada a corrida de resolução de destino que podia sobrescrever a navegação imediatamente após login/aceite do convite.
-- Runner de aceite passou a acionar explicitamente o CTA real de envio.
-
-Personas:
-- Admin Global, Comercial, Financeiro, Customer Success, tenant_admin, compliance, investigador atribuído/não atribuído e denunciante anônimo/identificado validados.
-- Deep-links proibidos negados; Admin Global permaneceu aggregate-only no Integridade.
-
-Desktop/Mobile:
-- 1440x1000 e 390x844 validados.
-- Evidências finais: `tmp/final-freeze/01-dashboard.png` a `24-public-mobile.png`.
+Core product:
+- Admin: FROZEN.
+- Integridade: FROZEN.
+- Nenhum blocker interno novo.
 
 Preview:
-- READY — `dpl_FkERuCnhy1QWTEreZ3xruTkRoT3V`.
-- Imutável: https://ordum-mae070gl0-ordum.vercel.app
-- Alias: https://ordum-git-fix-admin-functional-recovery-ordum.vercel.app
-- HTTP 5xx = 0; console inesperado = 0 (somente 429 externo do SMTP no teste de convite).
+- READY — `dpl_5uikHvPSrdDW3BTuapLEzLS1oJT8`.
+- Imutável: https://ordum-le8o7xovz-ordum.vercel.app
+- Alias da branch: https://ordum-git-fix-admin-functional-recovery-ordum.vercel.app
+- Browser QA `release-mswj92q1`: 3 integrações pendentes exibidas, console errors = 0, HTTP 5xx = 0.
+- Screenshot: `tmp/release-readiness-health-final.png`.
+
+SMTP / Auth redirects:
+- BR-001: WAITING FOR SMTP CREDENTIALS.
+- Contrato documentado: host, port, username, password, sender address e sender name; nenhum valor real no Git/frontend/logs.
+- Templates Ordum e redirects exatos de Preview/produção preparados em `docs/AI_HANDOFF/RELEASE_READINESS.md`.
+- Callback/login permanecem homologados; entrega real depende do SMTP externo.
+
+Cron:
+- BR-002: WAITING FOR INFRASTRUCTURE.
+- `CRON_SECRET` existe no ambiente seguro; ausência e credencial incorreta retornaram 401.
+- Frequência atual: diária (`06:17 UTC` e `06:47 UTC`); última execução registrada em 11/08/2026, portanto não foi declarada operacional.
+- Validação com credencial correta permanece bloqueada porque o valor Sensitive não é recuperável nesta sessão; plano atual não entrega alertas intradiários.
+
+Asaas Sandbox:
+- BR-005: WAITING FOR ASAAS SANDBOX CREDENTIALS.
+- `ASAAS_API_KEY` ausente; nenhuma homologação externa foi simulada.
+- Preview corrigido para `BILLING_ENABLED=false`; produção não foi alterada.
+- Setup valida chave Sandbox e usa a lista canônica de eventos; produção continua bloqueada/fail-closed.
+
+Health / environment / security:
+- Saúde do sistema mostra E-mail transacional, Integração financeira e Automação de alertas em linguagem humana e sem secrets.
+- Variáveis classificadas server-side em core, integração externa opcional e produção.
+- Secret scan: 376 arquivos rastreados, 0 ocorrência.
+- Logs do Preview: HTTP 5xx = 0; nenhum segredo exposto.
+
+Database / release checklist:
+- Validação local: 39 migrations ordenadas.
+- Histórico remoto comparado sem DDL, `db push`, insert manual ou repair inseguro.
+- BR-008: WAITING FOR SUPABASE CLI ACCESS para reconciliar divergências históricas pelo fluxo oficial; `SUPABASE_ACCESS_TOKEN` ausente.
+- Checklist de ativação e rollback: `docs/AI_HANDOFF/RELEASE_READINESS.md`.
 
 Checks:
-- Migration validation, secret scan, lint, typecheck e build PASS.
-- Suíte: 228 testes; 227 PASS, 1 live E2E explicitamente SKIP, 0 FAIL.
-
-Cleanup:
-- Auth QA = 0; platform_members QA = 0; roles QA = 0; tenants QA = 0; reports QA = 0.
-
-Internal blockers:
-- Nenhum.
+- Secret scan, migration validation, lint, typecheck e build: PASS.
+- Testes focados de release readiness: 5 PASS, 0 FAIL.
+- QA final: fixtures removidas; Auth QA = 0, platform_members QA = 0, tenants QA = 0.
 
 External blockers:
-- BR-001 SMTP transacional: pendente e bloqueante somente para entrega real do convite.
-- BR-002 cron intradiário: pendente, não bloqueante.
-- BR-005 Asaas Sandbox: pendente para operações financeiras externas; produto local permanece fail-closed.
+- BR-001: WAITING FOR SMTP CREDENTIALS.
+- BR-002: WAITING FOR INFRASTRUCTURE.
+- BR-005: WAITING FOR ASAAS SANDBOX CREDENTIALS.
+- BR-008: WAITING FOR SUPABASE CLI ACCESS.

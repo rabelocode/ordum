@@ -232,7 +232,7 @@ var init_inviteRedirect = __esm({
 
 // src/server/billing/config.ts
 function getBillingConfig(env = process.env) {
-  const enabled = env.BILLING_ENABLED === "true";
+  const enabled2 = env.BILLING_ENABLED === "true";
   const provider = env.BILLING_PROVIDER || "asaas";
   const environment = env.ASAAS_ENV || "sandbox";
   const baseUrl = (env.ASAAS_BASE_URL || SANDBOX_URL).replace(/\/$/, "");
@@ -242,9 +242,9 @@ function getBillingConfig(env = process.env) {
   if (environment !== "sandbox") throw new Error("Cobran\xE7a em produ\xE7\xE3o permanece bloqueada at\xE9 homologa\xE7\xE3o e autoriza\xE7\xE3o expl\xEDcita.");
   if (baseUrl !== SANDBOX_URL) throw new Error("ASAAS_BASE_URL n\xE3o corresponde ao ambiente Sandbox.");
   if (apiKey && !apiKey.startsWith("$aact_hmlg_")) throw new Error("A chave configurada n\xE3o parece ser uma chave Asaas Sandbox.");
-  if (enabled && (!apiKey || !webhookToken)) throw new Error("Billing habilitado sem ASAAS_API_KEY e ASAAS_WEBHOOK_TOKEN.");
+  if (enabled2 && (!apiKey || !webhookToken)) throw new Error("Billing habilitado sem ASAAS_API_KEY e ASAAS_WEBHOOK_TOKEN.");
   return {
-    enabled,
+    enabled: enabled2,
     provider: "asaas",
     environment: "sandbox",
     baseUrl,
@@ -3077,9 +3077,70 @@ function createAdminClientsRouter(getSupabaseAdmin2) {
 
 // src/server/adminOtherRouter.ts
 init_config();
+import { Router as Router3 } from "express";
+
+// src/server/releaseReadiness.ts
+init_config();
+var enabled = (value) => value?.trim().toLowerCase() === "true";
+var strongSecret = (value) => Boolean(value && value.trim().length >= 32);
+var releaseEnvironmentContract = {
+  requiredForCore: ["SUPABASE_URL", "SUPABASE_SECRET_KEY"],
+  optionalExternalIntegration: [
+    "AUTH_SMTP_CONFIGURED",
+    "AUTH_SMTP_VALIDATED",
+    "CRON_SECRET",
+    "ASAAS_API_KEY",
+    "ASAAS_WEBHOOK_TOKEN",
+    "ASAAS_WEBHOOK_URL"
+  ],
+  productionOnly: ["APP_URL"]
+};
+function getReleaseReadiness(env = process.env, evidence = {}, now = /* @__PURE__ */ new Date()) {
+  const coreConfigured = releaseEnvironmentContract.requiredForCore.every((key) => Boolean(env[key]?.trim()));
+  const smtpConfigured = enabled(env.AUTH_SMTP_CONFIGURED);
+  const smtpValidated = enabled(env.AUTH_SMTP_VALIDATED);
+  const cronConfigured = Boolean(env.CRON_SECRET?.trim());
+  const cronSecretStrong = strongSecret(env.CRON_SECRET);
+  const lastIntegrityRunAt = evidence.lastIntegrityRunAt || null;
+  const integrityRunRecent = Boolean(lastIntegrityRunAt && now.getTime() - new Date(lastIntegrityRunAt).getTime() <= 36 * 60 * 60 * 1e3);
+  const integrityRunHealthy = evidence.lastIntegrityRunStatus === "completed" && integrityRunRecent;
+  const billing = publicBillingHealth(env);
+  const billingInvalid = Boolean("error" in billing && billing.error);
+  return {
+    core: {
+      state: coreConfigured ? "operational" : "unavailable",
+      configured: coreConfigured
+    },
+    external: {
+      transactionalEmail: {
+        state: smtpConfigured && smtpValidated ? "operational" : "configuration_pending",
+        configured: smtpConfigured,
+        validated: smtpValidated
+      },
+      alertAutomation: {
+        state: !cronConfigured ? "configuration_pending" : !cronSecretStrong ? "unavailable" : integrityRunHealthy ? "operational" : "configuration_pending",
+        configured: cronConfigured,
+        schedule: "daily",
+        intraday: false,
+        lastRunAt: lastIntegrityRunAt
+      },
+      financialIntegration: {
+        state: billingInvalid ? "unavailable" : billing.configured && billing.enabled ? "operational" : "configuration_pending",
+        configured: billing.configured,
+        enabled: billing.enabled,
+        environment: billing.environment
+      }
+    },
+    production: {
+      appUrlConfigured: /^https:\/\//.test(env.APP_URL?.trim() || ""),
+      billingProductionAuthorized: false
+    }
+  };
+}
+
+// src/server/adminOtherRouter.ts
 init_operational();
 init_analytics();
-import { Router as Router3 } from "express";
 
 // src/server/observability.ts
 init_telemetryPrivacy();
@@ -3498,10 +3559,11 @@ function createAdminOtherRouter(getSupabaseAdmin2, _old_requirePlatformAuth) {
       const authStart = performance.now();
       const authCheck = await getSupabaseAdmin2().auth.admin.listUsers({ page: 1, perPage: 1 });
       const authLatencyMs = Math.round(performance.now() - authStart);
-      const [lastWebhook, queue, lastReconciliation] = await Promise.all([
+      const [lastWebhook, queue, lastReconciliation, lastIntegrityRun] = await Promise.all([
         getSupabaseAdmin2().from("billing_webhook_events").select("event_type,status,received_at").order("received_at", { ascending: false }).limit(1).maybeSingle(),
         getSupabaseAdmin2().from("billing_webhook_events").select("*", { count: "exact", head: true }).in("status", ["received", "processing", "failed"]),
-        getSupabaseAdmin2().from("billing_reconciliation_runs").select("status,started_at,completed_at,error_count,summary").order("started_at", { ascending: false }).limit(1).maybeSingle()
+        getSupabaseAdmin2().from("billing_reconciliation_runs").select("status,started_at,completed_at,error_count,summary").order("started_at", { ascending: false }).limit(1).maybeSingle(),
+        getSupabaseAdmin2().from("integrity_scheduler_runs").select("status,started_at,finished_at").order("started_at", { ascending: false }).limit(1).maybeSingle()
       ]);
       res.json({
         status: !error && !authCheck.error ? "operational" : "degraded",
@@ -3510,6 +3572,7 @@ function createAdminOtherRouter(getSupabaseAdmin2, _old_requirePlatformAuth) {
         database: { status: error ? "error" : "connected", latencyMs: databaseLatencyMs },
         auth: { status: authCheck.error ? "error" : "connected", latencyMs: authLatencyMs },
         billing: publicBillingHealth(),
+        release: getReleaseReadiness(process.env, { lastIntegrityRunAt: lastIntegrityRun.data?.started_at, lastIntegrityRunStatus: lastIntegrityRun.data?.status }),
         webhook: { last: lastWebhook.data || null, queued: queue.count || 0 },
         reconciliation: lastReconciliation.data || null,
         deploy: { commitSha: process.env.VERCEL_GIT_COMMIT_SHA || null, url: process.env.VERCEL_URL || null, region: process.env.VERCEL_REGION || null },
@@ -7080,8 +7143,8 @@ function createIntegrityRouter(getSupabaseAdmin2, authOverrides) {
     if ([settings, channel, categories, routing, committee].some((item) => item.error)) return res.status(500).json({ error: "N\xE3o foi poss\xEDvel validar a publica\xE7\xE3o." });
     if (!settings.data?.channel_tested_at || !channel.data || !categories.count || !routing.count || !committee.count) return res.status(409).json({ error: "Conclua e teste a configura\xE7\xE3o antes de publicar." });
     const publishedAt = (/* @__PURE__ */ new Date()).toISOString();
-    const [enabled, updated] = await Promise.all([db.from("integrity_channels").update({ active: true, updated_at: publishedAt }).eq("id", channel.data.id).eq("tenant_id", tenantId(req)), db.from("integrity_settings").update({ channel_published_at: publishedAt, deployment_state: "published", deployment_updated_at: publishedAt }).eq("tenant_id", tenantId(req))]);
-    if (enabled.error || updated.error) return res.status(500).json({ error: "N\xE3o foi poss\xEDvel publicar o canal." });
+    const [enabled2, updated] = await Promise.all([db.from("integrity_channels").update({ active: true, updated_at: publishedAt }).eq("id", channel.data.id).eq("tenant_id", tenantId(req)), db.from("integrity_settings").update({ channel_published_at: publishedAt, deployment_state: "published", deployment_updated_at: publishedAt }).eq("tenant_id", tenantId(req))]);
+    if (enabled2.error || updated.error) return res.status(500).json({ error: "N\xE3o foi poss\xEDvel publicar o canal." });
     await auditIntegrity(db, req, "integrity.channel.published", "integrity_channels", channel.data.id, { public_slug: channel.data.public_slug, published_at: publishedAt });
     return res.json({ published: true, public_slug: channel.data.public_slug, published_at: publishedAt });
   }));
