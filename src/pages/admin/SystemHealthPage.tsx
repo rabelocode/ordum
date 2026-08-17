@@ -146,7 +146,7 @@ export function SystemHealthPage() {
               <div className="w-12 h-12 bg-violet-50 text-violet-700 rounded-xl flex items-center justify-center"><BellRing className="w-6 h-6" /></div>
               <div><h3 className="font-bold text-[#202322]">Automação de alertas</h3><div className={`text-sm font-medium ${readinessColor(health.release?.external?.alertAutomation?.state)}`}>{readinessLabel(health.release?.external?.alertAutomation?.state)}</div></div>
             </div>
-            <div className="text-sm text-gray-500 space-y-2 mt-4 pt-4 border-t border-gray-100"><div className="flex justify-between"><span>Frequência atual:</span><span className="font-medium text-gray-900">Diária</span></div><div className="flex justify-between"><span>Alertas intradiários:</span><span className="font-medium text-gray-900">Aguardando infraestrutura</span></div></div>
+            <div className="text-sm text-gray-500 space-y-2 mt-4 pt-4 border-t border-gray-100"><div className="flex justify-between"><span>Frequência atual:</span><span className="font-medium text-gray-900">Diária</span></div><div className="flex justify-between gap-3"><span>Última execução:</span><span className="font-medium text-right text-gray-900">{health.release?.external?.alertAutomation?.lastRunAt ? new Date(health.release.external.alertAutomation.lastRunAt).toLocaleString('pt-BR') : 'Ainda não validada'}</span></div><div className="flex justify-between"><span>Alertas intradiários:</span><span className="font-medium text-gray-900">Aguardando infraestrutura</span></div></div>
           </div>
         </div>
       )}

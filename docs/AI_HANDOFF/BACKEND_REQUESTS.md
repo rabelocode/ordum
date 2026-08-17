@@ -14,7 +14,7 @@ Frontend pronto: SIM
 
 Tela: Integridade → alertas de SLA e tarefas
 Status: WAITING FOR INFRASTRUCTURE.
-Problema: `CRON_SECRET` está cadastrado como Sensitive na Vercel, mas não pode ser recuperado pelo runner atual; a frequência implantada permanece diária.
+Problema: `CRON_SECRET` está cadastrado como Sensitive na Vercel, mas não pode ser recuperado pelo runner atual; a frequência implantada permanece diária e a última execução persistida ocorreu em 11/08/2026.
 Contrato necessário: disponibilizar a credencial do runner e definir infraestrutura/plano para alertas intradiários; até lá o job permanece diário e fail-closed.
 Permissão: configuração Vercel/ambiente.
 Bloqueante: NÃO

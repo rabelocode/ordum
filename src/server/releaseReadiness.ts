@@ -18,12 +18,17 @@ export const releaseEnvironmentContract = {
   productionOnly: ["APP_URL"],
 } as const;
 
-export function getReleaseReadiness(env: NodeJS.ProcessEnv = process.env) {
+type OperationalEvidence = { lastIntegrityRunAt?: string | null; lastIntegrityRunStatus?: string | null };
+
+export function getReleaseReadiness(env: NodeJS.ProcessEnv = process.env, evidence: OperationalEvidence = {}, now = new Date()) {
   const coreConfigured = releaseEnvironmentContract.requiredForCore.every((key) => Boolean(env[key]?.trim()));
   const smtpConfigured = enabled(env.AUTH_SMTP_CONFIGURED);
   const smtpValidated = enabled(env.AUTH_SMTP_VALIDATED);
   const cronConfigured = Boolean(env.CRON_SECRET?.trim());
   const cronSecretStrong = strongSecret(env.CRON_SECRET);
+  const lastIntegrityRunAt = evidence.lastIntegrityRunAt || null;
+  const integrityRunRecent = Boolean(lastIntegrityRunAt && now.getTime() - new Date(lastIntegrityRunAt).getTime() <= 36 * 60 * 60 * 1000);
+  const integrityRunHealthy = evidence.lastIntegrityRunStatus === "completed" && integrityRunRecent;
   const billing = publicBillingHealth(env);
   const billingInvalid = Boolean("error" in billing && billing.error);
 
@@ -39,10 +44,11 @@ export function getReleaseReadiness(env: NodeJS.ProcessEnv = process.env) {
         validated: smtpValidated,
       },
       alertAutomation: {
-        state: (!cronConfigured ? "configuration_pending" : cronSecretStrong ? "operational" : "unavailable") as InfrastructureState,
+        state: (!cronConfigured ? "configuration_pending" : !cronSecretStrong ? "unavailable" : integrityRunHealthy ? "operational" : "configuration_pending") as InfrastructureState,
         configured: cronConfigured,
         schedule: "daily" as const,
         intraday: false,
+        lastRunAt: lastIntegrityRunAt,
       },
       financialIntegration: {
         state: (billingInvalid ? "unavailable" : billing.configured && billing.enabled ? "operational" : "configuration_pending") as InfrastructureState,

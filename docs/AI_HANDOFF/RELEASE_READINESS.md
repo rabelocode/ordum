@@ -74,6 +74,7 @@ Validated:
 - comparação em tempo constante e nenhuma variável `VITE_*`;
 - persistência/idempotência por janela de 15 minutos e `dedupe_key` cobertas por testes;
 - `CRON_SECRET` está cadastrado como Sensitive na Vercel, mas o valor não é recuperável pelo runner atual; por isso a execução autenticada real não foi declarada como homologada.
+- a última execução persistida do Integridade terminou com `status=completed` em 11/08/2026, porém não houve execução diária recente; a Saúde do sistema permanece em `Configuração pendente` até existir execução concluída nas últimas 36 horas.
 
 Frequência atual em `vercel.json`:
 

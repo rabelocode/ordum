@@ -547,10 +547,11 @@ export function createAdminOtherRouter(getSupabaseAdmin: any, _old_requirePlatfo
       const authStart = performance.now();
       const authCheck = await getSupabaseAdmin().auth.admin.listUsers({ page: 1, perPage: 1 });
       const authLatencyMs = Math.round(performance.now() - authStart);
-      const [lastWebhook, queue, lastReconciliation] = await Promise.all([
+      const [lastWebhook, queue, lastReconciliation, lastIntegrityRun] = await Promise.all([
         getSupabaseAdmin().from('billing_webhook_events').select('event_type,status,received_at').order('received_at', { ascending: false }).limit(1).maybeSingle(),
         getSupabaseAdmin().from('billing_webhook_events').select('*', { count: 'exact', head: true }).in('status', ['received', 'processing', 'failed']),
         getSupabaseAdmin().from('billing_reconciliation_runs').select('status,started_at,completed_at,error_count,summary').order('started_at', { ascending: false }).limit(1).maybeSingle(),
+        getSupabaseAdmin().from('integrity_scheduler_runs').select('status,started_at,finished_at').order('started_at', { ascending: false }).limit(1).maybeSingle(),
       ]);
       res.json({
         status: !error && !authCheck.error ? 'operational' : 'degraded',
@@ -559,7 +560,7 @@ export function createAdminOtherRouter(getSupabaseAdmin: any, _old_requirePlatfo
         database: { status: error ? 'error' : 'connected', latencyMs: databaseLatencyMs },
         auth: { status: authCheck.error ? 'error' : 'connected', latencyMs: authLatencyMs },
         billing: publicBillingHealth(),
-        release: getReleaseReadiness(),
+        release: getReleaseReadiness(process.env, { lastIntegrityRunAt: lastIntegrityRun.data?.started_at, lastIntegrityRunStatus: lastIntegrityRun.data?.status }),
         webhook: { last: lastWebhook.data || null, queued: queue.count || 0 },
         reconciliation: lastReconciliation.data || null,
         deploy: { commitSha: process.env.VERCEL_GIT_COMMIT_SHA || null, url: process.env.VERCEL_URL || null, region: process.env.VERCEL_REGION || null },

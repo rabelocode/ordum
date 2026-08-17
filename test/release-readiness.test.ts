@@ -21,10 +21,24 @@ test("reports SMTP operational only after configuration and real delivery valida
 
 test("requires a strong server-only cron secret and preserves the daily infrastructure limit", () => {
   assert.equal(getReleaseReadiness({ ...core, CRON_SECRET: "short" }).external.alertAutomation.state, "unavailable");
-  const status = getReleaseReadiness({ ...core, CRON_SECRET: "x".repeat(48) }).external.alertAutomation;
+  assert.equal(getReleaseReadiness({ ...core, CRON_SECRET: "x".repeat(48) }).external.alertAutomation.state, "configuration_pending");
+  const now = new Date("2026-08-16T12:00:00Z");
+  const status = getReleaseReadiness(
+    { ...core, CRON_SECRET: "x".repeat(48) },
+    { lastIntegrityRunAt: "2026-08-16T10:00:00Z", lastIntegrityRunStatus: "completed" },
+    now,
+  ).external.alertAutomation;
   assert.equal(status.state, "operational");
   assert.equal(status.schedule, "daily");
   assert.equal(status.intraday, false);
+  assert.equal(
+    getReleaseReadiness(
+      { ...core, CRON_SECRET: "x".repeat(48) },
+      { lastIntegrityRunAt: "2026-08-14T10:00:00Z", lastIntegrityRunStatus: "completed" },
+      now,
+    ).external.alertAutomation.state,
+    "configuration_pending",
+  );
 });
 
 test("keeps Asaas fail-closed until a complete Sandbox configuration exists", () => {
