@@ -79,9 +79,11 @@ Evidência: grants remotos confirmados (`service_role=true`; `PUBLIC/anon/authen
 ## BR-008
 
 Tela: Release Readiness → histórico de migrations
-Status: WAITING FOR SUPABASE CLI ACCESS.
-Problema: Git e remoto possuem 39 entradas, porém timestamps históricos divergem e `20260806230000_backfill_commercial_items` não consta no histórico remoto oficial.
-Contrato necessário: autenticar o Supabase CLI no projeto, comparar os aliases históricos e usar exclusivamente `supabase migration repair` para reconciliar versões equivalentes; não executar DDL duplicado nem inserir manualmente na tabela de migrations.
+Status: RESOLVIDO em 17/08/2026.
+Problema: os aliases históricos foram reconciliados pelo Supabase CLI oficial, e a migration remota distinta `20260805230011_seed_default_customer_onboarding_template` foi materializada no Git com SQL e hash canônico iguais ao remoto.
+Contrato necessário: concluído somente com `supabase migration repair`; nenhum DDL, `db push` ou alteração manual em `schema_migrations` foi executado.
 Permissão: acesso administrativo do Supabase CLI ao projeto `ordum-production`.
-Bloqueante: SIM para o checklist de ativação produtiva; NÃO para o produto congelado em Preview.
+Bloqueante: NÃO
 Frontend pronto: SIM
+
+Evidência: aliases `20260803130703`/`20260803132209` e `20260805230000`/`20260806231533` tiveram SQL equivalente comprovado por hash canônico; o backfill `20260806230000` retornava zero propostas e zero contratos pendentes. A listagem final possui 40 versões com `local = remote`. Detalhes em `docs/AI_HANDOFF/MIGRATION_RECONCILIATION.md`.

@@ -132,11 +132,11 @@ Ausência de integração opcional não derruba o core. A Saúde do sistema apre
 
 ## Migration History
 
-Status: **WAITING FOR SUPABASE CLI ACCESS**.
+Status: **RESOLVED** em 17/08/2026.
 
-O remoto e o Git possuem 39 migrations, mas o histórico ainda contém aliases de timestamp e uma migration local sem registro remoto. Em especial, `20260806230000_backfill_commercial_items` permanece fora do histórico oficial, conforme já registrado em `docs/walkthrough.md`. O CLI recusou o link por ausência de `SUPABASE_ACCESS_TOKEN`.
+O acesso oficial foi validado no projeto `ordum-production`. Dois pares de aliases tiveram equivalência comprovada por hash canônico, a migration remota `20260805230011_seed_default_customer_onboarding_template` foi materializada no Git, e `20260806230000_backfill_commercial_items` foi marcada como aplicada após consulta agregada provar zero propostas e zero contratos pendentes.
 
-Não foi executado DDL duplicado, `db push --include-all`, inserção manual em `supabase_migrations.schema_migrations` nem `migration repair` sem autenticação. A reconciliação deve usar somente `supabase migration list` e `supabase migration repair` após acesso oficial ao projeto e comparação dos aliases históricos.
+Após `supabase migration repair`, a listagem oficial possui 40 versões com `local = remote`. Não foi executado DDL, `db push`, inserção manual em `supabase_migrations.schema_migrations` nem leitura de conteúdo comercial. Evidência completa: `docs/AI_HANDOFF/MIGRATION_RECONCILIATION.md`.
 
 ## Production Activation
 
@@ -149,7 +149,7 @@ Não foi executado DDL duplicado, `db push --include-all`, inserção manual em 
 - [ ] `CRON_SECRET` forte disponível ao runner autorizado.
 - [ ] Frequência de cron compatível com o plano/infraestrutura.
 - [ ] Segredos cadastrados como Sensitive e somente server-side.
-- [ ] Histórico de migrations sincronizado pelo mecanismo oficial; pendência detalhada acima.
+- [x] Histórico de migrations sincronizado pelo mecanismo oficial.
 - [ ] Preview aprovado e smoke sem 5xx.
 - [ ] Backup e procedimento de rollback definidos antes do primeiro deploy produtivo.
 - [ ] Sentry/PostHog e logs sanitizados ativos conforme consentimento/configuração.

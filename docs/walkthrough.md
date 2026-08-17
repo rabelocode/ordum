@@ -81,4 +81,4 @@ Implementamos na branch `fix/admin-functional-recovery` o pacote completo de Bil
 - Resíduos comprovados: Auth E2E `0`; platform_members E2E `0`; platform_members E2E ativos `0`.
 - Preview: raiz HTTP `200`, diagnóstico sem autenticação HTTP `401`, logs `5xx` do deployment `0`.
 - O ciclo live não foi registrado como concluído: faltam `E2E_OPERATOR_EMAIL`, `E2E_OPERATOR_PASSWORD` e `ASAAS_API_KEY` Sandbox no ambiente controlado.
-- A migration `20260806230000` permanece fora do histórico remoto oficial; o reparo por CLI depende de acesso/link do Supabase e não foi substituído por inserção manual.
+- Em 17/08/2026, a migration `20260806230000` foi reconciliada no histórico remoto pelo `supabase migration repair` oficial após a consulta idempotente retornar zero pendências; nenhum DDL ou insert manual no histórico foi executado.
